@@ -1,0 +1,20 @@
+{
+  "worktrees": {
+    "wt-1776654165019-1": {
+      "branch": "elegant-coyote",
+      "path": "e:\\xiangmu\\星河璀璨数据库\\shujuku\\.kilo\\worktrees\\elegant-coyote",
+      "parentBranch": "main",
+      "createdAt": "2026-04-20T03:02:45.019Z",
+      "remote": "origin"
+    }
+  },
+  "sessions": {
+    "ses_25728db3bffe247z0oxG6LhOoM": {
+      "worktreeId": "wt-1776654165019-1",
+      "createdAt": "2026-04-20T03:02:49.343Z"
+    }
+  },
+  "worktreeOrder": [
+    "wt-1776654165019-1"
+  ]
+}
