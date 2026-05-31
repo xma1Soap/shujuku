@@ -70618,7 +70618,7 @@ Expected function or array of functions, received type ${typeof value}.`
     };
     const _hoisted_5$n = ["id", "aria-hidden"];
     const _hoisted_6$l = { class: "acu-panel__description-region-inner" };
-    const _hoisted_7$k = { class: "acu-panel__body" };
+    const _hoisted_7$j = { class: "acu-panel__body" };
     function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock("section", _hoisted_1$S, [
     		$props.title || _ctx.$slots.title || _ctx.$slots.actions || $setup.hasDescription ? (openBlock(), createElementBlock(
@@ -70679,7 +70679,7 @@ Expected function or array of functions, received type ${typeof value}.`
     			}, 8, ["tone"])])], 8, _hoisted_5$n)), [[vShow, $setup.descriptionOpen]]) : createCommentVNode("v-if", true)]),
     			_: 3
     		}),
-    		createBaseVNode("div", _hoisted_7$k, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])
+    		createBaseVNode("div", _hoisted_7$j, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])
     	]);
     }
     var AcuPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-22f45947"]]);
@@ -70917,7 +70917,7 @@ Expected function or array of functions, received type ${typeof value}.`
     	key: 0,
     	class: "acu-preset-dd__item-meta"
     };
-    const _hoisted_7$j = ["title", "onClick"];
+    const _hoisted_7$i = ["title", "onClick"];
     const _hoisted_8$g = {
     	key: 2,
     	class: "fa-solid fa-check acu-preset-dd__check"
@@ -70985,7 +70985,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						null,
     						2
     						/* CLASS */
-    					)], 10, _hoisted_7$j)) : createCommentVNode("v-if", true),
+    					)], 10, _hoisted_7$i)) : createCommentVNode("v-if", true),
     					$setup.itemValue(item) === $props.modelValue ? (openBlock(), createElementBlock("i", _hoisted_8$g)) : createCommentVNode("v-if", true)
     				], 10, _hoisted_4$s);
     			}),
@@ -71375,7 +71375,7 @@ Expected function or array of functions, received type ${typeof value}.`
     	class: "acu-api-config-panel__danger"
     };
     const _hoisted_6$j = { class: "acu-api-config-panel__inline-action" };
-    const _hoisted_7$i = {
+    const _hoisted_7$h = {
     	key: 0,
     	class: "acu-api-config-panel__two-col"
     };
@@ -71545,7 +71545,7 @@ Expected function or array of functions, received type ${typeof value}.`
     							/* STABLE_FRAGMENT */
     						)) : createCommentVNode("v-if", true)
     					]),
-    					$setup.activeConnectionMode === "custom" ? (openBlock(), createElementBlock("div", _hoisted_7$i, [createVNode($setup["AcuFormRow"], { label: "最大回复长度" }, {
+    					$setup.activeConnectionMode === "custom" ? (openBlock(), createElementBlock("div", _hoisted_7$h, [createVNode($setup["AcuFormRow"], { label: "最大回复长度" }, {
     						default: withCtx(() => [createVNode($setup["AcuInput"], {
     							modelValue: $setup.activeDraft.max_tokens,
     							"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.activeDraft.max_tokens = $event),
@@ -74339,7 +74339,7 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_4$o = { class: "acu-prompt-segs__item-head" };
     const _hoisted_5$k = { class: "acu-prompt-segs__index" };
     const _hoisted_6$i = { class: "acu-prompt-segs__actions" };
-    const _hoisted_7$h = {
+    const _hoisted_7$g = {
     	key: 0,
     	class: "acu-prompt-segs__empty"
     };
@@ -74456,7 +74456,7 @@ Expected function or array of functions, received type ${typeof value}.`
     			/* KEYED_FRAGMENT */
     		)), !$props.segments.length ? (openBlock(), createElementBlock(
     			"li",
-    			_hoisted_7$h,
+    			_hoisted_7$g,
     			toDisplayString($props.emptyText),
     			1
     			/* TEXT */
@@ -74551,7 +74551,7 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_4$n = { class: "acu-v2-plot-task-editor__grid" };
     const _hoisted_5$j = { class: "acu-v2-plot-task-editor__section" };
     const _hoisted_6$h = { class: "acu-v2-plot-task-editor__section" };
-    const _hoisted_7$g = {
+    const _hoisted_7$f = {
     	key: 1,
     	class: "acu-v2-plot-task-editor__empty"
     };
@@ -74691,7 +74691,7 @@ Expected function or array of functions, received type ${typeof value}.`
     			onMove: _cache[11] || (_cache[11] = (index, delta) => _ctx.$emit("segment-move", index, delta)),
     			onUpdate: _cache[12] || (_cache[12] = (index, patch) => _ctx.$emit("segment-update", index, patch))
     		}, null, 8, ["segments"])])
-    	])) : (openBlock(), createElementBlock("div", _hoisted_7$g, " 请在上方选择一个任务进行编辑。 "));
+    	])) : (openBlock(), createElementBlock("div", _hoisted_7$f, " 请在上方选择一个任务进行编辑。 "));
     }
     var PlotTaskEditor = /* @__PURE__ */ _export_sfc(_sfc_main$F, [["render", _sfc_render$F], ["__scopeId", "data-v-c45ea801"]]);
 
@@ -74730,7 +74730,7 @@ Expected function or array of functions, received type ${typeof value}.`
     	class: "acu-v2-plot-tasks__stage",
     	title: "阶段号 — 同阶段并发，跨阶段串行"
     };
-    const _hoisted_7$f = { class: "acu-v2-plot-tasks__seg-count" };
+    const _hoisted_7$e = { class: "acu-v2-plot-tasks__seg-count" };
     const _hoisted_8$d = {
     	key: 0,
     	class: "acu-v2-plot-tasks__disabled-label"
@@ -74805,7 +74805,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				),
     				createBaseVNode(
     					"span",
-    					_hoisted_7$f,
+    					_hoisted_7$e,
     					toDisplayString(task.promptGroup.length) + " 段",
     					1
     					/* TEXT */
@@ -74863,7 +74863,7 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_4$l = { class: "acu-v2-form__section" };
     const _hoisted_5$h = { class: "acu-v2-form__section" };
     const _hoisted_6$f = { class: "acu-v2-plot-drawer__rules" };
-    const _hoisted_7$e = { class: "acu-v2-form__section" };
+    const _hoisted_7$d = { class: "acu-v2-form__section" };
     const _hoisted_8$c = { class: "acu-v2-plot-drawer__actions" };
     function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createBlock($setup["AcuDrawer"], {
@@ -75080,7 +75080,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						"show-advanced-rates",
     						"rates"
     					]),
-    					createBaseVNode("fieldset", _hoisted_7$e, [_cache[22] || (_cache[22] = createBaseVNode(
+    					createBaseVNode("fieldset", _hoisted_7$d, [_cache[22] || (_cache[22] = createBaseVNode(
     						"legend",
     						null,
     						"最终注入指令",
@@ -77241,7 +77241,7 @@ Expected function or array of functions, received type ${typeof value}.`
     	class: "acu-dashboard-storage-mode__icon",
     	"aria-hidden": "true"
     };
-    const _hoisted_7$d = { class: "acu-dashboard-storage-mode__body" };
+    const _hoisted_7$c = { class: "acu-dashboard-storage-mode__body" };
     const _hoisted_8$b = { class: "acu-dashboard-storage-mode__card-head" };
     const _hoisted_9$a = { class: "acu-dashboard-storage-mode__name" };
     const _hoisted_10$a = { class: "acu-dashboard-storage-mode__badge" };
@@ -77292,7 +77292,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						null,
     						2
     						/* CLASS */
-    					)]), createBaseVNode("span", _hoisted_7$d, [createBaseVNode("span", _hoisted_8$b, [createBaseVNode(
+    					)]), createBaseVNode("span", _hoisted_7$c, [createBaseVNode("span", _hoisted_8$b, [createBaseVNode(
     						"span",
     						_hoisted_9$a,
     						toDisplayString(option.label),
@@ -78298,7 +78298,7 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_4$g = { class: "acu-v2-dashboard-page__health-body" };
     const _hoisted_5$f = { class: "acu-v2-dashboard-page__health-heading" };
     const _hoisted_6$d = { class: "acu-v2-dashboard-page__health-side" };
-    const _hoisted_7$c = ["data-acu-toggle-group"];
+    const _hoisted_7$b = ["data-acu-toggle-group"];
     function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock("section", _hoisted_1$w, [createVNode($setup["AcuPanelGrid"], { class: "acu-v2-dashboard-page__grid" }, {
     		default: withCtx(() => [createVNode($setup["AcuPanel"], {
@@ -78432,7 +78432,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				],
     				64
     				/* STABLE_FRAGMENT */
-    			))], 8, _hoisted_7$c)]),
+    			))], 8, _hoisted_7$b)]),
     			_: 1
     		}, 8, ["title", "description"])]),
     		_: 1
@@ -78926,7 +78926,7 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_4$e = { class: "acu-v2-form-fill-page__table-wrap" };
     const _hoisted_5$d = { class: "acu-v2-form-fill-page__status-table" };
     const _hoisted_6$c = { key: 0 };
-    const _hoisted_7$b = { key: 1 };
+    const _hoisted_7$a = { key: 1 };
     const _hoisted_8$a = { class: "acu-v2-form-fill-page__manual-number-grid" };
     const _hoisted_9$9 = { class: "acu-v2-form-fill-page__manual-extra" };
     const _hoisted_10$9 = { class: "acu-v2-form-fill-page__actions" };
@@ -79053,7 +79053,7 @@ Expected function or array of functions, received type ${typeof value}.`
     										_: 1
     									})) : (openBlock(), createElementBlock(
     										"span",
-    										_hoisted_7$b,
+    										_hoisted_7$a,
     										toDisplayString(row.nextTriggerLabel),
     										1
     										/* TEXT */
@@ -80103,7 +80103,7 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_4$d = { class: "acu-v2-table-page__col" };
     const _hoisted_5$c = { class: "acu-v2-table-page__filter" };
     const _hoisted_6$b = { class: "acu-v2-table-page__toggle-row" };
-    const _hoisted_7$a = { class: "acu-v2-table-page__toggle-head" };
+    const _hoisted_7$9 = { class: "acu-v2-table-page__toggle-head" };
     const _hoisted_8$9 = { class: "acu-v2-table-page__hint" };
     function _sfc_render$n(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock("section", _hoisted_1$n, [
@@ -80188,7 +80188,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				description: $setup.formFillCopy.panels.filter.description
     			}, {
     				default: withCtx(() => [createBaseVNode("div", _hoisted_5$c, [
-    					createBaseVNode("div", _hoisted_6$b, [createBaseVNode("div", _hoisted_7$a, [_cache[17] || (_cache[17] = createBaseVNode(
+    					createBaseVNode("div", _hoisted_6$b, [createBaseVNode("div", _hoisted_7$9, [_cache[17] || (_cache[17] = createBaseVNode(
     						"span",
     						{ class: "acu-v2-table-page__toggle-label" },
     						" 仅识别最后一对 <tableEdit> 标签 ",
@@ -81018,7 +81018,7 @@ Expected function or array of functions, received type ${typeof value}.`
     	key: 0,
     	class: "acu-v2-continuation-page__prompt-list"
     };
-    const _hoisted_7$9 = { class: "acu-v2-continuation-page__prompt-head" };
+    const _hoisted_7$8 = { class: "acu-v2-continuation-page__prompt-head" };
     const _hoisted_8$8 = {
     	key: 1,
     	class: "acu-v2-continuation-page__empty"
@@ -81135,7 +81135,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					return openBlock(), createElementBlock("div", {
     						key: index,
     						class: "acu-v2-continuation-page__prompt-item"
-    					}, [createBaseVNode("div", _hoisted_7$9, [createBaseVNode(
+    					}, [createBaseVNode("div", _hoisted_7$8, [createBaseVNode(
     						"span",
     						null,
     						"提示词 " + toDisplayString(index + 1),
@@ -82623,7 +82623,7 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_4$b = { class: "acu-v2-vector-index-page__number-grid" };
     const _hoisted_5$a = { class: "acu-v2-vector-index-page__panel-stack" };
     const _hoisted_6$9 = { class: "acu-v2-vector-api-form__section" };
-    const _hoisted_7$8 = { class: "acu-v2-vector-api-form__section" };
+    const _hoisted_7$7 = { class: "acu-v2-vector-api-form__section" };
     const _hoisted_8$7 = { class: "acu-v2-vector-api-form__actions" };
     const _hoisted_9$7 = { class: "acu-v2-vector-index-page__prompt-actions" };
     const _hoisted_10$7 = { class: "acu-v2-vector-index-page__number-grid" };
@@ -82814,7 +82814,7 @@ Expected function or array of functions, received type ${typeof value}.`
     								_: 1
     							})
     						]),
-    						createBaseVNode("fieldset", _hoisted_7$8, [
+    						createBaseVNode("fieldset", _hoisted_7$7, [
     							_cache[30] || (_cache[30] = createBaseVNode(
     								"legend",
     								null,
@@ -83572,7 +83572,7 @@ Expected function or array of functions, received type ${typeof value}.`
     	key: 0,
     	class: "acu-v2-data-mgmt-page__history-current"
     };
-    const _hoisted_7$7 = {
+    const _hoisted_7$6 = {
     	key: 1,
     	class: "acu-v2-data-mgmt-page__history-empty"
     };
@@ -83669,7 +83669,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					}),
     					128
     					/* KEYED_FRAGMENT */
-    				))])) : (openBlock(), createElementBlock("p", _hoisted_7$7, " 暂无历史标识。 "))]),
+    				))])) : (openBlock(), createElementBlock("p", _hoisted_7$6, " 暂无历史标识。 "))]),
     				_: 1
     			}, 8, ["meta", "expanded"])]), createBaseVNode("div", _hoisted_8$6, [createVNode($setup["AcuButton"], {
     				loading: $setup.flow.busyAction.value === "delete-isolation-entries",
@@ -84952,7 +84952,7 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_4$8 = { class: "acu-v2-content-replace-page__mini-status" };
     const _hoisted_5$8 = { class: "acu-v2-content-replace-page__actions" };
     const _hoisted_6$7 = { class: "acu-v2-content-replace-page__status-line" };
-    const _hoisted_7$6 = { class: "acu-v2-content-replace-page__badge" };
+    const _hoisted_7$5 = { class: "acu-v2-content-replace-page__badge" };
     const _hoisted_8$5 = { class: "acu-v2-content-replace-page__select-row" };
     const _hoisted_9$5 = { class: "acu-v2-content-replace-page__form-grid" };
     const _hoisted_10$5 = { class: "acu-v2-content-replace-page__rule-stack" };
@@ -85151,7 +85151,7 @@ Expected function or array of functions, received type ${typeof value}.`
     							),
     							createBaseVNode(
     								"span",
-    								_hoisted_7$6,
+    								_hoisted_7$5,
     								toDisplayString($setup.store.promptSegmentCount) + " 段提示词 ",
     								1
     								/* TEXT */
@@ -85755,7 +85755,7 @@ Expected function or array of functions, received type ${typeof value}.`
     	key: 2,
     	class: "acu-v2-advanced-tools-page__sql-error"
     };
-    const _hoisted_7$5 = { class: "acu-v2-advanced-tools-page__sql-table-wrap" };
+    const _hoisted_7$4 = { class: "acu-v2-advanced-tools-page__sql-table-wrap" };
     const _hoisted_8$4 = { class: "acu-v2-advanced-tools-page__sql-result-table" };
     const _hoisted_9$4 = { key: 0 };
     const _hoisted_10$4 = ["colspan"];
@@ -85790,10 +85790,10 @@ Expected function or array of functions, received type ${typeof value}.`
     	key: 0,
     	class: "acu-v2-advanced-tools-page__empty acu-v2-advanced-tools-page__empty--log"
     };
-    const _hoisted_25 = { class: "acu-v2-advanced-tools-page__log-meta" };
-    const _hoisted_26 = { class: "acu-v2-advanced-tools-page__log-time" };
-    const _hoisted_27 = { class: "acu-v2-advanced-tools-page__log-tag" };
-    const _hoisted_28 = { class: "acu-v2-advanced-tools-page__log-message acu-v2-advanced-tools-page__log-body" };
+    const _hoisted_25$1 = { class: "acu-v2-advanced-tools-page__log-meta" };
+    const _hoisted_26$1 = { class: "acu-v2-advanced-tools-page__log-time" };
+    const _hoisted_27$1 = { class: "acu-v2-advanced-tools-page__log-tag" };
+    const _hoisted_28$1 = { class: "acu-v2-advanced-tools-page__log-message acu-v2-advanced-tools-page__log-body" };
     function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock("section", _hoisted_1$b, [createVNode($setup["AcuMobilePanelNav"], { items: $setup.panelNavItems }), createVNode($setup["AcuPanelGrid"], {
     		class: "acu-v2-advanced-tools-page__tools-grid",
@@ -85938,7 +85938,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				)) : (openBlock(), createElementBlock(
     					Fragment,
     					{ key: 3 },
-    					[createBaseVNode("div", _hoisted_7$5, [createBaseVNode("table", _hoisted_8$4, [createBaseVNode("thead", null, [createBaseVNode("tr", null, [(openBlock(true), createElementBlock(
+    					[createBaseVNode("div", _hoisted_7$4, [createBaseVNode("table", _hoisted_8$4, [createBaseVNode("thead", null, [createBaseVNode("tr", null, [(openBlock(true), createElementBlock(
     						Fragment,
     						null,
     						renderList($setup.sqlFlow.result.value.columns, (column) => {
@@ -86168,10 +86168,10 @@ Expected function or array of functions, received type ${typeof value}.`
     									key: entry.id,
     									class: normalizeClass(["acu-v2-advanced-tools-page__log-row", `acu-v2-advanced-tools-page__log-row--${entry.level}`])
     								},
-    								[createBaseVNode("div", _hoisted_25, [
+    								[createBaseVNode("div", _hoisted_25$1, [
     									createBaseVNode(
     										"span",
-    										_hoisted_26,
+    										_hoisted_26$1,
     										toDisplayString($setup.formatTime(entry.timestamp)),
     										1
     										/* TEXT */
@@ -86186,14 +86186,14 @@ Expected function or array of functions, received type ${typeof value}.`
     									}, 1032, ["variant"]),
     									createBaseVNode(
     										"span",
-    										_hoisted_27,
+    										_hoisted_27$1,
     										toDisplayString(entry.tag),
     										1
     										/* TEXT */
     									)
     								]), createBaseVNode(
     									"code",
-    									_hoisted_28,
+    									_hoisted_28$1,
     									toDisplayString(entry.message),
     									1
     									/* TEXT */
@@ -88328,7 +88328,7 @@ Expected function or array of functions, received type ${typeof value}.`
     	class: "acu-viz-assistant__empty"
     };
     const _hoisted_6$4 = { class: "acu-viz-assistant__turns" };
-    const _hoisted_7$4 = { class: "acu-viz-assistant__turn-head" };
+    const _hoisted_7$3 = { class: "acu-viz-assistant__turn-head" };
     const _hoisted_8$3 = { key: 0 };
     const _hoisted_9$3 = { key: 1 };
     const _hoisted_10$3 = { key: 2 };
@@ -88531,7 +88531,7 @@ Expected function or array of functions, received type ${typeof value}.`
     									class: normalizeClass(["acu-viz-assistant__turn", `acu-viz-assistant__turn--${turn.type}`])
     								},
     								[
-    									createBaseVNode("header", _hoisted_7$4, [turn.type === "user" ? (openBlock(), createElementBlock("strong", _hoisted_8$3, "你提出的需求")) : turn.type === "round" ? (openBlock(), createElementBlock(
+    									createBaseVNode("header", _hoisted_7$3, [turn.type === "user" ? (openBlock(), createElementBlock("strong", _hoisted_8$3, "你提出的需求")) : turn.type === "round" ? (openBlock(), createElementBlock(
     										"strong",
     										_hoisted_9$3,
     										"AI 助手 · 第 " + toDisplayString(turn.round) + " / " + toDisplayString(turn.maxRounds) + " 轮",
@@ -88947,7 +88947,7 @@ Expected function or array of functions, received type ${typeof value}.`
     	class: "acu-viz-config__empty"
     };
     const _hoisted_6$3 = { class: "acu-viz-config__column-operation" };
-    const _hoisted_7$3 = { class: "acu-viz-config__grid acu-viz-config__grid--three" };
+    const _hoisted_7$2 = { class: "acu-viz-config__grid acu-viz-config__grid--three" };
     const _hoisted_8$2 = { class: "acu-viz-config__prompts" };
     const _hoisted_9$2 = { class: "acu-viz-config__inline-actions" };
     const _hoisted_10$2 = { class: "acu-viz-config__toggles" };
@@ -89038,7 +89038,7 @@ Expected function or array of functions, received type ${typeof value}.`
     			title: "自动化更新参数",
     			description: "这里调当前表自动更新的范围和频率。不确定时用 -1；想停用当前表自动更新时，把更新频率设为 0。"
     		}, {
-    			default: withCtx(() => [createBaseVNode("div", _hoisted_7$3, [
+    			default: withCtx(() => [createBaseVNode("div", _hoisted_7$2, [
     				createVNode($setup["AcuFormRow"], { label: "上下文层数" }, {
     					default: withCtx(() => [createVNode($setup["AcuInput"], {
     						type: "number",
@@ -89586,8 +89586,7 @@ Expected function or array of functions, received type ${typeof value}.`
     var _sfc_main$2 = /*@__PURE__*/ defineComponent({
         __name: 'VisualizerTableManagementPanel',
         props: {
-            sheetItems: {},
-            currentSheetKey: {}
+            sheetItems: {}
         },
         emits: ["move-sheet", "request-add-sheet", "request-delete-sheet"],
         setup(__props, { expose: __expose }) {
@@ -89598,22 +89597,21 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-viz-table-management[data-v-29355404] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 12px;\n}\n.acu-viz-table-management__list[data-v-29355404] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\n}\n.acu-viz-table-management__item[data-v-29355404] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) auto;\r\n  align-items: center;\r\n  gap: 10px;\r\n  padding: 10px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\r\n  transition:\r\n    background 0.15s ease,\r\n    border-color 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-viz-table-management__item.is-current[data-v-29355404] {\r\n  border-color: color-mix(in srgb, var(--acu-accent) 45%, var(--acu-border));\r\n  background: color-mix(in srgb, var(--acu-accent) 7%, var(--acu-bg-0));\r\n  box-shadow: inset 0 0 0 1px var(--acu-accent-glow);\n}\n.acu-viz-table-management__copy[data-v-29355404] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 3px;\n}\n.acu-viz-table-management__copy h3[data-v-29355404] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.35;\n}\n.acu-viz-table-management__copy h3 > span[data-v-29355404] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-viz-table-management__copy p[data-v-29355404],\r\n.acu-viz-table-management__empty[data-v-29355404] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-viz-table-management__actions[data-v-29355404],\r\n.acu-viz-table-management__operation[data-v-29355404] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 6px;\n}\n.acu-viz-table-management__operation[data-v-29355404] {\r\n  justify-content: flex-end;\r\n  padding-top: 2px;\n}\n@media (max-width: 767px) {\n.acu-viz-table-management__item[data-v-29355404] {\r\n    grid-template-columns: minmax(0, 1fr);\r\n    align-items: stretch;\n}\n.acu-viz-table-management__actions[data-v-29355404] {\r\n    justify-content: flex-end;\n}\n.acu-viz-table-management__operation[data-v-29355404] .acu-btn {\r\n    width: 100%;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerTableManagementPanel.vue#style-0-29355404");
-    var VisualizerTableManagementPanel_vue_vue_type_style_index_0_scoped_29355404_lang = null;
+    injectSfcStyle("\n.acu-viz-table-management[data-v-b4e84b31] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 12px;\n}\n.acu-viz-table-management__list[data-v-b4e84b31] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\n}\n.acu-viz-table-management__item[data-v-b4e84b31] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) auto;\r\n  align-items: center;\r\n  gap: 10px;\r\n  padding: 10px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\r\n  transition:\r\n    background 0.15s ease,\r\n    border-color 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-viz-table-management__copy[data-v-b4e84b31] {\n  min-width: 0;\r\n  display: grid;\r\n  gap: 3px;\n}\n.acu-viz-table-management__copy h3[data-v-b4e84b31] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.35;\n}\n.acu-viz-table-management__copy h3 > span[data-v-b4e84b31] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-viz-table-management__copy p[data-v-b4e84b31],\r\n.acu-viz-table-management__empty[data-v-b4e84b31] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-viz-table-management__actions[data-v-b4e84b31],\r\n.acu-viz-table-management__operation[data-v-b4e84b31] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 6px;\n}\n.acu-viz-table-management__operation[data-v-b4e84b31] {\r\n  justify-content: flex-end;\r\n  padding-top: 2px;\n}\n@media (max-width: 767px) {\n.acu-viz-table-management__item[data-v-b4e84b31] {\r\n    grid-template-columns: minmax(0, 1fr);\r\n    align-items: stretch;\n}\n.acu-viz-table-management__actions[data-v-b4e84b31] {\r\n    justify-content: flex-end;\n}\n.acu-viz-table-management__operation[data-v-b4e84b31] .acu-btn {\r\n    width: 100%;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerTableManagementPanel.vue#style-0-b4e84b31");
+    var VisualizerTableManagementPanel_vue_vue_type_style_index_0_scoped_b4e84b31_lang = null;
 
     const _hoisted_1$2 = {
     	class: "acu-viz-table-management",
     	"data-acu-visualizer-table-management": ""
     };
     const _hoisted_2$2 = { class: "acu-viz-table-management__list" };
-    const _hoisted_3$2 = ["aria-current"];
-    const _hoisted_4$2 = { class: "acu-viz-table-management__copy" };
-    const _hoisted_5$2 = { class: "acu-viz-table-management__actions" };
-    const _hoisted_6$2 = {
+    const _hoisted_3$2 = { class: "acu-viz-table-management__copy" };
+    const _hoisted_4$2 = { class: "acu-viz-table-management__actions" };
+    const _hoisted_5$2 = {
     	key: 0,
     	class: "acu-viz-table-management__empty"
     };
-    const _hoisted_7$2 = { class: "acu-viz-table-management__operation" };
+    const _hoisted_6$2 = { class: "acu-viz-table-management__operation" };
     function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock("div", _hoisted_1$2, [createVNode($setup["AcuPanel"], {
     		title: "表格管理",
@@ -89633,31 +89631,20 @@ Expected function or array of functions, received type ${typeof value}.`
     			renderList($props.sheetItems, (item, index) => {
     				return openBlock(), createElementBlock("article", {
     					key: item.key,
-    					class: normalizeClass(["acu-viz-table-management__item", { "is-current": item.key === $props.currentSheetKey }]),
-    					"aria-current": item.key === $props.currentSheetKey ? "true" : undefined
-    				}, [createBaseVNode("div", _hoisted_4$2, [createBaseVNode("h3", null, [createBaseVNode(
+    					class: "acu-viz-table-management__item"
+    				}, [createBaseVNode("div", _hoisted_3$2, [createBaseVNode("h3", null, [createBaseVNode(
     					"span",
     					null,
     					toDisplayString(item.name),
     					1
     					/* TEXT */
-    				), item.key === $props.currentSheetKey ? (openBlock(), createBlock($setup["AcuBadge"], {
-    					key: 0,
-    					variant: "accent"
-    				}, {
-    					default: withCtx(() => [..._cache[1] || (_cache[1] = [createTextVNode(
-    						" 当前表 ",
-    						-1
-    						/* CACHED */
-    					)])]),
-    					_: 1
-    				})) : createCommentVNode("v-if", true)]), createBaseVNode(
+    				)]), createBaseVNode(
     					"p",
     					null,
     					toDisplayString(item.rowCount) + " 行 · " + toDisplayString(item.columnCount) + " 列",
     					1
     					/* TEXT */
-    				)]), createBaseVNode("div", _hoisted_5$2, [
+    				)]), createBaseVNode("div", _hoisted_4$2, [
     					createVNode($setup["AcuIconButton"], {
     						icon: "fa-solid fa-chevron-up",
     						size: "sm",
@@ -89682,16 +89669,16 @@ Expected function or array of functions, received type ${typeof value}.`
     						"aria-label": "删除表格",
     						onClick: ($event) => _ctx.$emit("request-delete-sheet", item.key)
     					}, null, 8, ["onClick"])
-    				])], 10, _hoisted_3$2);
+    				])]);
     			}),
     			128
     			/* KEYED_FRAGMENT */
-    		)), $props.sheetItems.length === 0 ? (openBlock(), createElementBlock("p", _hoisted_6$2, " 当前数据库还没有表格。可以先新增表格，再回到当前表编辑数据、结构和 AI 助手。 ")) : createCommentVNode("v-if", true)]), createBaseVNode("div", _hoisted_7$2, [createVNode($setup["AcuButton"], {
+    		)), $props.sheetItems.length === 0 ? (openBlock(), createElementBlock("p", _hoisted_5$2, " 当前数据库还没有表格。可以先新增表格，再进入表格编辑数据、结构和 AI 助手。 ")) : createCommentVNode("v-if", true)]), createBaseVNode("div", _hoisted_6$2, [createVNode($setup["AcuButton"], {
     			size: "sm",
     			variant: "primary",
     			onClick: _cache[0] || (_cache[0] = ($event) => _ctx.$emit("request-add-sheet"))
     		}, {
-    			default: withCtx(() => [..._cache[2] || (_cache[2] = [createBaseVNode(
+    			default: withCtx(() => [..._cache[1] || (_cache[1] = [createBaseVNode(
     				"i",
     				{ class: "fa-solid fa-plus" },
     				null,
@@ -89707,9 +89694,10 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	})]);
     }
-    var VisualizerTableManagementPanel = /* @__PURE__ */ _export_sfc(_sfc_main$2, [["render", _sfc_render$2], ["__scopeId", "data-v-29355404"]]);
+    var VisualizerTableManagementPanel = /* @__PURE__ */ _export_sfc(_sfc_main$2, [["render", _sfc_render$2], ["__scopeId", "data-v-b4e84b31"]]);
 
     const VISUALIZER_MOBILE_NAV_LEAVE_MS = 150;
+    const VISUALIZER_DATA_PAGE_SIZE = 50;
     const VISUALIZER_SHORT_FIELD_CHAR_LIMIT = 24;
     var _sfc_main$1 = /*@__PURE__*/ defineComponent({
         __name: 'VisualizerSurface',
@@ -89723,7 +89711,10 @@ Expected function or array of functions, received type ${typeof value}.`
             const emit = __emit;
             const isMobileNavRendered = ref(false);
             const isMobileNavClosing = ref(false);
+            const workspaceRef = ref(null);
+            const paginationRef = ref(null);
             let mobileNavCloseTimer;
+            let paginationResizeObserver;
             const save = useVisualizerSave({
                 requestGlobalPresetName(defaultName) {
                     return openInputDialog({
@@ -89806,7 +89797,143 @@ Expected function or array of functions, received type ${typeof value}.`
                     .map((item, index) => String(item || `字段 ${index + 1}`));
             });
             const activeDataCell = ref(null);
+            const activeDataTextareaRef = ref(null);
             const editingColumnLayoutSnapshot = ref(null);
+            const currentDataPage = ref(1);
+            const dataPageJumpValue = ref(1);
+            const paginationWidth = ref(null);
+            const rowCount = computed(() => {
+                const content = visualizer.currentSheet?.content;
+                return Array.isArray(content) ? Math.max(0, content.length - 1) : 0;
+            });
+            const dataPageSize = VISUALIZER_DATA_PAGE_SIZE;
+            const dataPageCount = computed(() => Math.max(1, Math.ceil(rowCount.value / dataPageSize)));
+            const isDataPaginated = computed(() => rowCount.value > dataPageSize);
+            const dataPaginationSiblingWindow = computed(() => {
+                const width = paginationWidth.value;
+                if (width == null)
+                    return 2;
+                if (width < 330)
+                    return 0;
+                if (width < 430)
+                    return 1;
+                return 2;
+            });
+            const dataPaginationItems = computed(() => {
+                const total = dataPageCount.value;
+                const current = currentDataPage.value;
+                const pages = new Set([1, current, total]);
+                const siblingWindow = dataPaginationSiblingWindow.value;
+                const groupSize = Math.max(1, siblingWindow * 2 + 1);
+                const edgeWindow = siblingWindow >= 2 ? 5 : siblingWindow === 1 ? 3 : 1;
+                const maxDirectPages = siblingWindow >= 2 ? 7 : siblingWindow === 1 ? 5 : 3;
+                if (total <= maxDirectPages) {
+                    for (let page = 1; page <= total; page += 1)
+                        pages.add(page);
+                }
+                else if (current <= edgeWindow - 1) {
+                    for (let page = 1; page <= edgeWindow; page += 1)
+                        pages.add(page);
+                }
+                else if (current >= total - edgeWindow + 2) {
+                    for (let page = total - edgeWindow + 1; page <= total; page += 1) {
+                        pages.add(page);
+                    }
+                }
+                else {
+                    for (let page = current - siblingWindow; page <= current + siblingWindow; page += 1) {
+                        pages.add(page);
+                    }
+                }
+                const sortedPages = Array.from(pages)
+                    .filter((page) => page >= 1 && page <= total)
+                    .sort((a, b) => a - b);
+                const items = [];
+                sortedPages.forEach((page, index) => {
+                    const previous = sortedPages[index - 1];
+                    if (previous && page - previous > 1) {
+                        const targetPage = page <= current
+                            ? Math.max(1, current - groupSize)
+                            : Math.min(total, current + groupSize);
+                        items.push({
+                            key: `ellipsis-${previous}-${page}`,
+                            label: "...",
+                            page: null,
+                            targetPage,
+                            active: false,
+                            ellipsis: true,
+                        });
+                    }
+                    items.push({
+                        key: `page-${page}`,
+                        label: String(page),
+                        page,
+                        targetPage: page,
+                        active: page === current,
+                        ellipsis: false,
+                    });
+                });
+                return items;
+            });
+            const dataPageStartIndex = computed(() => Math.min(rowCount.value, Math.max(0, (currentDataPage.value - 1) * dataPageSize)));
+            const dataPageEndIndex = computed(() => Math.min(rowCount.value, dataPageStartIndex.value + dataPageSize));
+            const dataRangeText = computed(() => {
+                if (rowCount.value === 0)
+                    return "共 0 行";
+                return `第 ${dataPageStartIndex.value + 1}-${dataPageEndIndex.value} 行 / 共 ${rowCount.value} 行`;
+            });
+            const visibleDataRows = computed(() => {
+                const content = visualizer.currentSheet?.content;
+                if (!Array.isArray(content))
+                    return [];
+                return content.slice(dataPageStartIndex.value + 1, dataPageEndIndex.value + 1);
+            });
+            function scrollWorkspaceToTop() {
+                void nextTick(() => {
+                    if (workspaceRef.value)
+                        workspaceRef.value.scrollTop = 0;
+                });
+            }
+            function preserveWorkspaceScrollPosition(action) {
+                const scrollTop = workspaceRef.value?.scrollTop ?? 0;
+                const scrollLeft = workspaceRef.value?.scrollLeft ?? 0;
+                action();
+                void nextTick(() => {
+                    const workspace = workspaceRef.value;
+                    if (!workspace)
+                        return;
+                    workspace.scrollTop = scrollTop;
+                    workspace.scrollLeft = scrollLeft;
+                });
+            }
+            function setDataPage(page) {
+                const requestedPage = Math.trunc(Number(page));
+                if (!Number.isFinite(requestedPage))
+                    return;
+                const nextPage = Math.min(dataPageCount.value, Math.max(1, requestedPage));
+                if (nextPage === currentDataPage.value) {
+                    dataPageJumpValue.value = currentDataPage.value;
+                    return;
+                }
+                currentDataPage.value = nextPage;
+                dataPageJumpValue.value = nextPage;
+                clearDataCellEditing();
+                scrollWorkspaceToTop();
+            }
+            function updateDataPageJumpValue(value) {
+                dataPageJumpValue.value = value;
+                if (value === "" || value === "-")
+                    return;
+                setDataPage(Number(value));
+            }
+            function commitDataPageJumpValue(value) {
+                if (value === "" || value === "-") {
+                    dataPageJumpValue.value = currentDataPage.value;
+                    return;
+                }
+                setDataPage(Number(value));
+                dataPageJumpValue.value = currentDataPage.value;
+            }
             function isShortDataField(value) {
                 const normalized = String(value || "").trim();
                 if (normalized.includes("\n") || normalized.includes("\r"))
@@ -89814,13 +89941,11 @@ Expected function or array of functions, received type ${typeof value}.`
                 return (Array.from(normalized.replace(/\s+/g, " ")).length <=
                     VISUALIZER_SHORT_FIELD_CHAR_LIMIT);
             }
-            function getColumnIsShort(content) {
-                return headers.value.map((_, columnIndex) => content
-                    .slice(1)
-                    .every((row) => isShortDataField(String(Array.isArray(row) ? (row[columnIndex + 1] ?? "") : ""))));
+            function getColumnIsShort(dataRows) {
+                return headers.value.map((_, columnIndex) => dataRows.every((row) => isShortDataField(String(Array.isArray(row) ? (row[columnIndex + 1] ?? "") : ""))));
             }
-            function getEffectiveColumnIsShort(content) {
-                const columnIsShort = getColumnIsShort(content);
+            function getEffectiveColumnIsShort(dataRows) {
+                const columnIsShort = getColumnIsShort(dataRows);
                 const active = activeDataCell.value;
                 const snapshot = editingColumnLayoutSnapshot.value;
                 if (!active || !snapshot || snapshot.length !== columnIsShort.length) {
@@ -89854,15 +89979,37 @@ Expected function or array of functions, received type ${typeof value}.`
                 }
                 return result;
             }
-            function startDataCellEditing(rowIndex, columnIndex) {
+            function asTextarea(el) {
+                if (el instanceof HTMLTextAreaElement)
+                    return el;
+                const root = el?.$el;
+                if (root instanceof HTMLTextAreaElement)
+                    return root;
+                if (root instanceof HTMLElement)
+                    return root.querySelector("textarea");
+                return null;
+            }
+            function setActiveDataTextareaRef(el) {
+                activeDataTextareaRef.value = asTextarea(el);
+            }
+            function isDataCellEditing(rowIndex, columnIndex) {
+                const active = activeDataCell.value;
+                return (!!active &&
+                    active.rowIndex === Math.trunc(Number(rowIndex)) &&
+                    active.columnIndex === Math.trunc(Number(columnIndex)));
+            }
+            async function startDataCellEditing(rowIndex, columnIndex) {
                 activeDataCell.value = {
                     rowIndex: Math.trunc(Number(rowIndex)),
                     columnIndex: Math.trunc(Number(columnIndex)),
                 };
-                const content = visualizer.currentSheet?.content;
-                editingColumnLayoutSnapshot.value = Array.isArray(content)
-                    ? getColumnIsShort(content)
-                    : null;
+                editingColumnLayoutSnapshot.value = getColumnIsShort(visibleDataRows.value);
+                await nextTick();
+                const textarea = activeDataTextareaRef.value;
+                if (!textarea)
+                    return;
+                textarea.focus();
+                textarea.setSelectionRange(textarea.value.length, textarea.value.length);
             }
             function stopDataCellEditing(rowIndex, columnIndex) {
                 const active = activeDataCell.value;
@@ -89872,40 +90019,46 @@ Expected function or array of functions, received type ${typeof value}.`
                     return;
                 }
                 activeDataCell.value = null;
+                activeDataTextareaRef.value = null;
                 editingColumnLayoutSnapshot.value = null;
             }
             function clearDataCellEditing() {
                 activeDataCell.value = null;
+                activeDataTextareaRef.value = null;
                 editingColumnLayoutSnapshot.value = null;
             }
             const rows = computed(() => {
-                const content = visualizer.currentSheet?.content;
-                if (!Array.isArray(content))
-                    return [];
                 const sheetKey = visualizer.currentSheetKey;
                 const specialIndexInfo = config.specialIndex.value;
-                const columnIsShort = getEffectiveColumnIsShort(content);
-                return content.slice(1).map((row, index) => {
+                const columnIsShort = getEffectiveColumnIsShort(visibleDataRows.value);
+                const lockDraft = sheetKey ? visualizer.getLockDraft(sheetKey) : null;
+                const lockedRows = new Set(lockDraft?.rows || []);
+                const lockedColumns = new Set(lockDraft?.cols || []);
+                const lockedCells = new Set(lockDraft?.cells || []);
+                const specialIndexLocked = lockDraft?.specialIndexLocked !== false;
+                return visibleDataRows.value.map((row, visibleIndex) => {
+                    const index = dataPageStartIndex.value + visibleIndex;
+                    const rowLocked = lockedRows.has(index);
                     const fields = headers.value.map((header, columnIndex) => ({
                         header,
                         columnIndex,
                         value: String(Array.isArray(row) ? (row[columnIndex + 1] ?? "") : ""),
-                        rowLocked: visualizer.isRowLocked(sheetKey, index),
-                        columnLocked: visualizer.isColumnLocked(sheetKey, columnIndex),
-                        cellLocked: visualizer.isCellLocked(sheetKey, index, columnIndex),
+                        rowLocked,
+                        columnLocked: lockedColumns.has(columnIndex),
+                        cellLocked: lockedCells.has(`${index}:${columnIndex}`),
                         specialIndexLocked: specialIndexInfo.enabled &&
                             specialIndexInfo.index === columnIndex &&
-                            visualizer.isSpecialIndexLocked(sheetKey),
-                        locked: visualizer.isRowLocked(sheetKey, index) ||
-                            visualizer.isColumnLocked(sheetKey, columnIndex) ||
-                            visualizer.isCellLocked(sheetKey, index, columnIndex) ||
+                            specialIndexLocked,
+                        locked: rowLocked ||
+                            lockedColumns.has(columnIndex) ||
+                            lockedCells.has(`${index}:${columnIndex}`) ||
                             (specialIndexInfo.enabled &&
                                 specialIndexInfo.index === columnIndex &&
-                                visualizer.isSpecialIndexLocked(sheetKey)),
+                                specialIndexLocked),
                     }));
                     return {
                         index,
-                        locked: visualizer.isRowLocked(sheetKey, index),
+                        locked: rowLocked,
                         fields,
                         fieldRows: buildFieldLayoutRows(fields, columnIsShort),
                     };
@@ -89962,10 +90115,18 @@ Expected function or array of functions, received type ${typeof value}.`
                     return;
                 visualizer.deleteRow(rowIndex);
                 refreshSpecialIndexColumnDraft();
+                if (currentDataPage.value > dataPageCount.value) {
+                    currentDataPage.value = dataPageCount.value;
+                }
+                clearDataCellEditing();
             }
             function addRow() {
-                visualizer.addRow();
-                refreshSpecialIndexColumnDraft();
+                preserveWorkspaceScrollPosition(() => {
+                    visualizer.addRow();
+                    refreshSpecialIndexColumnDraft();
+                    currentDataPage.value = dataPageCount.value;
+                    clearDataCellEditing();
+                });
             }
             function refreshSpecialIndexColumnDraft() {
                 const sheet = visualizer.currentSheet;
@@ -90035,6 +90196,31 @@ Expected function or array of functions, received type ${typeof value}.`
                     confirmVariant: options.confirmVariant,
                 });
             }
+            function updatePaginationWidth() {
+                const el = paginationRef.value;
+                if (!el) {
+                    paginationWidth.value = null;
+                    return;
+                }
+                if (el.clientWidth > 0)
+                    paginationWidth.value = el.clientWidth;
+            }
+            function observePaginationWidth(el) {
+                paginationResizeObserver?.disconnect();
+                paginationResizeObserver = undefined;
+                if (!el) {
+                    paginationWidth.value = null;
+                    return;
+                }
+                paginationWidth.value = el.clientWidth || null;
+                if (typeof ResizeObserver !== "function")
+                    return;
+                paginationResizeObserver = new ResizeObserver((entries) => {
+                    const entry = entries[0];
+                    paginationWidth.value = entry?.contentRect.width || el.clientWidth || null;
+                });
+                paginationResizeObserver.observe(el);
+            }
             function openCloseDirtyDialog() {
                 return dialogStore.choose({
                     title: "关闭数据库编辑器",
@@ -90049,26 +90235,47 @@ Expected function or array of functions, received type ${typeof value}.`
             }
             onMounted(() => {
                 void data.loadFromCurrentContext();
+                void nextTick(updatePaginationWidth);
             });
             onBeforeUnmount(() => {
                 clearMobileNavCloseTimer();
+                paginationResizeObserver?.disconnect();
+                paginationResizeObserver = undefined;
             });
+            watch(paginationRef, (el) => {
+                observePaginationWidth(el);
+            }, { flush: "post" });
             watch(() => visualizer.externalRefreshTick, () => {
                 if (!visualizer.isActive || visualizer.dirty)
                     return;
                 void data.loadFromCurrentContext();
             });
             watch(() => visualizer.currentSheetKey, () => {
+                currentDataPage.value = 1;
                 clearDataCellEditing();
             });
-            const __returned__ = { visualizer, dialogStore, data, config, emit, isMobileNavRendered, isMobileNavClosing, VISUALIZER_MOBILE_NAV_LEAVE_MS, get mobileNavCloseTimer() { return mobileNavCloseTimer; }, set mobileNavCloseTimer(v) { mobileNavCloseTimer = v; }, save, modes, setWorkspaceMode, isSheetEditingMode, currentSheetName, templatePresetLabel, isMobileNavOpen, openMobileNav, closeMobileNav, clearMobileNavCloseTimer, selectNavSheet, selectTableManagementNav, returnToCurrentSheet, moveSheet, headers, VISUALIZER_SHORT_FIELD_CHAR_LIMIT, activeDataCell, editingColumnLayoutSnapshot, isShortDataField, getColumnIsShort, getEffectiveColumnIsShort, buildFieldLayoutRows, startDataCellEditing, stopDataCellEditing, clearDataCellEditing, rows, footerStatus, saveDisabled, requestAddSheet, requestDeleteSheet, deleteRow, addRow, refreshSpecialIndexColumnDraft, requestAddColumn, requestDeleteColumn, openInputDialog, openConfirmDialog, openCloseDirtyDialog, AcuBadge, AcuButton, AcuIconButton, AcuInfoBanner, AcuPanel, AcuSegmentedControl, AcuTextarea, VisualizerAssistantPanel, VisualizerConfigPanels, VisualizerGlobalInjectionPanels, VisualizerNavigation, VisualizerTableManagementPanel };
+            watch(() => visualizer.mode, () => {
+                clearDataCellEditing();
+            });
+            watch(currentDataPage, (page) => {
+                dataPageJumpValue.value = page;
+            });
+            watch(rowCount, () => {
+                if (currentDataPage.value > dataPageCount.value) {
+                    currentDataPage.value = dataPageCount.value;
+                }
+                if (currentDataPage.value < 1)
+                    currentDataPage.value = 1;
+                clearDataCellEditing();
+            });
+            const __returned__ = { visualizer, dialogStore, data, config, emit, isMobileNavRendered, isMobileNavClosing, workspaceRef, paginationRef, VISUALIZER_MOBILE_NAV_LEAVE_MS, VISUALIZER_DATA_PAGE_SIZE, get mobileNavCloseTimer() { return mobileNavCloseTimer; }, set mobileNavCloseTimer(v) { mobileNavCloseTimer = v; }, get paginationResizeObserver() { return paginationResizeObserver; }, set paginationResizeObserver(v) { paginationResizeObserver = v; }, save, modes, setWorkspaceMode, isSheetEditingMode, currentSheetName, templatePresetLabel, isMobileNavOpen, openMobileNav, closeMobileNav, clearMobileNavCloseTimer, selectNavSheet, selectTableManagementNav, returnToCurrentSheet, moveSheet, headers, VISUALIZER_SHORT_FIELD_CHAR_LIMIT, activeDataCell, activeDataTextareaRef, editingColumnLayoutSnapshot, currentDataPage, dataPageJumpValue, paginationWidth, rowCount, dataPageSize, dataPageCount, isDataPaginated, dataPaginationSiblingWindow, dataPaginationItems, dataPageStartIndex, dataPageEndIndex, dataRangeText, visibleDataRows, scrollWorkspaceToTop, preserveWorkspaceScrollPosition, setDataPage, updateDataPageJumpValue, commitDataPageJumpValue, isShortDataField, getColumnIsShort, getEffectiveColumnIsShort, buildFieldLayoutRows, asTextarea, setActiveDataTextareaRef, isDataCellEditing, startDataCellEditing, stopDataCellEditing, clearDataCellEditing, rows, footerStatus, saveDisabled, requestAddSheet, requestDeleteSheet, deleteRow, addRow, refreshSpecialIndexColumnDraft, requestAddColumn, requestDeleteColumn, openInputDialog, openConfirmDialog, updatePaginationWidth, observePaginationWidth, openCloseDirtyDialog, AcuBadge, AcuButton, AcuIconButton, AcuInfoBanner, AcuInput, AcuPanel, AcuSegmentedControl, AcuTextarea, VisualizerAssistantPanel, VisualizerConfigPanels, VisualizerGlobalInjectionPanels, VisualizerNavigation, VisualizerTableManagementPanel };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-visualizer-surface[data-v-6bc87089] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: grid;\r\n  grid-template-columns: 260px minmax(0, 1fr);\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__sidebar[data-v-6bc87089] {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 1px solid var(--acu-border-2);\r\n  background: var(--acu-sidebar-bg);\n}\n.acu-visualizer-surface__main[data-v-6bc87089] {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar[data-v-6bc87089] {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  min-height: 50px;\r\n  padding: 8px 12px 8px 16px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar-context[data-v-6bc87089] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  gap: 10px;\n}\n.acu-visualizer-surface__mobile-menu[data-v-6bc87089] {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-visualizer-surface__mobile-menu[data-v-6bc87089]:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__context-items[data-v-6bc87089] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  justify-content: flex-start;\r\n  gap: 16px;\n}\n.acu-visualizer-surface__context-item[data-v-6bc87089] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 2px;\n}\n.acu-visualizer-surface__context-item[data-v-6bc87089]:first-child {\r\n  flex: 0 1 auto;\r\n  max-width: min(560px, 42vw);\n}\n.acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-6bc87089] {\r\n  flex: 0 0 auto;\r\n  max-width: min(260px, 20vw);\n}\n.acu-visualizer-surface__context-item span[data-v-6bc87089] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__context-item strong[data-v-6bc87089] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\r\n  line-height: 1.25;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__context-item:first-child strong[data-v-6bc87089] {\r\n  overflow: visible;\r\n  text-overflow: clip;\r\n  white-space: normal;\r\n  word-break: break-word;\n}\n.acu-visualizer-surface__context-badge[data-v-6bc87089] {\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__conflict[data-v-6bc87089] {\r\n  flex: 0 0 auto;\r\n  margin: 12px 16px 0;\n}\n.acu-visualizer-surface__conflict-actions[data-v-6bc87089] {\r\n  display: inline-flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px;\r\n  margin-left: 8px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-6bc87089],\r\n.acu-visualizer-surface__database-toolbar[data-v-6bc87089],\r\n.acu-visualizer-surface__card-header[data-v-6bc87089] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__workspace[data-v-6bc87089] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  overflow: auto;\r\n  padding: 16px;\n}\n.acu-visualizer-surface__loading[data-v-6bc87089] {\r\n  min-height: 140px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 8px;\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__mode-tabs[data-v-6bc87089] {\r\n  flex: 0 0 auto;\r\n  width: min(360px, 42vw);\n}\n.acu-visualizer-surface__close[data-v-6bc87089] {\r\n  width: 30px;\r\n  height: 30px;\r\n  flex: 0 0 auto;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-visualizer-surface__close[data-v-6bc87089]:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__data-toolbar[data-v-6bc87089] {\r\n  flex: 0 0 auto;\r\n  justify-content: flex-end;\r\n  padding: 4px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar[data-v-6bc87089] {\r\n  flex: 0 0 auto;\r\n  padding: 0 0 4px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar h2[data-v-6bc87089] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__database-toolbar p[data-v-6bc87089] {\r\n  margin: 5px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-readable, 1.55);\n}\n.acu-visualizer-surface__empty[data-v-6bc87089] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-visualizer-surface__card-grid[data-v-6bc87089] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));\r\n  gap: 12px;\n}\n.acu-visualizer-surface__data-card[data-v-6bc87089] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  height: 100%;\r\n  padding: 16px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\n}\n.acu-visualizer-surface__card-header strong[data-v-6bc87089] {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-visualizer-surface__card-header span[data-v-6bc87089] {\r\n  min-width: 0;\r\n  margin-right: auto;\r\n  overflow: hidden;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__card-header[data-v-6bc87089] .acu-icon-btn {\r\n  background: transparent;\n}\n.acu-visualizer-surface__card-header[data-v-6bc87089]\r\n  .acu-icon-btn--default:hover:not(:disabled) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\n}\n.acu-visualizer-surface__card-header[data-v-6bc87089] .acu-icon-btn--accent {\r\n  background: var(--acu-accent-glow);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__card-header[data-v-6bc87089]\r\n  .acu-icon-btn--danger:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-visualizer-surface__fields[data-v-6bc87089] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__field-row[data-v-6bc87089] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 8px;\r\n  align-items: stretch;\n}\n.acu-visualizer-surface__field-row.is-wide[data-v-6bc87089] {\r\n  grid-template-columns: minmax(0, 1fr);\n}\n.acu-visualizer-surface__field[data-v-6bc87089] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\r\n  padding: 2px;\r\n  border: 1px solid transparent;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  transition:\r\n    background 0.15s ease,\r\n    border-color 0.15s ease;\n}\n.acu-visualizer-surface__field[data-v-6bc87089] .acu-textarea {\r\n  flex: 1 1 auto;\n}\n.acu-visualizer-surface__field-label[data-v-6bc87089] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 6px;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 600;\n}\n.acu-visualizer-surface__field-label > span[data-v-6bc87089]:first-child {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__field-locks[data-v-6bc87089] {\r\n  flex: 0 0 auto;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 3px;\r\n  opacity: 0.44;\r\n  transition: opacity 0.15s ease;\n}\n.acu-visualizer-surface__field:hover .acu-visualizer-surface__field-locks[data-v-6bc87089],\r\n.acu-visualizer-surface__field:focus-within\r\n  .acu-visualizer-surface__field-locks[data-v-6bc87089],\r\n.acu-visualizer-surface__field.is-locked .acu-visualizer-surface__field-locks[data-v-6bc87089],\r\n.acu-visualizer-surface__field.is-special-index\r\n  .acu-visualizer-surface__field-locks[data-v-6bc87089] {\r\n  opacity: 1;\n}\n.acu-visualizer-surface__field-locks[data-v-6bc87089] .acu-icon-btn {\r\n  width: 24px;\r\n  height: 24px;\r\n  background: transparent;\n}\n.acu-visualizer-surface__field-locks[data-v-6bc87089]\r\n  .acu-icon-btn--default:hover:not(:disabled) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__field-locks[data-v-6bc87089] .acu-icon-btn--accent {\r\n  color: var(--acu-accent);\r\n  background: var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field.is-locked[data-v-6bc87089] {\r\n  border-color: var(--acu-border);\r\n  background: color-mix(in srgb, var(--acu-warning) 8%, transparent);\n}\n.acu-visualizer-surface__footer[data-v-6bc87089] {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  padding: 12px 16px;\r\n  border-top: 1px solid var(--acu-border-2);\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__footer-actions[data-v-6bc87089] {\r\n  display: flex;\r\n  gap: 8px;\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__footer-actions[data-v-6bc87089] .acu-btn {\r\n  min-width: 132px;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-6bc87089] {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9350;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: visualizer-mobile-nav-layer-in-6bc87089 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing[data-v-6bc87089] {\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-layer-out-6bc87089 0.15s ease-in both;\n}\n.acu-visualizer-surface__mobile-nav[data-v-6bc87089] {\r\n  width: 280px;\r\n  max-width: calc(100vw - 72px);\r\n  height: 100%;\r\n  max-height: 100vh;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 280px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 0;\r\n  background: var(--acu-sidebar-bg);\r\n  box-shadow: var(--acu-shadow);\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-drawer-in-6bc87089 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing\r\n  .acu-visualizer-surface__mobile-nav[data-v-6bc87089] {\r\n  animation: visualizer-mobile-nav-drawer-out-6bc87089 0.15s ease-in both;\n}\n@supports (width: min(280px, calc(100vw - 72px))) {\n.acu-visualizer-surface__mobile-nav[data-v-6bc87089] {\r\n    width: min(280px, calc(100vw - 72px));\r\n    flex: 0 0 min(280px, calc(100vw - 72px));\n}\n}\n@supports (width: 100dvw) {\n.acu-visualizer-surface__mobile-nav[data-v-6bc87089] {\r\n    max-width: calc(100dvw - 72px);\n}\n}\n@supports (height: 100dvh) {\n.acu-visualizer-surface__mobile-nav[data-v-6bc87089] {\r\n    height: 100dvh;\r\n    max-height: 100dvh;\n}\n}\n@keyframes visualizer-mobile-nav-layer-in-6bc87089 {\nfrom {\r\n    opacity: 0;\n}\nto {\r\n    opacity: 1;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-in-6bc87089 {\nfrom {\r\n    transform: translateX(-100%);\n}\nto {\r\n    transform: translateX(0);\n}\n}\n@keyframes visualizer-mobile-nav-layer-out-6bc87089 {\nfrom {\r\n    opacity: 1;\n}\nto {\r\n    opacity: 0;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-out-6bc87089 {\nfrom {\r\n    transform: translateX(0);\n}\nto {\r\n    transform: translateX(-100%);\n}\n}\n@media (max-width: 1024px) {\n.acu-visualizer-surface[data-v-6bc87089] {\r\n    grid-template-columns: 220px minmax(0, 1fr);\n}\n.acu-visualizer-surface__card-grid[data-v-6bc87089] {\r\n    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));\n}\n.acu-visualizer-surface__topbar[data-v-6bc87089] {\r\n    flex-wrap: wrap;\n}\n.acu-visualizer-surface__mode-tabs[data-v-6bc87089] {\r\n    order: 3;\r\n    width: min(420px, 100%);\n}\n}\n@media (max-width: 767px) {\n.acu-visualizer-surface[data-v-6bc87089] {\r\n    grid-template-columns: 1fr;\r\n    grid-template-rows: minmax(0, 1fr);\n}\n.acu-visualizer-surface__sidebar[data-v-6bc87089] {\r\n    display: none;\n}\n.acu-visualizer-surface__topbar[data-v-6bc87089] {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 1fr) auto;\r\n    gap: 8px;\r\n    min-height: 0;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__topbar-context[data-v-6bc87089] {\r\n    grid-column: 1;\r\n    display: grid;\r\n    grid-template-columns: auto minmax(0, 1fr) auto;\r\n    align-items: center;\r\n    gap: 8px;\r\n    min-width: 0;\n}\n.acu-visualizer-surface__mobile-menu[data-v-6bc87089] {\r\n    display: inline-flex;\n}\n.acu-visualizer-surface__context-items[data-v-6bc87089] {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 8px;\n}\n.acu-visualizer-surface__context-item[data-v-6bc87089]:first-child,\r\n  .acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-6bc87089] {\r\n    max-width: none;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-6bc87089] {\r\n    display: flex;\n}\n.acu-visualizer-surface__close[data-v-6bc87089] {\r\n    grid-column: 2;\r\n    grid-row: 1;\r\n    align-self: center;\n}\n.acu-visualizer-surface__mode-tabs[data-v-6bc87089] {\r\n    grid-column: 1 / -1;\r\n    width: 100%;\n}\n.acu-visualizer-surface__workspace[data-v-6bc87089] {\r\n    padding: 10px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-6bc87089],\r\n  .acu-visualizer-surface__database-toolbar[data-v-6bc87089] {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__data-toolbar[data-v-6bc87089] .acu-btn,\r\n  .acu-visualizer-surface__database-toolbar[data-v-6bc87089] .acu-btn {\r\n    width: 100%;\n}\n.acu-visualizer-surface__footer[data-v-6bc87089] {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\r\n    align-items: center;\r\n    gap: 8px;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__footer > span[data-v-6bc87089] {\r\n    min-width: 0;\r\n    overflow: hidden;\r\n    text-overflow: ellipsis;\r\n    white-space: nowrap;\n}\n.acu-visualizer-surface__footer-actions[data-v-6bc87089] {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 6px;\n}\n.acu-visualizer-surface__footer-actions[data-v-6bc87089] .acu-btn {\r\n    min-width: 0;\r\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-visualizer-surface__card-grid[data-v-6bc87089] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__fields[data-v-6bc87089] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__mode-tabs[data-v-6bc87089] {\r\n    width: 100%;\n}\n.acu-visualizer-surface__conflict-actions[data-v-6bc87089] {\r\n    display: flex;\r\n    margin: 8px 0 0;\n}\n.acu-visualizer-surface__footer[data-v-6bc87089] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__footer > span[data-v-6bc87089] {\r\n    display: none;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue#style-0-6bc87089");
-    var VisualizerSurface_vue_vue_type_style_index_0_scoped_6bc87089_lang = null;
+    injectSfcStyle("\n.acu-visualizer-surface[data-v-f2488d59] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: grid;\r\n  grid-template-columns: 260px minmax(0, 1fr);\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__sidebar[data-v-f2488d59] {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 1px solid var(--acu-border-2);\r\n  background: var(--acu-sidebar-bg);\n}\n.acu-visualizer-surface__main[data-v-f2488d59] {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar[data-v-f2488d59] {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  min-height: 50px;\r\n  padding: 8px 12px 8px 16px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar-context[data-v-f2488d59] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  gap: 10px;\n}\n.acu-visualizer-surface__mobile-menu[data-v-f2488d59] {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-visualizer-surface__mobile-menu[data-v-f2488d59]:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__context-items[data-v-f2488d59] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  justify-content: flex-start;\r\n  gap: 16px;\n}\n.acu-visualizer-surface__context-item[data-v-f2488d59] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 2px;\n}\n.acu-visualizer-surface__context-item[data-v-f2488d59]:first-child {\r\n  flex: 0 1 auto;\r\n  max-width: min(560px, 42vw);\n}\n.acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-f2488d59] {\r\n  flex: 0 0 auto;\r\n  max-width: min(260px, 20vw);\n}\n.acu-visualizer-surface__context-item span[data-v-f2488d59] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__context-item strong[data-v-f2488d59] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\r\n  line-height: 1.25;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__context-item:first-child strong[data-v-f2488d59] {\r\n  overflow: visible;\r\n  text-overflow: clip;\r\n  white-space: normal;\r\n  word-break: break-word;\n}\n.acu-visualizer-surface__context-badge[data-v-f2488d59] {\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__conflict[data-v-f2488d59] {\r\n  flex: 0 0 auto;\r\n  margin: 12px 16px 0;\n}\n.acu-visualizer-surface__conflict-actions[data-v-f2488d59] {\r\n  display: inline-flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px;\r\n  margin-left: 8px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-f2488d59],\n.acu-visualizer-surface__data-toolbar-actions[data-v-f2488d59],\n.acu-visualizer-surface__database-toolbar[data-v-f2488d59],\n.acu-visualizer-surface__pagination[data-v-f2488d59],\n.acu-visualizer-surface__pagination-pages[data-v-f2488d59],\n.acu-visualizer-surface__card-header[data-v-f2488d59] {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 8px;\n}\n.acu-visualizer-surface__workspace[data-v-f2488d59] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  overflow: auto;\r\n  padding: 16px;\n}\n.acu-visualizer-surface__loading[data-v-f2488d59] {\r\n  min-height: 140px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 8px;\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__mode-tabs[data-v-f2488d59] {\r\n  flex: 0 0 auto;\r\n  width: min(360px, 42vw);\n}\n.acu-visualizer-surface__close[data-v-f2488d59] {\r\n  width: 30px;\r\n  height: 30px;\r\n  flex: 0 0 auto;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-visualizer-surface__close[data-v-f2488d59]:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__data-toolbar[data-v-f2488d59] {\n  flex: 0 0 auto;\n  justify-content: space-between;\n  padding: 4px 0 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__data-toolbar-actions[data-v-f2488d59] {\n  flex: 0 0 auto;\n  justify-content: flex-end;\n}\n.acu-visualizer-surface__pagination[data-v-f2488d59] {\n  flex: 0 0 auto;\n  justify-content: center;\n  gap: 14px;\n  padding: 6px 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-visualizer-surface__pagination-pages[data-v-f2488d59] {\n  min-width: 0;\n  flex-wrap: wrap;\n  justify-content: center;\n  gap: 8px;\n}\n.acu-visualizer-surface__page-button[data-v-f2488d59] {\n  width: 34px;\n  min-width: 34px;\n  height: 34px;\n  padding: 0;\n  border: 1px solid var(--acu-border);\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n}\n.acu-visualizer-surface__page-button[data-v-f2488d59]:hover:not(:disabled) {\n  border-color: var(--acu-accent);\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__page-button--active[data-v-f2488d59],\n.acu-visualizer-surface__page-button--active[data-v-f2488d59]:hover:not(:disabled) {\n  border-color: var(--acu-accent);\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-visualizer-surface__page-button[data-v-f2488d59]:disabled:not(\n    .acu-visualizer-surface__page-button--active\n  ) {\n  border-color: var(--acu-border);\n  background: var(--acu-bg-0);\n  color: var(--acu-text-2);\n  opacity: 1;\n  cursor: default;\n}\n.acu-visualizer-surface__page-jump[data-v-f2488d59] {\n  flex: 0 0 64px;\n  width: 64px;\n}\n.acu-visualizer-surface__page-jump[data-v-f2488d59] .acu-input {\n  min-height: 34px;\n  border: 1px solid var(--acu-border) !important;\n  background: var(--acu-bg-0) !important;\n  text-align: center;\n  font-size: var(--acu-font-size-body-lg, 13px) !important;\n  font-variant-numeric: tabular-nums;\n}\n.acu-visualizer-surface__data-range[data-v-f2488d59] {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__database-toolbar[data-v-f2488d59] {\r\n  flex: 0 0 auto;\r\n  padding: 0 0 4px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar h2[data-v-f2488d59] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__database-toolbar p[data-v-f2488d59] {\r\n  margin: 5px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-readable, 1.55);\n}\n.acu-visualizer-surface__empty[data-v-f2488d59] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-visualizer-surface__card-grid[data-v-f2488d59] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));\r\n  gap: 12px;\n}\n.acu-visualizer-surface__data-card[data-v-f2488d59] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  height: 100%;\r\n  padding: 16px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\n}\n.acu-visualizer-surface__card-header strong[data-v-f2488d59] {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-visualizer-surface__card-header span[data-v-f2488d59] {\r\n  min-width: 0;\r\n  margin-right: auto;\r\n  overflow: hidden;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__card-header[data-v-f2488d59] .acu-icon-btn {\r\n  background: transparent;\n}\n.acu-visualizer-surface__card-header[data-v-f2488d59]\r\n  .acu-icon-btn--default:hover:not(:disabled) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\n}\n.acu-visualizer-surface__card-header[data-v-f2488d59] .acu-icon-btn--accent {\r\n  background: var(--acu-accent-glow);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__card-header[data-v-f2488d59]\r\n  .acu-icon-btn--danger:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-visualizer-surface__fields[data-v-f2488d59] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__field-row[data-v-f2488d59] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 8px;\r\n  align-items: stretch;\n}\n.acu-visualizer-surface__field-row.is-wide[data-v-f2488d59] {\r\n  grid-template-columns: minmax(0, 1fr);\n}\n.acu-visualizer-surface__field[data-v-f2488d59] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\r\n  padding: 2px;\r\n  border: 1px solid transparent;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  transition:\r\n    background 0.15s ease,\r\n    border-color 0.15s ease;\n}\n.acu-visualizer-surface__field[data-v-f2488d59] .acu-textarea {\n  flex: 1 1 auto;\n}\n.acu-visualizer-surface__field-preview[data-v-f2488d59] {\n  min-height: 34px;\n  box-sizing: border-box;\n  padding: 8px 10px;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  color: var(--acu-text-1);\n  cursor: text;\n  display: -webkit-box;\n  overflow: hidden;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.45;\n  white-space: pre-wrap;\n  word-break: break-word;\n  -webkit-box-orient: vertical;\n  -webkit-line-clamp: 4;\n  transition:\n    background 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field-preview[data-v-f2488d59]:hover,\n.acu-visualizer-surface__field-preview[data-v-f2488d59]:focus-visible {\n  outline: none;\n  background:\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\n    var(--acu-bg-2);\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field-preview.is-empty[data-v-f2488d59] {\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__field-label[data-v-f2488d59] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 6px;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 600;\n}\n.acu-visualizer-surface__field-label > span[data-v-f2488d59]:first-child {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__field-locks[data-v-f2488d59] {\r\n  flex: 0 0 auto;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 3px;\r\n  opacity: 0.44;\r\n  transition: opacity 0.15s ease;\n}\n.acu-visualizer-surface__field:hover .acu-visualizer-surface__field-locks[data-v-f2488d59],\r\n.acu-visualizer-surface__field:focus-within\r\n  .acu-visualizer-surface__field-locks[data-v-f2488d59],\r\n.acu-visualizer-surface__field.is-locked .acu-visualizer-surface__field-locks[data-v-f2488d59],\r\n.acu-visualizer-surface__field.is-special-index\r\n  .acu-visualizer-surface__field-locks[data-v-f2488d59] {\r\n  opacity: 1;\n}\n.acu-visualizer-surface__field-locks[data-v-f2488d59] .acu-icon-btn {\r\n  width: 24px;\r\n  height: 24px;\r\n  background: transparent;\n}\n.acu-visualizer-surface__field-locks[data-v-f2488d59]\r\n  .acu-icon-btn--default:hover:not(:disabled) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__field-locks[data-v-f2488d59] .acu-icon-btn--accent {\r\n  color: var(--acu-accent);\r\n  background: var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field.is-locked[data-v-f2488d59] {\r\n  border-color: var(--acu-border);\r\n  background: color-mix(in srgb, var(--acu-warning) 8%, transparent);\n}\n.acu-visualizer-surface__footer[data-v-f2488d59] {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  padding: 12px 16px;\r\n  border-top: 1px solid var(--acu-border-2);\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__footer-actions[data-v-f2488d59] {\r\n  display: flex;\r\n  gap: 8px;\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__footer-actions[data-v-f2488d59] .acu-btn {\r\n  min-width: 132px;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-f2488d59] {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9350;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: visualizer-mobile-nav-layer-in-f2488d59 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing[data-v-f2488d59] {\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-layer-out-f2488d59 0.15s ease-in both;\n}\n.acu-visualizer-surface__mobile-nav[data-v-f2488d59] {\r\n  width: 280px;\r\n  max-width: calc(100vw - 72px);\r\n  height: 100%;\r\n  max-height: 100vh;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 280px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 0;\r\n  background: var(--acu-sidebar-bg);\r\n  box-shadow: var(--acu-shadow);\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-drawer-in-f2488d59 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing\r\n  .acu-visualizer-surface__mobile-nav[data-v-f2488d59] {\r\n  animation: visualizer-mobile-nav-drawer-out-f2488d59 0.15s ease-in both;\n}\n@supports (width: min(280px, calc(100vw - 72px))) {\n.acu-visualizer-surface__mobile-nav[data-v-f2488d59] {\r\n    width: min(280px, calc(100vw - 72px));\r\n    flex: 0 0 min(280px, calc(100vw - 72px));\n}\n}\n@supports (width: 100dvw) {\n.acu-visualizer-surface__mobile-nav[data-v-f2488d59] {\r\n    max-width: calc(100dvw - 72px);\n}\n}\n@supports (height: 100dvh) {\n.acu-visualizer-surface__mobile-nav[data-v-f2488d59] {\r\n    height: 100dvh;\r\n    max-height: 100dvh;\n}\n}\n@keyframes visualizer-mobile-nav-layer-in-f2488d59 {\nfrom {\r\n    opacity: 0;\n}\nto {\r\n    opacity: 1;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-in-f2488d59 {\nfrom {\r\n    transform: translateX(-100%);\n}\nto {\r\n    transform: translateX(0);\n}\n}\n@keyframes visualizer-mobile-nav-layer-out-f2488d59 {\nfrom {\r\n    opacity: 1;\n}\nto {\r\n    opacity: 0;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-out-f2488d59 {\nfrom {\r\n    transform: translateX(0);\n}\nto {\r\n    transform: translateX(-100%);\n}\n}\n@media (max-width: 1024px) {\n.acu-visualizer-surface[data-v-f2488d59] {\r\n    grid-template-columns: 220px minmax(0, 1fr);\n}\n.acu-visualizer-surface__card-grid[data-v-f2488d59] {\r\n    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));\n}\n.acu-visualizer-surface__topbar[data-v-f2488d59] {\r\n    flex-wrap: wrap;\n}\n.acu-visualizer-surface__mode-tabs[data-v-f2488d59] {\r\n    order: 3;\r\n    width: min(420px, 100%);\n}\n}\n@media (max-width: 767px) {\n.acu-visualizer-surface[data-v-f2488d59] {\r\n    grid-template-columns: 1fr;\r\n    grid-template-rows: minmax(0, 1fr);\n}\n.acu-visualizer-surface__sidebar[data-v-f2488d59] {\r\n    display: none;\n}\n.acu-visualizer-surface__topbar[data-v-f2488d59] {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 1fr) auto;\r\n    gap: 8px;\r\n    min-height: 0;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__topbar-context[data-v-f2488d59] {\r\n    grid-column: 1;\r\n    display: grid;\r\n    grid-template-columns: auto minmax(0, 1fr) auto;\r\n    align-items: center;\r\n    gap: 8px;\r\n    min-width: 0;\n}\n.acu-visualizer-surface__mobile-menu[data-v-f2488d59] {\r\n    display: inline-flex;\n}\n.acu-visualizer-surface__context-items[data-v-f2488d59] {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 8px;\n}\n.acu-visualizer-surface__context-item[data-v-f2488d59]:first-child,\r\n  .acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-f2488d59] {\r\n    max-width: none;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-f2488d59] {\r\n    display: flex;\n}\n.acu-visualizer-surface__close[data-v-f2488d59] {\r\n    grid-column: 2;\r\n    grid-row: 1;\r\n    align-self: center;\n}\n.acu-visualizer-surface__mode-tabs[data-v-f2488d59] {\r\n    grid-column: 1 / -1;\r\n    width: 100%;\n}\n.acu-visualizer-surface__workspace[data-v-f2488d59] {\r\n    padding: 10px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-f2488d59],\n  .acu-visualizer-surface__database-toolbar[data-v-f2488d59] {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-visualizer-surface__data-toolbar[data-v-f2488d59] .acu-btn,\n  .acu-visualizer-surface__database-toolbar[data-v-f2488d59] .acu-btn {\n    width: 100%;\n}\n.acu-visualizer-surface__data-toolbar-actions[data-v-f2488d59] {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-visualizer-surface__pagination[data-v-f2488d59] {\n    align-items: center;\n    flex-direction: row;\n    flex-wrap: wrap;\n    gap: 6px;\n    padding: 2px 0 6px;\n}\n.acu-visualizer-surface__pagination-pages[data-v-f2488d59] {\n    flex: 0 1 auto;\n    align-items: center;\n    flex-direction: row;\n    flex-wrap: wrap;\n    gap: 5px;\n}\n.acu-visualizer-surface__page-button[data-v-f2488d59] {\n    width: 36px;\n    min-width: 36px;\n    height: 34px;\n    flex: 0 0 36px;\n}\n.acu-visualizer-surface__page-jump[data-v-f2488d59] {\n    flex: 0 0 54px;\n    width: 54px;\n}\n.acu-visualizer-surface__footer[data-v-f2488d59] {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\r\n    align-items: center;\r\n    gap: 8px;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__footer > span[data-v-f2488d59] {\r\n    min-width: 0;\r\n    overflow: hidden;\r\n    text-overflow: ellipsis;\r\n    white-space: nowrap;\n}\n.acu-visualizer-surface__footer-actions[data-v-f2488d59] {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 6px;\n}\n.acu-visualizer-surface__footer-actions[data-v-f2488d59] .acu-btn {\r\n    min-width: 0;\r\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-visualizer-surface__card-grid[data-v-f2488d59] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__fields[data-v-f2488d59] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__mode-tabs[data-v-f2488d59] {\r\n    width: 100%;\n}\n.acu-visualizer-surface__conflict-actions[data-v-f2488d59] {\r\n    display: flex;\r\n    margin: 8px 0 0;\n}\n.acu-visualizer-surface__footer[data-v-f2488d59] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__footer > span[data-v-f2488d59] {\r\n    display: none;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue#style-0-f2488d59");
+    var VisualizerSurface_vue_vue_type_style_index_0_scoped_f2488d59_lang = null;
 
     const _hoisted_1$1 = {
     	class: "acu-visualizer-surface",
@@ -90098,6 +90305,7 @@ Expected function or array of functions, received type ${typeof value}.`
     };
     const _hoisted_9$1 = { class: "acu-visualizer-surface__conflict-actions" };
     const _hoisted_10$1 = {
+    	ref: "workspaceRef",
     	class: "acu-visualizer-surface__workspace",
     	"aria-label": "数据库编辑工作区"
     };
@@ -90113,20 +90321,33 @@ Expected function or array of functions, received type ${typeof value}.`
     };
     const _hoisted_15 = {
     	key: 1,
+    	ref: "paginationRef",
+    	class: "acu-visualizer-surface__pagination",
+    	"aria-label": "数据分页"
+    };
+    const _hoisted_16 = {
+    	class: "acu-visualizer-surface__pagination-pages",
+    	"aria-label": "页码"
+    };
+    const _hoisted_17 = {
+    	key: 2,
     	class: "acu-visualizer-surface__card-grid"
     };
-    const _hoisted_16 = { class: "acu-visualizer-surface__card-header" };
-    const _hoisted_17 = { class: "acu-visualizer-surface__fields" };
-    const _hoisted_18 = ["data-acu-visualizer-field-row-layout"];
-    const _hoisted_19 = ["data-acu-visualizer-field-layout"];
-    const _hoisted_20 = { class: "acu-visualizer-surface__field-label" };
-    const _hoisted_21 = { class: "acu-visualizer-surface__field-locks" };
-    const _hoisted_22 = { class: "acu-visualizer-surface__data-toolbar" };
-    const _hoisted_23 = {
+    const _hoisted_18 = { class: "acu-visualizer-surface__card-header" };
+    const _hoisted_19 = { class: "acu-visualizer-surface__fields" };
+    const _hoisted_20 = ["data-acu-visualizer-field-row-layout"];
+    const _hoisted_21 = ["data-acu-visualizer-field-layout"];
+    const _hoisted_22 = { class: "acu-visualizer-surface__field-label" };
+    const _hoisted_23 = { class: "acu-visualizer-surface__field-locks" };
+    const _hoisted_24 = ["onClick", "onKeydown"];
+    const _hoisted_25 = { class: "acu-visualizer-surface__data-toolbar" };
+    const _hoisted_26 = { class: "acu-visualizer-surface__data-range" };
+    const _hoisted_27 = { class: "acu-visualizer-surface__data-toolbar-actions" };
+    const _hoisted_28 = {
     	class: "acu-visualizer-surface__footer",
     	"aria-label": "保存操作"
     };
-    const _hoisted_24 = { class: "acu-visualizer-surface__footer-actions" };
+    const _hoisted_29 = { class: "acu-visualizer-surface__footer-actions" };
     function _sfc_render$1(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock("main", _hoisted_1$1, [
     		createBaseVNode("aside", _hoisted_2$1, [createVNode($setup["VisualizerNavigation"], {
@@ -90252,250 +90473,322 @@ Expected function or array of functions, received type ${typeof value}.`
     				}, 8, ["onClick"])])]),
     				_: 1
     			})) : createCommentVNode("v-if", true),
-    			createBaseVNode("section", _hoisted_10$1, [$setup.visualizer.isLoading ? (openBlock(), createElementBlock("div", _hoisted_11$1, [..._cache[9] || (_cache[9] = [createBaseVNode(
-    				"i",
-    				{ class: "fa-solid fa-spinner fa-spin" },
-    				null,
-    				-1
-    				/* CACHED */
-    			), createBaseVNode(
-    				"span",
-    				null,
-    				"正在载入当前聊天的表格数据...",
-    				-1
-    				/* CACHED */
-    			)])])) : $setup.visualizer.loadError ? (openBlock(), createBlock($setup["AcuPanel"], {
-    				key: 1,
-    				title: "无法载入数据库",
-    				description: "数据库编辑器需要先读取当前聊天或隔离标签下的表格数据。请先完成初始化或一次填表；如果刚切换了聊天，可以重新打开新 UI 再试。"
-    			}, {
-    				default: withCtx(() => [createBaseVNode(
-    					"p",
-    					_hoisted_12$1,
-    					toDisplayString($setup.visualizer.loadError),
-    					1
-    					/* TEXT */
-    				), createVNode($setup["AcuButton"], { onClick: $setup.data.forceReloadFromCurrentContext }, {
-    					default: withCtx(() => [..._cache[10] || (_cache[10] = [createTextVNode(
-    						"重新尝试载入",
-    						-1
-    						/* CACHED */
-    					)])]),
-    					_: 1
-    				}, 8, ["onClick"])]),
-    				_: 1
-    			})) : $setup.visualizer.mode === "global" || $setup.visualizer.mode === "table-management" ? (openBlock(), createElementBlock(
-    				Fragment,
-    				{ key: 2 },
-    				[
-    					createBaseVNode("div", _hoisted_13$1, [_cache[12] || (_cache[12] = createBaseVNode(
-    						"div",
-    						null,
-    						[createBaseVNode("h2", null, "数据库管理")],
-    						-1
-    						/* CACHED */
-    					)), $setup.visualizer.currentSheetKey ? (openBlock(), createBlock($setup["AcuButton"], {
-    						key: 0,
-    						size: "sm",
-    						onClick: $setup.returnToCurrentSheet
-    					}, {
-    						default: withCtx(() => [..._cache[11] || (_cache[11] = [createBaseVNode(
-    							"i",
-    							{ class: "fa-solid fa-arrow-left" },
-    							null,
-    							-1
-    							/* CACHED */
-    						), createTextVNode(
-    							" 返回当前表编辑 ",
+    			createBaseVNode(
+    				"section",
+    				_hoisted_10$1,
+    				[$setup.visualizer.isLoading ? (openBlock(), createElementBlock("div", _hoisted_11$1, [..._cache[9] || (_cache[9] = [createBaseVNode(
+    					"i",
+    					{ class: "fa-solid fa-spinner fa-spin" },
+    					null,
+    					-1
+    					/* CACHED */
+    				), createBaseVNode(
+    					"span",
+    					null,
+    					"正在载入当前聊天的表格数据...",
+    					-1
+    					/* CACHED */
+    				)])])) : $setup.visualizer.loadError ? (openBlock(), createBlock($setup["AcuPanel"], {
+    					key: 1,
+    					title: "无法载入数据库",
+    					description: "数据库编辑器需要先读取当前聊天或隔离标签下的表格数据。请先完成初始化或一次填表；如果刚切换了聊天，可以重新打开新 UI 再试。"
+    				}, {
+    					default: withCtx(() => [createBaseVNode(
+    						"p",
+    						_hoisted_12$1,
+    						toDisplayString($setup.visualizer.loadError),
+    						1
+    						/* TEXT */
+    					), createVNode($setup["AcuButton"], { onClick: $setup.data.forceReloadFromCurrentContext }, {
+    						default: withCtx(() => [..._cache[10] || (_cache[10] = [createTextVNode(
+    							"重新尝试载入",
     							-1
     							/* CACHED */
     						)])]),
     						_: 1
-    					})) : createCommentVNode("v-if", true)]),
-    					createVNode($setup["VisualizerTableManagementPanel"], {
-    						"sheet-items": $setup.visualizer.sheetItems,
-    						"current-sheet-key": $setup.visualizer.currentSheetKey,
-    						onMoveSheet: $setup.moveSheet,
-    						onRequestAddSheet: $setup.requestAddSheet,
-    						onRequestDeleteSheet: $setup.requestDeleteSheet
-    					}, null, 8, ["sheet-items", "current-sheet-key"]),
-    					createVNode($setup["VisualizerGlobalInjectionPanels"])
-    				],
-    				64
-    				/* STABLE_FRAGMENT */
-    			)) : (openBlock(), createElementBlock(
-    				Fragment,
-    				{ key: 3 },
-    				[$setup.visualizer.mode === "data" ? (openBlock(), createElementBlock(
+    					}, 8, ["onClick"])]),
+    					_: 1
+    				})) : $setup.visualizer.mode === "global" || $setup.visualizer.mode === "table-management" ? (openBlock(), createElementBlock(
     					Fragment,
-    					{ key: 0 },
-    					[$setup.rows.length === 0 ? (openBlock(), createElementBlock("p", _hoisted_14$1, " 当前表还没有数据行。可以先新增行，再逐个字段填写内容。 ")) : (openBlock(), createElementBlock("div", _hoisted_15, [(openBlock(true), createElementBlock(
-    						Fragment,
-    						null,
-    						renderList($setup.rows, (row) => {
-    							return openBlock(), createElementBlock("article", {
-    								key: row.index,
-    								class: "acu-visualizer-surface__data-card"
-    							}, [createBaseVNode("header", _hoisted_16, [
-    								createBaseVNode(
-    									"strong",
-    									null,
-    									"#" + toDisplayString(row.index + 1),
-    									1
-    									/* TEXT */
-    								),
-    								createBaseVNode(
-    									"span",
-    									null,
-    									toDisplayString(row.fields.length) + " 个字段",
-    									1
-    									/* TEXT */
-    								),
-    								createVNode($setup["AcuIconButton"], {
-    									class: "acu-visualizer-surface__row-lock",
-    									icon: "fa-solid fa-lock",
-    									size: "sm",
-    									variant: row.locked ? "accent" : "default",
-    									title: row.locked ? "取消这一行的自动更新保护" : "锁定这一行，阻止自动更新改动整行",
-    									"aria-label": row.locked ? "取消锁定这一行" : "锁定这一行",
-    									onClick: ($event) => $setup.visualizer.toggleRowLock($setup.visualizer.currentSheetKey, row.index)
-    								}, null, 8, [
-    									"variant",
-    									"title",
-    									"aria-label",
-    									"onClick"
-    								]),
-    								createVNode($setup["AcuIconButton"], {
-    									icon: "fa-solid fa-trash",
-    									size: "sm",
-    									variant: "danger",
-    									title: "删除这一行",
-    									onClick: ($event) => $setup.deleteRow(row.index)
-    								}, null, 8, ["onClick"])
-    							]), createBaseVNode("div", _hoisted_17, [(openBlock(true), createElementBlock(
-    								Fragment,
+    					{ key: 2 },
+    					[
+    						createBaseVNode("div", _hoisted_13$1, [_cache[12] || (_cache[12] = createBaseVNode(
+    							"div",
+    							null,
+    							[createBaseVNode("h2", null, "数据库管理")],
+    							-1
+    							/* CACHED */
+    						)), $setup.visualizer.currentSheetKey ? (openBlock(), createBlock($setup["AcuButton"], {
+    							key: 0,
+    							size: "sm",
+    							onClick: $setup.returnToCurrentSheet
+    						}, {
+    							default: withCtx(() => [..._cache[11] || (_cache[11] = [createBaseVNode(
+    								"i",
+    								{ class: "fa-solid fa-arrow-left" },
     								null,
-    								renderList(row.fieldRows, (fieldRow) => {
-    									return openBlock(), createElementBlock("div", {
-    										key: fieldRow.key,
-    										class: normalizeClass(["acu-visualizer-surface__field-row", { "is-wide": fieldRow.wide }]),
-    										"data-acu-visualizer-field-row-layout": fieldRow.wide ? "wide" : "half"
-    									}, [(openBlock(true), createElementBlock(
-    										Fragment,
-    										null,
-    										renderList(fieldRow.fields, (field) => {
-    											return openBlock(), createElementBlock("label", {
-    												key: field.columnIndex,
-    												class: normalizeClass(["acu-visualizer-surface__field", {
-    													"is-locked": field.locked,
-    													"is-special-index": field.specialIndexLocked
-    												}]),
-    												"data-acu-visualizer-field-layout": fieldRow.wide ? "wide" : "half"
-    											}, [createBaseVNode("span", _hoisted_20, [createBaseVNode(
-    												"span",
-    												null,
-    												toDisplayString(field.header),
+    								-1
+    								/* CACHED */
+    							), createTextVNode(
+    								" 返回当前表编辑 ",
+    								-1
+    								/* CACHED */
+    							)])]),
+    							_: 1
+    						})) : createCommentVNode("v-if", true)]),
+    						createVNode($setup["VisualizerTableManagementPanel"], {
+    							"sheet-items": $setup.visualizer.sheetItems,
+    							onMoveSheet: $setup.moveSheet,
+    							onRequestAddSheet: $setup.requestAddSheet,
+    							onRequestDeleteSheet: $setup.requestDeleteSheet
+    						}, null, 8, ["sheet-items"]),
+    						createVNode($setup["VisualizerGlobalInjectionPanels"])
+    					],
+    					64
+    					/* STABLE_FRAGMENT */
+    				)) : (openBlock(), createElementBlock(
+    					Fragment,
+    					{ key: 3 },
+    					[$setup.visualizer.mode === "data" ? (openBlock(), createElementBlock(
+    						Fragment,
+    						{ key: 0 },
+    						[
+    							$setup.rowCount === 0 ? (openBlock(), createElementBlock("p", _hoisted_14$1, " 当前表还没有数据行。可以先新增行，再逐个字段填写内容。 ")) : createCommentVNode("v-if", true),
+    							$setup.isDataPaginated ? (openBlock(), createElementBlock(
+    								"div",
+    								_hoisted_15,
+    								[createBaseVNode("div", _hoisted_16, [(openBlock(true), createElementBlock(
+    									Fragment,
+    									null,
+    									renderList($setup.dataPaginationItems, (item) => {
+    										return openBlock(), createBlock($setup["AcuButton"], {
+    											key: item.key,
+    											class: normalizeClass(["acu-visualizer-surface__page-button", { "acu-visualizer-surface__page-button--active": item.active }]),
+    											variant: item.active ? "primary" : "default",
+    											size: "md",
+    											"aria-label": item.targetPage ? `跳转到第 ${item.targetPage} 页` : item.page ? `第 ${item.page} 页` : "省略的页码",
+    											onClick: ($event) => item.targetPage && $setup.setDataPage(item.targetPage)
+    										}, {
+    											default: withCtx(() => [createTextVNode(
+    												toDisplayString(item.label),
     												1
     												/* TEXT */
-    											), createBaseVNode("span", _hoisted_21, [field.specialIndexLocked ? (openBlock(), createBlock($setup["AcuBadge"], {
-    												key: 0,
-    												variant: "warning",
-    												title: "编码索引由系统维护；保存、AI 更新或行数变化时会按 AM 序列重排"
-    											}, {
-    												default: withCtx(() => [..._cache[13] || (_cache[13] = [createTextVNode(
-    													" 自动编号 ",
-    													-1
-    													/* CACHED */
-    												)])]),
-    												_: 1
-    											})) : (openBlock(), createBlock($setup["AcuIconButton"], {
-    												key: 1,
-    												class: "acu-visualizer-surface__lock-button",
-    												icon: "fa-solid fa-table-columns",
-    												size: "sm",
-    												variant: field.columnLocked ? "accent" : "default",
-    												title: field.columnLocked ? "取消当前列的自动更新保护" : "锁定当前列，阻止自动更新改动这一列",
-    												"aria-label": field.columnLocked ? "取消锁定当前列" : "锁定当前列",
-    												onClick: withModifiers(($event) => $setup.visualizer.toggleColumnLock($setup.visualizer.currentSheetKey, field.columnIndex), ["prevent"])
-    											}, null, 8, [
-    												"variant",
-    												"title",
-    												"aria-label",
-    												"onClick"
-    											])), !field.specialIndexLocked ? (openBlock(), createBlock($setup["AcuIconButton"], {
-    												key: 2,
-    												class: "acu-visualizer-surface__lock-button",
-    												icon: "fa-solid fa-lock",
-    												size: "sm",
-    												variant: field.cellLocked ? "accent" : "default",
-    												title: field.cellLocked ? "取消当前单元格的自动更新保护" : "锁定当前单元格，阻止自动更新改动这个值",
-    												"aria-label": field.cellLocked ? "取消锁定当前单元格" : "锁定当前单元格",
-    												onClick: withModifiers(($event) => $setup.visualizer.toggleCellLock($setup.visualizer.currentSheetKey, row.index, field.columnIndex), ["prevent"])
-    											}, null, 8, [
-    												"variant",
-    												"title",
-    												"aria-label",
-    												"onClick"
-    											])) : createCommentVNode("v-if", true)])]), createVNode($setup["AcuTextarea"], {
-    												"model-value": field.value,
-    												rows: 1,
-    												"max-rows": 12,
-    												"auto-resize": "",
-    												onFocus: ($event) => $setup.startDataCellEditing(row.index, field.columnIndex),
-    												onBlur: ($event) => $setup.stopDataCellEditing(row.index, field.columnIndex),
-    												"onUpdate:modelValue": (value) => $setup.visualizer.updateCell(row.index, field.columnIndex, value)
-    											}, null, 8, [
-    												"model-value",
-    												"onFocus",
-    												"onBlur",
-    												"onUpdate:modelValue"
-    											])], 10, _hoisted_19);
+    											)]),
+    											_: 2
+    										}, 1032, [
+    											"class",
+    											"variant",
+    											"aria-label",
+    											"onClick"
+    										]);
+    									}),
+    									128
+    									/* KEYED_FRAGMENT */
+    								))]), createVNode($setup["AcuInput"], {
+    									class: "acu-visualizer-surface__page-jump",
+    									"model-value": $setup.dataPageJumpValue,
+    									type: "number",
+    									size: "md",
+    									min: 1,
+    									max: $setup.dataPageCount,
+    									step: 1,
+    									autocomplete: "off",
+    									"aria-label": "跳转到页码",
+    									"onUpdate:modelValue": $setup.updateDataPageJumpValue,
+    									onChange: $setup.commitDataPageJumpValue
+    								}, null, 8, ["model-value", "max"])],
+    								512
+    								/* NEED_PATCH */
+    							)) : createCommentVNode("v-if", true),
+    							$setup.rowCount > 0 ? (openBlock(), createElementBlock("div", _hoisted_17, [(openBlock(true), createElementBlock(
+    								Fragment,
+    								null,
+    								renderList($setup.rows, (row) => {
+    									return openBlock(), createElementBlock("article", {
+    										key: row.index,
+    										class: "acu-visualizer-surface__data-card"
+    									}, [createBaseVNode("header", _hoisted_18, [
+    										createBaseVNode(
+    											"strong",
+    											null,
+    											"#" + toDisplayString(row.index + 1),
+    											1
+    											/* TEXT */
+    										),
+    										createBaseVNode(
+    											"span",
+    											null,
+    											toDisplayString(row.fields.length) + " 个字段",
+    											1
+    											/* TEXT */
+    										),
+    										createVNode($setup["AcuIconButton"], {
+    											class: "acu-visualizer-surface__row-lock",
+    											icon: "fa-solid fa-lock",
+    											size: "sm",
+    											variant: row.locked ? "accent" : "default",
+    											title: row.locked ? "取消这一行的自动更新保护" : "锁定这一行，阻止自动更新改动整行",
+    											"aria-label": row.locked ? "取消锁定这一行" : "锁定这一行",
+    											onClick: ($event) => $setup.visualizer.toggleRowLock($setup.visualizer.currentSheetKey, row.index)
+    										}, null, 8, [
+    											"variant",
+    											"title",
+    											"aria-label",
+    											"onClick"
+    										]),
+    										createVNode($setup["AcuIconButton"], {
+    											icon: "fa-solid fa-trash",
+    											size: "sm",
+    											variant: "danger",
+    											title: "删除这一行",
+    											onClick: ($event) => $setup.deleteRow(row.index)
+    										}, null, 8, ["onClick"])
+    									]), createBaseVNode("div", _hoisted_19, [(openBlock(true), createElementBlock(
+    										Fragment,
+    										null,
+    										renderList(row.fieldRows, (fieldRow) => {
+    											return openBlock(), createElementBlock("div", {
+    												key: fieldRow.key,
+    												class: normalizeClass(["acu-visualizer-surface__field-row", { "is-wide": fieldRow.wide }]),
+    												"data-acu-visualizer-field-row-layout": fieldRow.wide ? "wide" : "half"
+    											}, [(openBlock(true), createElementBlock(
+    												Fragment,
+    												null,
+    												renderList(fieldRow.fields, (field) => {
+    													return openBlock(), createElementBlock("label", {
+    														key: field.columnIndex,
+    														class: normalizeClass(["acu-visualizer-surface__field", {
+    															"is-locked": field.locked,
+    															"is-special-index": field.specialIndexLocked
+    														}]),
+    														"data-acu-visualizer-field-layout": fieldRow.wide ? "wide" : "half"
+    													}, [createBaseVNode("span", _hoisted_22, [createBaseVNode(
+    														"span",
+    														null,
+    														toDisplayString(field.header),
+    														1
+    														/* TEXT */
+    													), createBaseVNode("span", _hoisted_23, [field.specialIndexLocked ? (openBlock(), createBlock($setup["AcuBadge"], {
+    														key: 0,
+    														variant: "warning",
+    														title: "编码索引由系统维护；保存、AI 更新或行数变化时会按 AM 序列重排"
+    													}, {
+    														default: withCtx(() => [..._cache[13] || (_cache[13] = [createTextVNode(
+    															" 自动编号 ",
+    															-1
+    															/* CACHED */
+    														)])]),
+    														_: 1
+    													})) : (openBlock(), createBlock($setup["AcuIconButton"], {
+    														key: 1,
+    														class: "acu-visualizer-surface__lock-button",
+    														icon: "fa-solid fa-table-columns",
+    														size: "sm",
+    														variant: field.columnLocked ? "accent" : "default",
+    														title: field.columnLocked ? "取消当前列的自动更新保护" : "锁定当前列，阻止自动更新改动这一列",
+    														"aria-label": field.columnLocked ? "取消锁定当前列" : "锁定当前列",
+    														onClick: withModifiers(($event) => $setup.visualizer.toggleColumnLock($setup.visualizer.currentSheetKey, field.columnIndex), ["prevent"])
+    													}, null, 8, [
+    														"variant",
+    														"title",
+    														"aria-label",
+    														"onClick"
+    													])), !field.specialIndexLocked ? (openBlock(), createBlock($setup["AcuIconButton"], {
+    														key: 2,
+    														class: "acu-visualizer-surface__lock-button",
+    														icon: "fa-solid fa-lock",
+    														size: "sm",
+    														variant: field.cellLocked ? "accent" : "default",
+    														title: field.cellLocked ? "取消当前单元格的自动更新保护" : "锁定当前单元格，阻止自动更新改动这个值",
+    														"aria-label": field.cellLocked ? "取消锁定当前单元格" : "锁定当前单元格",
+    														onClick: withModifiers(($event) => $setup.visualizer.toggleCellLock($setup.visualizer.currentSheetKey, row.index, field.columnIndex), ["prevent"])
+    													}, null, 8, [
+    														"variant",
+    														"title",
+    														"aria-label",
+    														"onClick"
+    													])) : createCommentVNode("v-if", true)])]), $setup.isDataCellEditing(row.index, field.columnIndex) ? (openBlock(), createBlock($setup["AcuTextarea"], {
+    														key: 0,
+    														ref_for: true,
+    														ref: $setup.setActiveDataTextareaRef,
+    														"model-value": field.value,
+    														rows: 1,
+    														"max-rows": 12,
+    														"auto-resize": "",
+    														onFocus: ($event) => $setup.startDataCellEditing(row.index, field.columnIndex),
+    														onBlur: ($event) => $setup.stopDataCellEditing(row.index, field.columnIndex),
+    														"onUpdate:modelValue": (value) => $setup.visualizer.updateCell(row.index, field.columnIndex, value)
+    													}, null, 8, [
+    														"model-value",
+    														"onFocus",
+    														"onBlur",
+    														"onUpdate:modelValue"
+    													])) : (openBlock(), createElementBlock("div", {
+    														key: 1,
+    														class: normalizeClass(["acu-visualizer-surface__field-preview", { "is-empty": !field.value }]),
+    														role: "button",
+    														tabindex: "0",
+    														title: "点击编辑该字段",
+    														onClick: ($event) => $setup.startDataCellEditing(row.index, field.columnIndex),
+    														onKeydown: [withKeys(withModifiers(($event) => $setup.startDataCellEditing(row.index, field.columnIndex), ["prevent"]), ["enter"]), withKeys(withModifiers(($event) => $setup.startDataCellEditing(row.index, field.columnIndex), ["prevent"]), ["space"])]
+    													}, toDisplayString(field.value || "未填写"), 43, _hoisted_24))], 10, _hoisted_21);
+    												}),
+    												128
+    												/* KEYED_FRAGMENT */
+    											))], 10, _hoisted_20);
     										}),
     										128
     										/* KEYED_FRAGMENT */
-    									))], 10, _hoisted_18);
+    									))])]);
     								}),
     								128
     								/* KEYED_FRAGMENT */
-    							))])]);
-    						}),
-    						128
-    						/* KEYED_FRAGMENT */
-    					))])), createBaseVNode("div", _hoisted_22, [createVNode($setup["AcuButton"], {
-    						size: "sm",
-    						variant: "primary",
-    						onClick: $setup.addRow
-    					}, {
-    						default: withCtx(() => [..._cache[14] || (_cache[14] = [createBaseVNode(
-    							"i",
-    							{ class: "fa-solid fa-plus" },
-    							null,
-    							-1
-    							/* CACHED */
-    						), createTextVNode(
-    							" 新增行 ",
-    							-1
-    							/* CACHED */
-    						)])]),
-    						_: 1
-    					})])],
+    							))])) : createCommentVNode("v-if", true),
+    							createBaseVNode("div", _hoisted_25, [createBaseVNode(
+    								"span",
+    								_hoisted_26,
+    								toDisplayString($setup.dataRangeText),
+    								1
+    								/* TEXT */
+    							), createBaseVNode("div", _hoisted_27, [createVNode($setup["AcuButton"], {
+    								size: "sm",
+    								variant: "primary",
+    								onClick: $setup.addRow
+    							}, {
+    								default: withCtx(() => [..._cache[14] || (_cache[14] = [createBaseVNode(
+    									"i",
+    									{ class: "fa-solid fa-plus" },
+    									null,
+    									-1
+    									/* CACHED */
+    								), createTextVNode(
+    									" 新增行 ",
+    									-1
+    									/* CACHED */
+    								)])]),
+    								_: 1
+    							})])])
+    						],
+    						64
+    						/* STABLE_FRAGMENT */
+    					)) : $setup.visualizer.mode === "config" ? (openBlock(), createBlock($setup["VisualizerConfigPanels"], {
+    						key: 1,
+    						onRequestAddColumn: $setup.requestAddColumn,
+    						onRequestDeleteColumn: $setup.requestDeleteColumn
+    					})) : (openBlock(), createBlock($setup["VisualizerAssistantPanel"], { key: 2 }))],
     					64
     					/* STABLE_FRAGMENT */
-    				)) : $setup.visualizer.mode === "config" ? (openBlock(), createBlock($setup["VisualizerConfigPanels"], {
-    					key: 1,
-    					onRequestAddColumn: $setup.requestAddColumn,
-    					onRequestDeleteColumn: $setup.requestDeleteColumn
-    				})) : (openBlock(), createBlock($setup["VisualizerAssistantPanel"], { key: 2 }))],
-    				64
-    				/* STABLE_FRAGMENT */
-    			))]),
-    			createBaseVNode("footer", _hoisted_23, [createBaseVNode(
+    				))],
+    				512
+    				/* NEED_PATCH */
+    			),
+    			createBaseVNode("footer", _hoisted_28, [createBaseVNode(
     				"span",
     				null,
     				toDisplayString($setup.footerStatus),
     				1
     				/* TEXT */
-    			), createBaseVNode("div", _hoisted_24, [createVNode($setup["AcuButton"], {
+    			), createBaseVNode("div", _hoisted_29, [createVNode($setup["AcuButton"], {
     				disabled: $setup.saveDisabled,
     				loading: $setup.visualizer.isSaving,
     				onClick: $setup.save.saveToChat
@@ -90561,7 +90854,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		)) : createCommentVNode("v-if", true)
     	]);
     }
-    var VisualizerSurface = /* @__PURE__ */ _export_sfc(_sfc_main$1, [["render", _sfc_render$1], ["__scopeId", "data-v-6bc87089"]]);
+    var VisualizerSurface = /* @__PURE__ */ _export_sfc(_sfc_main$1, [["render", _sfc_render$1], ["__scopeId", "data-v-f2488d59"]]);
 
     const THEME_MENU_LEAVE_MS = 120;
     const MOBILE_NAV_LEAVE_MS = 150;
