@@ -53092,7 +53092,7 @@ $CONTENT
     }
 
     /**
-    * @vue/shared v3.5.35
+    * @vue/shared v3.5.33
     * (c) 2018-present Yuxi (Evan) You and Vue contributors
     * @license MIT
     **/
@@ -53627,7 +53627,7 @@ $CONTENT
     }
 
     /**
-    * @vue/reactivity v3.5.35
+    * @vue/reactivity v3.5.33
     * (c) 2018-present Yuxi (Evan) You and Vue contributors
     * @license MIT
     **/
@@ -53658,18 +53658,12 @@ $CONTENT
          */
         this.cleanups = [];
         this._isPaused = false;
-        this._warnOnRun = true;
         this.__v_skip = true;
+        this.parent = activeEffectScope;
         if (!detached && activeEffectScope) {
-          if (activeEffectScope.active) {
-            this.parent = activeEffectScope;
-            this.index = (activeEffectScope.scopes || (activeEffectScope.scopes = [])).push(
-              this
-            ) - 1;
-          } else {
-            this._active = false;
-            this._warnOnRun = false;
-          }
+          this.index = (activeEffectScope.scopes || (activeEffectScope.scopes = [])).push(
+            this
+          ) - 1;
         }
       }
       get active() {
@@ -53717,7 +53711,7 @@ $CONTENT
           } finally {
             activeEffectScope = currentEffectScope;
           }
-        } else if (!!("production" !== "production") && this._warnOnRun) {
+        } else if (!!("production" !== "production")) {
           warn$2(`cannot run an inactive effect scope.`);
         }
       }
@@ -53841,12 +53835,8 @@ $CONTENT
          */
         this.cleanup = void 0;
         this.scheduler = void 0;
-        if (activeEffectScope) {
-          if (activeEffectScope.active) {
-            activeEffectScope.effects.push(this);
-          } else {
-            this.flags &= -2;
-          }
+        if (activeEffectScope && activeEffectScope.active) {
+          activeEffectScope.effects.push(this);
         }
       }
       pause() {
@@ -55011,6 +55001,9 @@ $CONTENT
           return 0 /* INVALID */;
       }
     }
+    function getTargetType(value) {
+      return value["__v_skip"] || !Object.isExtensible(value) ? 0 /* INVALID */ : targetTypeMap(toRawType(value));
+    }
     // @__NO_SIDE_EFFECTS__
     function reactive(target) {
       if (/* @__PURE__ */ isReadonly(target)) {
@@ -55068,16 +55061,13 @@ $CONTENT
       if (target["__v_raw"] && !(isReadonly2 && target["__v_isReactive"])) {
         return target;
       }
-      if (target["__v_skip"] || !Object.isExtensible(target)) {
+      const targetType = getTargetType(target);
+      if (targetType === 0 /* INVALID */) {
         return target;
       }
       const existingProxy = proxyMap.get(target);
       if (existingProxy) {
         return existingProxy;
-      }
-      const targetType = targetTypeMap(toRawType(target));
-      if (targetType === 0 /* INVALID */) {
-        return target;
       }
       const proxy = new Proxy(
         target,
@@ -55636,7 +55626,7 @@ $CONTENT
     }
 
     /**
-    * @vue/runtime-core v3.5.35
+    * @vue/runtime-core v3.5.33
     * (c) 2018-present Yuxi (Evan) You and Vue contributors
     * @license MIT
     **/
@@ -56794,18 +56784,19 @@ $CONTENT
           target,
           props
         } = vnode;
-        const shouldRemove = doRemove || !isTeleportDisabled(props);
+        let shouldRemove = doRemove || !isTeleportDisabled(props);
         const pendingMount = pendingMounts.get(vnode);
         if (pendingMount) {
           pendingMount.flags |= 8;
           pendingMounts.delete(vnode);
+          shouldRemove = false;
         }
         if (target) {
           hostRemove(targetStart);
           hostRemove(targetAnchor);
         }
         doRemove && hostRemove(anchor);
-        if (!pendingMount && shapeFlag & 16) {
+        if (shapeFlag & 16) {
           for (let i = 0; i < children.length; i++) {
             const child = children[i];
             unmount(
@@ -57774,16 +57765,20 @@ $CONTENT
               slotScopeIds,
               optimized
             );
-            if (next && !isMismatchAllowed(el, 1 /* CHILDREN */)) {
-              (!!("production" !== "production") || false) && warn$1(
-                `Hydration children mismatch on`,
-                el,
-                `
-Server rendered element contains more child nodes than client vdom.`
-              );
-              logMismatchError();
-            }
+            let hasWarned = false;
             while (next) {
+              if (!isMismatchAllowed(el, 1 /* CHILDREN */)) {
+                if ((!!("production" !== "production") || false) && !hasWarned) {
+                  warn$1(
+                    `Hydration children mismatch on`,
+                    el,
+                    `
+Server rendered element contains more child nodes than client vdom.`
+                  );
+                  hasWarned = true;
+                }
+                logMismatchError();
+              }
               const cur = next;
               next = next.nextSibling;
               remove(cur);
@@ -57857,7 +57852,7 @@ Server rendered element contains more child nodes than client vdom.`
         optimized = optimized || !!parentVNode.dynamicChildren;
         const children = parentVNode.children;
         const l = children.length;
-        let hasCheckedMismatch = false;
+        let hasWarned = false;
         for (let i = 0; i < l; i++) {
           const vnode = optimized ? children[i] : children[i] = normalizeVNode(children[i]);
           const isText = vnode.type === Text;
@@ -57885,17 +57880,17 @@ Server rendered element contains more child nodes than client vdom.`
           } else if (isText && !vnode.children) {
             insert(vnode.el = createText(""), container);
           } else {
-            if (!hasCheckedMismatch) {
-              hasCheckedMismatch = true;
-              if (!isMismatchAllowed(container, 1 /* CHILDREN */)) {
-                (!!("production" !== "production") || false) && warn$1(
+            if (!isMismatchAllowed(container, 1 /* CHILDREN */)) {
+              if ((!!("production" !== "production") || false) && !hasWarned) {
+                warn$1(
                   `Hydration children mismatch on`,
                   container,
                   `
 Server rendered element contains fewer child nodes than client vdom.`
                 );
-                logMismatchError();
+                hasWarned = true;
               }
+              logMismatchError();
             }
             patch(
               null,
@@ -60835,7 +60830,7 @@ If you want to remount the same app, move your app creation logic into a factory
       const receivedType = toRawType(value);
       const expectedValue = styleValue(value, expectedType);
       const receivedValue = styleValue(value, receivedType);
-      if (expectedTypes.length === 1 && isExplicable(expectedType) && isCoercible(expectedType, receivedType)) {
+      if (expectedTypes.length === 1 && isExplicable(expectedType) && !isBoolean(expectedType, receivedType)) {
         message += ` with value ${expectedValue}`;
       }
       message += `, got ${receivedType} `;
@@ -60845,9 +60840,7 @@ If you want to remount the same app, move your app creation logic into a factory
       return message;
     }
     function styleValue(value, type) {
-      if (isSymbol(value)) {
-        return value.toString();
-      } else if (type === "String") {
+      if (type === "String") {
         return `"${value}"`;
       } else if (type === "Number") {
         return `${Number(value)}`;
@@ -60859,11 +60852,8 @@ If you want to remount the same app, move your app creation logic into a factory
       const explicitTypes = ["string", "number", "boolean"];
       return explicitTypes.some((elem) => type.toLowerCase() === elem);
     }
-    function isCoercible(...args) {
-      return args.every((elem) => {
-        const value = elem.toLowerCase();
-        return value !== "boolean" && value !== "symbol";
-      });
+    function isBoolean(...args) {
+      return args.some((elem) => elem.toLowerCase() === "boolean");
     }
 
     const isInternalKey = (key) => key === "_" || key === "_ctx" || key === "$stable";
@@ -62219,13 +62209,9 @@ For more details, see https://link.vuejs.org/feature-flags.`
         const needTransition2 = moveType !== 2 && shapeFlag & 1 && transition;
         if (needTransition2) {
           if (moveType === 0) {
-            if (transition.persisted && !el[leaveCbKey]) {
-              hostInsert(el, container, anchor);
-            } else {
-              transition.beforeEnter(el);
-              hostInsert(el, container, anchor);
-              queuePostRenderEffect(() => transition.enter(el), parentSuspense);
-            }
+            transition.beforeEnter(el);
+            hostInsert(el, container, anchor);
+            queuePostRenderEffect(() => transition.enter(el), parentSuspense);
           } else {
             const { leave, delayLeave, afterLeave } = transition;
             const remove2 = () => {
@@ -62236,21 +62222,16 @@ For more details, see https://link.vuejs.org/feature-flags.`
               }
             };
             const performLeave = () => {
-              const wasLeaving = el._isLeaving || !!el[leaveCbKey];
               if (el._isLeaving) {
                 el[leaveCbKey](
                   true
                   /* cancelled */
                 );
               }
-              if (transition.persisted && !wasLeaving) {
+              leave(el, () => {
                 remove2();
-              } else {
-                leave(el, () => {
-                  remove2();
-                  afterLeave && afterLeave();
-                });
-              }
+                afterLeave && afterLeave();
+              });
             };
             if (delayLeave) {
               delayLeave(el, remove2, performLeave);
@@ -62930,14 +62911,13 @@ For more details, see https://link.vuejs.org/feature-flags.`
             suspense.isHydrating = false;
           } else if (!resume) {
             delayEnter = activeBranch && pendingBranch.transition && pendingBranch.transition.mode === "out-in";
-            let hasUpdatedAnchor = false;
             if (delayEnter) {
               activeBranch.transition.afterLeave = () => {
                 if (pendingId === suspense.pendingId) {
                   move(
                     pendingBranch,
                     container2,
-                    anchor === initialAnchor && !hasUpdatedAnchor ? next(activeBranch) : anchor,
+                    anchor === initialAnchor ? next(activeBranch) : anchor,
                     0
                   );
                   queuePostFlushCb(effects);
@@ -62950,7 +62930,6 @@ For more details, see https://link.vuejs.org/feature-flags.`
             if (activeBranch && !suspense.isFallbackMountPending) {
               if (parentNode(activeBranch.el) === container2) {
                 anchor = next(activeBranch);
-                hasUpdatedAnchor = true;
               }
               unmount(activeBranch, parentComponent2, suspense, true);
               if (!delayEnter && isInFallback && vnode2.ssFallback) {
@@ -64271,7 +64250,7 @@ Component that was made reactive: `,
       return true;
     }
 
-    const version = "3.5.35";
+    const version = "3.5.33";
     const warn = !!("production" !== "production") ? warn$1 : NOOP;
     const ErrorTypeStrings = ErrorTypeStrings$1 ;
     const devtools = !!("production" !== "production") || true ? devtools$1 : void 0;
@@ -64294,7 +64273,7 @@ Component that was made reactive: `,
     const DeprecationTypes = null;
 
     /**
-    * @vue/runtime-dom v3.5.35
+    * @vue/runtime-dom v3.5.33
     * (c) 2018-present Yuxi (Evan) You and Vue contributors
     * @license MIT
     **/
@@ -65034,37 +65013,12 @@ Component that was made reactive: `,
         } else if (e._vts <= invoker.attached) {
           return;
         }
-        const value = invoker.value;
-        if (isArray(value)) {
-          const originalStop = e.stopImmediatePropagation;
-          e.stopImmediatePropagation = () => {
-            originalStop.call(e);
-            e._stopped = true;
-          };
-          const handlers = value.slice();
-          const args = [e];
-          for (let i = 0; i < handlers.length; i++) {
-            if (e._stopped) {
-              break;
-            }
-            const handler = handlers[i];
-            if (handler) {
-              callWithAsyncErrorHandling(
-                handler,
-                instance,
-                5,
-                args
-              );
-            }
-          }
-        } else {
-          callWithAsyncErrorHandling(
-            value,
-            instance,
-            5,
-            [e]
-          );
-        }
+        callWithAsyncErrorHandling(
+          patchStopImmediatePropagation(e, invoker.value),
+          instance,
+          5,
+          [e]
+        );
       };
       invoker.value = initialValue;
       invoker.attached = getNow();
@@ -65079,6 +65033,20 @@ Component that was made reactive: `,
 Expected function or array of functions, received type ${typeof value}.`
       );
       return NOOP;
+    }
+    function patchStopImmediatePropagation(e, value) {
+      if (isArray(value)) {
+        const originalStop = e.stopImmediatePropagation;
+        e.stopImmediatePropagation = () => {
+          originalStop.call(e);
+          e._stopped = true;
+        };
+        return value.map(
+          (fn) => (e2) => !e2._stopped && fn && fn(e2)
+        );
+      } else {
+        return value;
+      }
     }
 
     const isNativeOn = (key) => key.charCodeAt(0) === 111 && key.charCodeAt(1) === 110 && // lowercase letter
@@ -66301,7 +66269,7 @@ Expected function or array of functions, received type ${typeof value}.`
     } ;
 
     /**
-    * vue v3.5.35
+    * vue v3.5.33
     * (c) 2018-present Yuxi (Evan) You and Vue contributors
     * @license MIT
     **/
@@ -80716,15 +80684,16 @@ Expected function or array of functions, received type ${typeof value}.`
     var PlotPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-0170ae86"]]);
 
     function setSendTextareaValue(text) {
-        const input = document.querySelector('#send_textarea');
+        const input = getAcuHostDocument().querySelector('#send_textarea');
         if (!input)
             return false;
         input.value = text;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
+        const EventCtor = input.ownerDocument.defaultView?.Event ?? Event;
+        input.dispatchEvent(new EventCtor('input', { bubbles: true }));
         return true;
     }
     function clickSendButton() {
-        const button = document.querySelector('#send_but');
+        const button = getAcuHostDocument().querySelector('#send_but');
         if (!button)
             return false;
         button.click();
@@ -80734,17 +80703,29 @@ Expected function or array of functions, received type ${typeof value}.`
         const toast = useToastStore();
         const running = ref(loopState_ACU.isLooping);
         const timerText = ref('');
+        let displayInterval = null;
         function refreshStatus() {
             running.value = loopState_ACU.isLooping;
         }
+        function getRemainingMs() {
+            if (!loopState_ACU.isLooping || !loopState_ACU.startTime || !loopState_ACU.totalDuration) {
+                return null;
+            }
+            return Math.max(0, loopState_ACU.totalDuration - (Date.now() - loopState_ACU.startTime));
+        }
+        function clearDisplayTick() {
+            if (displayInterval) {
+                window.clearInterval(displayInterval);
+                displayInterval = null;
+            }
+        }
         function updateTimer() {
             refreshStatus();
-            if (!loopState_ACU.isLooping || !loopState_ACU.startTime || !loopState_ACU.totalDuration) {
+            const remaining = getRemainingMs();
+            if (remaining === null) {
                 timerText.value = '';
                 return;
             }
-            const elapsed = Date.now() - loopState_ACU.startTime;
-            const remaining = Math.max(0, loopState_ACU.totalDuration - elapsed);
             if (remaining <= 0) {
                 stop();
                 toast.info('总时长已结束，智能续写已停止。', { muteable: false });
@@ -80754,11 +80735,39 @@ Expected function or array of functions, received type ${typeof value}.`
             const seconds = Math.floor((remaining % 60000) / 1000);
             timerText.value = `${minutes}:${seconds.toString().padStart(2, '0')}`;
         }
-        function startTick() {
-            if (loopState_ACU.tickInterval)
-                clearInterval(loopState_ACU.tickInterval);
+        function startDisplayTick() {
+            clearDisplayTick();
             updateTimer();
-            loopState_ACU.tickInterval = setInterval(updateTimer, 1000);
+            if (getRemainingMs() !== null) {
+                displayInterval = window.setInterval(updateTimer, 1000);
+            }
+        }
+        function ensureDurationGuardTick() {
+            if (loopState_ACU.tickInterval)
+                return;
+            loopState_ACU.tickInterval = setInterval(() => {
+                const remaining = getRemainingMs();
+                if (remaining === null) {
+                    if (loopState_ACU.tickInterval) {
+                        clearInterval(loopState_ACU.tickInterval);
+                        loopState_ACU.tickInterval = null;
+                    }
+                    return;
+                }
+                if (remaining <= 0) {
+                    stopLoopState_ACU();
+                }
+            }, 1000);
+        }
+        function syncFromLoopState() {
+            refreshStatus();
+            if (getRemainingMs() === null) {
+                clearDisplayTick();
+                timerText.value = '';
+                return;
+            }
+            ensureDurationGuardTick();
+            startDisplayTick();
         }
         function triggerNextPrompt() {
             const prompt = getNextLoopPrompt_ACU();
@@ -80792,15 +80801,18 @@ Expected function or array of functions, received type ${typeof value}.`
             initLoopState_ACU();
             toast.success('智能续写已启动。', { muteable: false });
             refreshStatus();
-            startTick();
+            ensureDurationGuardTick();
+            startDisplayTick();
             triggerNextPrompt();
         }
         function stop() {
             stopLoopState_ACU();
+            clearDisplayTick();
             timerText.value = '';
             refreshStatus();
         }
         onBeforeUnmount(() => {
+            clearDisplayTick();
             refreshStatus();
         });
         return {
@@ -80810,6 +80822,7 @@ Expected function or array of functions, received type ${typeof value}.`
             start,
             stop,
             refreshStatus,
+            syncFromLoopState,
         };
     }
 
@@ -80978,7 +80991,7 @@ Expected function or array of functions, received type ${typeof value}.`
             const loop = useContinuationLoop();
             function refreshAll() {
                 store.refreshFromSettings();
-                loop.refreshStatus();
+                loop.syncFromLoopState();
             }
             onMounted(refreshAll);
             watch(useChatChangedTick(), refreshAll);
@@ -80988,8 +81001,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-continuation-page[data-v-43cc4b5d] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-continuation-page__side-stack[data-v-43cc4b5d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\r\n  min-width: 0;\n}\n.acu-v2-continuation-page__prompt-toolbar[data-v-43cc4b5d],\r\n.acu-v2-continuation-page__prompt-head[data-v-43cc4b5d],\r\n.acu-v2-continuation-page__actions[data-v-43cc4b5d],\r\n.acu-v2-continuation-page__status[data-v-43cc4b5d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\n}\n.acu-v2-continuation-page__prompt-toolbar[data-v-43cc4b5d] {\r\n  justify-content: space-between;\n}\n.acu-v2-continuation-page__meta[data-v-43cc4b5d],\r\n.acu-v2-continuation-page__empty[data-v-43cc4b5d],\r\n.acu-v2-continuation-page__timer[data-v-43cc4b5d] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-continuation-page__empty[data-v-43cc4b5d] {\r\n  margin: 0;\r\n  padding: 10px 0;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-continuation-page__prompt-list[data-v-43cc4b5d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-continuation-page__prompt-item[data-v-43cc4b5d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\r\n  padding: 0 0 12px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-continuation-page__prompt-item[data-v-43cc4b5d]:last-child {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-continuation-page__prompt-head[data-v-43cc4b5d] {\r\n  justify-content: space-between;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 500;\n}\n.acu-v2-continuation-page__number-grid[data-v-43cc4b5d] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\n}\n.acu-v2-continuation-page__status[data-v-43cc4b5d] {\r\n  min-height: 38px;\r\n  padding: 8px 0 8px 10px;\r\n  border: 0;\r\n  border-left: 2px solid color-mix(in srgb, var(--acu-text-3) 28%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-continuation-page__status-label[data-v-43cc4b5d] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-continuation-page__status strong[data-v-43cc4b5d] {\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-v2-continuation-page__status strong.is-running[data-v-43cc4b5d] {\r\n  color: var(--acu-success);\n}\n.acu-v2-continuation-page__actions[data-v-43cc4b5d] {\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-continuation-page[data-v-43cc4b5d] {\r\n    padding: 14px;\n}\n.acu-v2-continuation-page__number-grid[data-v-43cc4b5d] {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/pages/ContinuationPage.vue#style-0-43cc4b5d");
-    var ContinuationPage_vue_vue_type_style_index_0_scoped_43cc4b5d_lang = null;
+    injectSfcStyle("\n.acu-v2-continuation-page[data-v-dfd19dfb] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-continuation-page__side-stack[data-v-dfd19dfb] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\r\n  min-width: 0;\n}\n.acu-v2-continuation-page__prompt-toolbar[data-v-dfd19dfb],\r\n.acu-v2-continuation-page__prompt-head[data-v-dfd19dfb],\r\n.acu-v2-continuation-page__actions[data-v-dfd19dfb],\r\n.acu-v2-continuation-page__status[data-v-dfd19dfb] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\n}\n.acu-v2-continuation-page__prompt-toolbar[data-v-dfd19dfb] {\r\n  justify-content: space-between;\n}\n.acu-v2-continuation-page__meta[data-v-dfd19dfb],\r\n.acu-v2-continuation-page__empty[data-v-dfd19dfb],\r\n.acu-v2-continuation-page__timer[data-v-dfd19dfb] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-continuation-page__empty[data-v-dfd19dfb] {\r\n  margin: 0;\r\n  padding: 10px 0;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-continuation-page__prompt-list[data-v-dfd19dfb] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-continuation-page__prompt-item[data-v-dfd19dfb] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\r\n  padding: 0 0 12px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-continuation-page__prompt-item[data-v-dfd19dfb]:last-child {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-continuation-page__prompt-head[data-v-dfd19dfb] {\r\n  justify-content: space-between;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 500;\n}\n.acu-v2-continuation-page__number-grid[data-v-dfd19dfb] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\n}\n.acu-v2-continuation-page__status[data-v-dfd19dfb] {\r\n  min-height: 38px;\r\n  padding: 8px 0 8px 10px;\r\n  border: 0;\r\n  border-left: 2px solid color-mix(in srgb, var(--acu-text-3) 28%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-continuation-page__status-label[data-v-dfd19dfb] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-continuation-page__status strong[data-v-dfd19dfb] {\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-v2-continuation-page__status strong.is-running[data-v-dfd19dfb] {\r\n  color: var(--acu-success);\n}\n.acu-v2-continuation-page__actions[data-v-dfd19dfb] {\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-continuation-page[data-v-dfd19dfb] {\r\n    padding: 14px;\n}\n.acu-v2-continuation-page__number-grid[data-v-dfd19dfb] {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/pages/ContinuationPage.vue#style-0-dfd19dfb");
+    var ContinuationPage_vue_vue_type_style_index_0_scoped_dfd19dfb_lang = null;
 
     const _hoisted_1$k = { class: "acu-v2-continuation-page" };
     const _hoisted_2$i = { class: "acu-v2-continuation-page__number-grid" };
@@ -81207,7 +81220,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	})]);
     }
-    var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$k, [["render", _sfc_render$k], ["__scopeId", "data-v-43cc4b5d"]]);
+    var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$k, [["render", _sfc_render$k], ["__scopeId", "data-v-dfd19dfb"]]);
 
     /**
      * useImportFlow — 外部导入页业务流编排（阶段 2 / D21.4）
