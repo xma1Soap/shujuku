@@ -13297,25 +13297,7 @@ $CONTENT
                     }
                     const generateUrl = `/api/backends/chat-completions/generate`;
                     const headers = { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' };
-                    const body = JSON.stringify({
-                        "messages": messages,
-                        "model": effectiveApiConfig.model,
-                        "temperature": effectiveApiConfig.temperature,
-                        "top_p": effectiveApiConfig.top_p || 0.9,
-                        "max_tokens": effectiveApiConfig.max_tokens,
-                        "stream": settings_ACU.streamingEnabled || false,
-                        "chat_completion_source": "custom",
-                        "group_names": [],
-                        "include_reasoning": false,
-                        "reasoning_effort": "medium",
-                        "enable_web_search": false,
-                        "request_images": false,
-                        "custom_prompt_post_processing": "strict",
-                        "reverse_proxy": effectiveApiConfig.url,
-                        "proxy_password": "",
-                        "custom_url": effectiveApiConfig.url,
-                        "custom_include_headers": effectiveApiConfig.apiKey ? `Authorization: Bearer ${effectiveApiConfig.apiKey}` : ""
-                    });
+                    const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens: effectiveApiConfig.max_tokens, temperature: effectiveApiConfig.temperature, topP: effectiveApiConfig.top_p, stripModelPrefix: false }));
                     logDebug_ACU('ACU: 调用新的后端生成API:', generateUrl, 'Model:', effectiveApiConfig.model);
                     const response = await fetch(generateUrl, { method: 'POST', headers, body, signal: abortSignal });
                     if (!response.ok) {
@@ -24824,12 +24806,7 @@ $CONTENT
                         const res = await fetch(`/api/backends/chat-completions/generate`, {
                             method: 'POST',
                             headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                "messages": finalMessages, "model": settings_ACU.apiConfig.model, "temperature": settings_ACU.apiConfig.temperature,
-                                "max_tokens": settings_ACU.apiConfig.max_tokens || 4096, "stream": settings_ACU.streamingEnabled || false, "chat_completion_source": "custom",
-                                "reverse_proxy": settings_ACU.apiConfig.url, "custom_url": settings_ACU.apiConfig.url,
-                                "custom_include_headers": settings_ACU.apiConfig.apiKey ? `Authorization: Bearer ${settings_ACU.apiConfig.apiKey}` : ""
-                            })
+                            body: JSON.stringify(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { maxTokens: settings_ACU.apiConfig.max_tokens || 4096, temperature: settings_ACU.apiConfig.temperature, stripModelPrefix: false }))
                         });
                         if (!res.ok)
                             throw new Error(`API请求失败: ${res.status} ${await res.text()}`);
@@ -50056,26 +50033,7 @@ $CONTENT
                                 return null;
                             }
                             const url = `/api/backends/chat-completions/generate`;
-                            const body = JSON.stringify({
-                                "messages": messages,
-                                "model": effectiveApiConfig.model,
-                                "temperature": effectiveApiConfig.temperature || 1.0,
-                                "top_p": effectiveApiConfig.top_p || 0.9,
-                                "max_tokens": maxTokens,
-                                "stream": settings_ACU.streamingEnabled || false,
-                                "chat_completion_source": "custom",
-                                "group_names": [],
-                                "include_reasoning": false,
-                                "reasoning_effort": "medium",
-                                "enable_web_search": false,
-                                "request_images": false,
-                                "custom_prompt_post_processing": "strict",
-                                "reverse_proxy": effectiveApiConfig.url,
-                                "proxy_password": "",
-                                "custom_url": effectiveApiConfig.url,
-                                "custom_include_headers": effectiveApiConfig.apiKey ?
-                                    `Authorization: Bearer ${effectiveApiConfig.apiKey}` : ""
-                            });
+                            const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, temperature: effectiveApiConfig.temperature || 1.0, topP: effectiveApiConfig.top_p, stripModelPrefix: false }));
                             const headers = {
                                 ...getHostRequestHeaders_ACU(),
                                 'Content-Type': 'application/json'
@@ -87185,6 +87143,29 @@ Expected function or array of functions, received type ${typeof value}.`
             order: normalized.order,
         };
     }
+    function getPlacementFallback(key, tableName) {
+        const fixedDefaults = getFixedPlacementDefaultsForTable_ACU(tableName);
+        const fallback = key === 'extraIndexPlacement'
+            ? DEFAULT_EXTRA_INDEX_PLACEMENT_ACU
+            : key === 'fixedEntryPlacement'
+                ? fixedDefaults.entry
+                : key === 'fixedIndexPlacement'
+                    ? fixedDefaults.index
+                    : DEFAULT_ENTRY_PLACEMENT_ACU;
+        return clonePlacement(fallback, fallback);
+    }
+    function ensureEditableExportConfig(sheet) {
+        if (!sheet || typeof sheet !== 'object')
+            return {};
+        if (!sheet.exportConfig || typeof sheet.exportConfig !== 'object')
+            sheet.exportConfig = {};
+        const target = sheet.exportConfig;
+        const normalized = ensureExportConfigDefaults_ACU(target, sheet.name || sheet.uid || '');
+        Object.keys(normalized).forEach(key => {
+            target[key] = normalized[key];
+        });
+        return target;
+    }
     function useVisualizerConfigEditing() {
         const visualizer = useVisualizerStore();
         const toastStore = useToastStore();
@@ -87196,7 +87177,9 @@ Expected function or array of functions, received type ${typeof value}.`
                 : [];
             return headerRow.slice(1).map((item, index) => stringValue(item || `字段 ${index + 1}`));
         });
-        const exportConfig = computed(() => currentSheet.value ? ensureSheetExportConfigDefaults_ACU(currentSheet.value) : null);
+        const exportConfig = computed(() => currentSheet.value
+            ? ensureExportConfigDefaults_ACU(currentSheet.value.exportConfig, currentSheet.value.name || currentSheet.value.uid || '')
+            : null);
         const fixedConfigEnabled = computed(() => {
             const name = stringValue(currentSheet.value?.name).trim();
             return isSummaryTableName_ACU(name) || isOutlineTableName_ACU(name) || isImportantPersonsTableName_ACU(name);
@@ -87255,7 +87238,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
         function withExportConfig(mutator) {
             withSheet(sheet => {
-                const config = ensureSheetExportConfigDefaults_ACU(sheet);
+                const config = ensureEditableExportConfig(sheet);
                 mutator(config, sheet);
             });
         }
@@ -87266,7 +87249,7 @@ Expected function or array of functions, received type ${typeof value}.`
             withSheet(sheet => {
                 const previousName = stringValue(sheet.name).trim();
                 sheet.name = nextName;
-                const config = ensureSheetExportConfigDefaults_ACU(sheet);
+                const config = ensureEditableExportConfig(sheet);
                 if (!config.entryName || config.entryName === previousName)
                     config.entryName = nextName;
                 if (!config.extraIndexEntryName || config.extraIndexEntryName === `${previousName}-索引`) {
@@ -87376,19 +87359,12 @@ Expected function or array of functions, received type ${typeof value}.`
         function getPlacement(key) {
             const config = exportConfig.value || {};
             const sheetName = stringValue(currentSheet.value?.name);
-            const fixedDefaults = getFixedPlacementDefaultsForTable_ACU(sheetName);
-            const fallback = key === 'extraIndexPlacement'
-                ? DEFAULT_EXTRA_INDEX_PLACEMENT_ACU
-                : key === 'fixedEntryPlacement'
-                    ? fixedDefaults.entry
-                    : key === 'fixedIndexPlacement'
-                        ? fixedDefaults.index
-                        : DEFAULT_ENTRY_PLACEMENT_ACU;
+            const fallback = getPlacementFallback(key, sheetName);
             return clonePlacement(config[key], fallback);
         }
         function updatePlacement(key, field, value) {
-            withExportConfig(config => {
-                const current = getPlacement(key);
+            withExportConfig((config, sheet) => {
+                const current = clonePlacement(config[key], getPlacementFallback(key, stringValue(sheet.name)));
                 const next = {
                     ...current,
                     [field]: field === 'position'
@@ -87665,14 +87641,15 @@ Expected function or array of functions, received type ${typeof value}.`
             setSpecialIndexLockEnabled_ACU(sheetKey, draft.specialIndexLocked !== false);
         });
     }
-    function syncChatSheetGuide(saveToTemplate) {
+    function syncChatSheetGuide(orderedData, orderedKeys, saveToTemplate) {
         try {
             const guideIsolationKey = getCurrentIsolationKey_ACU();
             const existingGuide = getChatSheetGuideDataForIsolationKey_ACU(guideIsolationKey);
             const templateObjForSeed = parseTableTemplateJson_ACU({ stripSeedRows: false });
-            const guideData = buildChatSheetGuideDataFromData_ACU(currentJsonTableData_ACU, {
+            const guideData = buildChatSheetGuideDataFromData_ACU(orderedData, {
                 preserveSeedRowsFromGuideData: existingGuide,
                 seedRowsFromTemplateObj: templateObjForSeed,
+                orderedKeys,
             });
             if (guideData && Object.keys(guideData).some(key => key.startsWith('sheet_'))) {
                 const syncTemplateScope = !saveToTemplate;
@@ -87891,7 +87868,7 @@ Expected function or array of functions, received type ${typeof value}.`
                         return false;
                 }
                 _set_currentJsonTableData_ACU(cloneData$1(orderedData));
-                syncChatSheetGuide(target === 'global');
+                syncChatSheetGuide(orderedData, [...visualizer.sheetOrder], target === 'global');
                 const chatResult = await saveCurrentDataToChat([...visualizer.sheetOrder], [...visualizer.deletedSheetKeys]);
                 saveLockDrafts(visualizer.tableLockDrafts);
                 visualizer.markSaved(target);
@@ -88875,20 +88852,23 @@ Expected function or array of functions, received type ${typeof value}.`
         props: {
             title: {},
             placement: {},
-            options: {}
+            options: {},
+            updateField: { type: Function }
         },
-        emits: ["update"],
-        setup(__props, { expose: __expose, emit: __emit }) {
+        setup(__props, { expose: __expose }) {
             __expose();
-            const emit = __emit;
-            const __returned__ = { emit, AcuFormRow, AcuInput, AcuSelect };
+            const props = __props;
+            function updateField(field, value) {
+                props.updateField(field, value);
+            }
+            const __returned__ = { props, updateField, AcuFormRow, AcuInput, AcuSelect };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-viz-placement[data-v-79696bef] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\r\n  padding-top: 10px;\r\n  border-top: 1px solid var(--acu-border-2);\n}\n.acu-viz-placement[data-v-79696bef]:first-of-type {\r\n  margin-top: 12px;\n}\n.acu-viz-placement__title[data-v-79696bef] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.35;\n}\n.acu-viz-placement__grid[data-v-79696bef] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) minmax(96px, 120px) minmax(96px, 120px);\r\n  gap: 10px;\n}\n.acu-viz-placement__number[data-v-79696bef] {\r\n  max-width: 120px;\n}\n@media (max-width: 860px) {\n.acu-viz-placement__grid[data-v-79696bef] {\r\n    grid-template-columns: 1fr;\n}\n.acu-viz-placement__number[data-v-79696bef] {\r\n    max-width: 100%;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerPlacementEditor.vue#style-0-79696bef");
-    var VisualizerPlacementEditor_vue_vue_type_style_index_0_scoped_79696bef_lang = null;
+    injectSfcStyle("\n.acu-viz-placement[data-v-01a0ce17] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\r\n  padding-top: 10px;\r\n  border-top: 1px solid var(--acu-border-2);\n}\n.acu-viz-placement[data-v-01a0ce17]:first-of-type {\r\n  margin-top: 12px;\n}\n.acu-viz-placement__title[data-v-01a0ce17] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.35;\n}\n.acu-viz-placement__grid[data-v-01a0ce17] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) minmax(96px, 120px) minmax(96px, 120px);\r\n  gap: 10px;\n}\n.acu-viz-placement__number[data-v-01a0ce17] {\r\n  max-width: 120px;\n}\n@media (max-width: 860px) {\n.acu-viz-placement__grid[data-v-01a0ce17] {\r\n    grid-template-columns: 1fr;\n}\n.acu-viz-placement__number[data-v-01a0ce17] {\r\n    max-width: 100%;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerPlacementEditor.vue#style-0-01a0ce17");
+    var VisualizerPlacementEditor_vue_vue_type_style_index_0_scoped_01a0ce17_lang = null;
 
     const _hoisted_1$6 = { class: "acu-viz-placement" };
     const _hoisted_2$5 = { class: "acu-viz-placement__title" };
@@ -88905,7 +88885,7 @@ Expected function or array of functions, received type ${typeof value}.`
     			default: withCtx(() => [createVNode($setup["AcuSelect"], {
     				"model-value": $props.placement.position,
     				options: $props.options,
-    				"onUpdate:modelValue": _cache[0] || (_cache[0] = (value) => $setup.emit("update", "position", value))
+    				"onUpdate:modelValue": _cache[0] || (_cache[0] = (value) => $setup.updateField("position", value))
     			}, null, 8, ["model-value", "options"])]),
     			_: 1
     		}),
@@ -88915,7 +88895,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				type: "number",
     				"model-value": $props.placement.depth,
     				step: 1,
-    				"onUpdate:modelValue": _cache[1] || (_cache[1] = (value) => $setup.emit("update", "depth", value))
+    				"onUpdate:modelValue": _cache[1] || (_cache[1] = (value) => $setup.updateField("depth", value))
     			}, null, 8, ["model-value"])]),
     			_: 1
     		}),
@@ -88926,13 +88906,13 @@ Expected function or array of functions, received type ${typeof value}.`
     				"model-value": $props.placement.order,
     				min: 1,
     				step: 1,
-    				"onUpdate:modelValue": _cache[2] || (_cache[2] = (value) => $setup.emit("update", "order", value))
+    				"onUpdate:modelValue": _cache[2] || (_cache[2] = (value) => $setup.updateField("order", value))
     			}, null, 8, ["model-value"])]),
     			_: 1
     		})
     	])]);
     }
-    var PlacementEditor = /* @__PURE__ */ _export_sfc(_sfc_main$6, [["render", _sfc_render$6], ["__scopeId", "data-v-79696bef"]]);
+    var PlacementEditor = /* @__PURE__ */ _export_sfc(_sfc_main$6, [["render", _sfc_render$6], ["__scopeId", "data-v-01a0ce17"]]);
 
     var _sfc_main$5 = /*@__PURE__*/ defineComponent({
         __name: 'VisualizerConfigPanels',
@@ -88983,8 +88963,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-viz-config[data-v-7718b2a1] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 12px;\n}\n.acu-viz-config__grid[data-v-7718b2a1] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-viz-config__grid--three[data-v-7718b2a1] {\r\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n}\n.acu-viz-config__columns[data-v-7718b2a1],\r\n.acu-viz-config__prompts[data-v-7718b2a1],\r\n.acu-viz-config__toggles[data-v-7718b2a1],\r\n.acu-viz-config__subsection[data-v-7718b2a1],\r\n.acu-viz-config__column-modes[data-v-7718b2a1] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 10px;\n}\n.acu-viz-config__columns[data-v-7718b2a1] {\r\n  margin-top: 12px;\n}\n.acu-viz-config__column-operation[data-v-7718b2a1] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  padding-top: 2px;\n}\n.acu-viz-config__column-row[data-v-7718b2a1] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: 42px minmax(0, 1fr) auto;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 8px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-index[data-v-7718b2a1] {\n  color: var(--acu-text-3);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: right;\n}\n.acu-viz-config__empty[data-v-7718b2a1] {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-viz-config__inline-actions[data-v-7718b2a1],\r\n.acu-viz-config__column-mode[data-v-7718b2a1] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\n}\n.acu-viz-config__inline-actions[data-v-7718b2a1] {\r\n  margin-top: 10px;\n}\n.acu-viz-config__ddl[data-v-7718b2a1] {\r\n  font-family: var(--acu-font-mono);\n}\n.acu-viz-config__column-mode[data-v-7718b2a1] {\r\n  padding: 8px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-mode[data-v-7718b2a1] .acu-checkbox {\r\n  flex: 1 1 220px;\n}\n.acu-viz-config__column-mode[data-v-7718b2a1] .acu-select {\r\n  flex: 1 1 260px;\n}\n@media (max-width: 860px) {\n.acu-viz-config__grid[data-v-7718b2a1],\r\n  .acu-viz-config__grid--three[data-v-7718b2a1] {\r\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 767px) {\n.acu-viz-config__column-operation[data-v-7718b2a1] {\r\n    justify-content: stretch;\n}\n.acu-viz-config__column-operation[data-v-7718b2a1] .acu-btn {\r\n    width: 100%;\n}\n}\n@media (max-width: 520px) {\n.acu-viz-config__column-row[data-v-7718b2a1] {\r\n    grid-template-columns: 34px minmax(0, 1fr) auto;\r\n    padding: 7px;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerConfigPanels.vue#style-0-7718b2a1");
-    var VisualizerConfigPanels_vue_vue_type_style_index_0_scoped_7718b2a1_lang = null;
+    injectSfcStyle("\n.acu-viz-config[data-v-0ac75cdf] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 12px;\n}\n.acu-viz-config__grid[data-v-0ac75cdf] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-viz-config__grid--three[data-v-0ac75cdf] {\r\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n}\n.acu-viz-config__columns[data-v-0ac75cdf],\r\n.acu-viz-config__prompts[data-v-0ac75cdf],\r\n.acu-viz-config__toggles[data-v-0ac75cdf],\r\n.acu-viz-config__subsection[data-v-0ac75cdf],\r\n.acu-viz-config__column-modes[data-v-0ac75cdf] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 10px;\n}\n.acu-viz-config__columns[data-v-0ac75cdf] {\r\n  margin-top: 12px;\n}\n.acu-viz-config__column-operation[data-v-0ac75cdf] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  padding-top: 2px;\n}\n.acu-viz-config__column-row[data-v-0ac75cdf] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: 42px minmax(0, 1fr) auto;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 8px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-index[data-v-0ac75cdf] {\n  color: var(--acu-text-3);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: right;\n}\n.acu-viz-config__empty[data-v-0ac75cdf] {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-viz-config__inline-actions[data-v-0ac75cdf],\r\n.acu-viz-config__column-mode[data-v-0ac75cdf] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\n}\n.acu-viz-config__inline-actions[data-v-0ac75cdf] {\r\n  margin-top: 10px;\n}\n.acu-viz-config__ddl[data-v-0ac75cdf] {\r\n  font-family: var(--acu-font-mono);\n}\n.acu-viz-config__column-mode[data-v-0ac75cdf] {\r\n  padding: 8px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-mode[data-v-0ac75cdf] .acu-checkbox {\r\n  flex: 1 1 220px;\n}\n.acu-viz-config__column-mode[data-v-0ac75cdf] .acu-select {\r\n  flex: 1 1 260px;\n}\n@media (max-width: 860px) {\n.acu-viz-config__grid[data-v-0ac75cdf],\r\n  .acu-viz-config__grid--three[data-v-0ac75cdf] {\r\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 767px) {\n.acu-viz-config__column-operation[data-v-0ac75cdf] {\r\n    justify-content: stretch;\n}\n.acu-viz-config__column-operation[data-v-0ac75cdf] .acu-btn {\r\n    width: 100%;\n}\n}\n@media (max-width: 520px) {\n.acu-viz-config__column-row[data-v-0ac75cdf] {\r\n    grid-template-columns: 34px minmax(0, 1fr) auto;\r\n    padding: 7px;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerConfigPanels.vue#style-0-0ac75cdf");
+    var VisualizerConfigPanels_vue_vue_type_style_index_0_scoped_0ac75cdf_lang = null;
 
     const _hoisted_1$5 = {
     	class: "acu-viz-config",
@@ -89069,7 +89049,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					variant: "primary",
     					onClick: _cache[0] || (_cache[0] = ($event) => _ctx.$emit("request-add-column"))
     				}, {
-    					default: withCtx(() => [..._cache[28] || (_cache[28] = [createBaseVNode(
+    					default: withCtx(() => [..._cache[24] || (_cache[24] = [createBaseVNode(
     						"i",
     						{ class: "fa-solid fa-plus" },
     						null,
@@ -89224,7 +89204,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				size: "sm",
     				onClick: $setup.validateDDL
     			}, {
-    				default: withCtx(() => [..._cache[29] || (_cache[29] = [createBaseVNode(
+    				default: withCtx(() => [..._cache[25] || (_cache[25] = [createBaseVNode(
     					"i",
     					{ class: "fa-solid fa-check-circle" },
     					null,
@@ -89310,12 +89290,16 @@ Expected function or array of functions, received type ${typeof value}.`
     						title: "主条目位置",
     						placement: $setup.config.getPlacement("entryPlacement"),
     						options: $setup.config.placementOptions,
-    						onUpdate: _cache[21] || (_cache[21] = (field, value) => $setup.config.updatePlacement("entryPlacement", field, value))
-    					}, null, 8, ["placement", "options"]),
+    						"update-field": (field, value) => $setup.config.updatePlacement("entryPlacement", field, value)
+    					}, null, 8, [
+    						"placement",
+    						"options",
+    						"update-field"
+    					]),
     					createBaseVNode("div", _hoisted_13$2, [createVNode($setup["AcuCheckbox"], {
     						"model-value": $setup.exportConfig.extraIndexEnabled === true,
     						label: "额外增加索引条目",
-    						"onUpdate:modelValue": _cache[22] || (_cache[22] = (value) => $setup.config.updateExportConfig("extraIndexEnabled", value))
+    						"onUpdate:modelValue": _cache[21] || (_cache[21] = (value) => $setup.config.updateExportConfig("extraIndexEnabled", value))
     					}, null, 8, ["model-value"]), $setup.exportConfig.extraIndexEnabled ? (openBlock(), createElementBlock(
     						Fragment,
     						{ key: 0 },
@@ -89323,7 +89307,7 @@ Expected function or array of functions, received type ${typeof value}.`
     							createBaseVNode("div", _hoisted_14$2, [createVNode($setup["AcuFormRow"], { label: "索引条目名称" }, {
     								default: withCtx(() => [createVNode($setup["AcuInput"], {
     									"model-value": $setup.exportConfig.extraIndexEntryName || "",
-    									"onUpdate:modelValue": _cache[23] || (_cache[23] = (value) => $setup.config.updateExportConfig("extraIndexEntryName", value))
+    									"onUpdate:modelValue": _cache[22] || (_cache[22] = (value) => $setup.config.updateExportConfig("extraIndexEntryName", value))
     								}, null, 8, ["model-value"])]),
     								_: 1
     							})]),
@@ -89331,7 +89315,7 @@ Expected function or array of functions, received type ${typeof value}.`
     								default: withCtx(() => [createVNode($setup["AcuTextarea"], {
     									"model-value": $setup.exportConfig.extraIndexInjectionTemplate || "",
     									rows: 3,
-    									"onUpdate:modelValue": _cache[24] || (_cache[24] = (value) => $setup.config.updateExportConfig("extraIndexInjectionTemplate", value))
+    									"onUpdate:modelValue": _cache[23] || (_cache[23] = (value) => $setup.config.updateExportConfig("extraIndexInjectionTemplate", value))
     								}, null, 8, ["model-value"])]),
     								_: 1
     							}),
@@ -89370,8 +89354,12 @@ Expected function or array of functions, received type ${typeof value}.`
     								title: "索引条目位置",
     								placement: $setup.config.getPlacement("extraIndexPlacement"),
     								options: $setup.config.placementOptions,
-    								onUpdate: _cache[25] || (_cache[25] = (field, value) => $setup.config.updatePlacement("extraIndexPlacement", field, value))
-    							}, null, 8, ["placement", "options"])
+    								"update-field": (field, value) => $setup.config.updatePlacement("extraIndexPlacement", field, value)
+    							}, null, 8, [
+    								"placement",
+    								"options",
+    								"update-field"
+    							])
     						],
     						64
     						/* STABLE_FRAGMENT */
@@ -89391,14 +89379,22 @@ Expected function or array of functions, received type ${typeof value}.`
     				title: "固定主条目位置",
     				placement: $setup.config.getPlacement("fixedEntryPlacement"),
     				options: $setup.config.placementOptions,
-    				onUpdate: _cache[26] || (_cache[26] = (field, value) => $setup.config.updatePlacement("fixedEntryPlacement", field, value))
-    			}, null, 8, ["placement", "options"]), $setup.config.importantPersonsFixedIndexEnabled.value ? (openBlock(), createBlock($setup["PlacementEditor"], {
+    				"update-field": (field, value) => $setup.config.updatePlacement("fixedEntryPlacement", field, value)
+    			}, null, 8, [
+    				"placement",
+    				"options",
+    				"update-field"
+    			]), $setup.config.importantPersonsFixedIndexEnabled.value ? (openBlock(), createBlock($setup["PlacementEditor"], {
     				key: 0,
     				title: "固定索引条目位置",
     				placement: $setup.config.getPlacement("fixedIndexPlacement"),
     				options: $setup.config.placementOptions,
-    				onUpdate: _cache[27] || (_cache[27] = (field, value) => $setup.config.updatePlacement("fixedIndexPlacement", field, value))
-    			}, null, 8, ["placement", "options"])) : createCommentVNode("v-if", true)]),
+    				"update-field": (field, value) => $setup.config.updatePlacement("fixedIndexPlacement", field, value)
+    			}, null, 8, [
+    				"placement",
+    				"options",
+    				"update-field"
+    			])) : createCommentVNode("v-if", true)]),
     			_: 1
     		})) : createCommentVNode("v-if", true),
     		$setup.config.specialIndex.value.enabled ? (openBlock(), createBlock($setup["AcuPanel"], {
@@ -89422,7 +89418,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		})) : createCommentVNode("v-if", true)
     	]);
     }
-    var VisualizerConfigPanels = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$5], ["__scopeId", "data-v-7718b2a1"]]);
+    var VisualizerConfigPanels = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$5], ["__scopeId", "data-v-0ac75cdf"]]);
 
     var _sfc_main$4 = /*@__PURE__*/ defineComponent({
         __name: 'VisualizerGlobalInjectionPanels',
@@ -89435,8 +89431,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-viz-global[data-v-24d3de96] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 12px;\n}\r\n\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerGlobalInjectionPanels.vue#style-0-24d3de96");
-    var VisualizerGlobalInjectionPanels_vue_vue_type_style_index_0_scoped_24d3de96_lang = null;
+    injectSfcStyle("\n.acu-viz-global[data-v-39cb08e9] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 12px;\n}\r\n\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerGlobalInjectionPanels.vue#style-0-39cb08e9");
+    var VisualizerGlobalInjectionPanels_vue_vue_type_style_index_0_scoped_39cb08e9_lang = null;
 
     const _hoisted_1$4 = {
     	class: "acu-viz-global",
@@ -89451,17 +89447,25 @@ Expected function or array of functions, received type ${typeof value}.`
     			title: "可读数据条目位置",
     			placement: $setup.config.getGlobalPlacement("readableEntryPlacement"),
     			options: $setup.config.placementOptions,
-    			onUpdate: _cache[0] || (_cache[0] = (field, value) => $setup.config.updateGlobalPlacement("readableEntryPlacement", field, value))
-    		}, null, 8, ["placement", "options"]), createVNode($setup["PlacementEditor"], {
+    			"update-field": (field, value) => $setup.config.updateGlobalPlacement("readableEntryPlacement", field, value)
+    		}, null, 8, [
+    			"placement",
+    			"options",
+    			"update-field"
+    		]), createVNode($setup["PlacementEditor"], {
     			title: "包裹条目位置",
     			placement: $setup.config.getGlobalPlacement("wrapperPlacement"),
     			options: $setup.config.placementOptions,
-    			onUpdate: _cache[1] || (_cache[1] = (field, value) => $setup.config.updateGlobalPlacement("wrapperPlacement", field, value))
-    		}, null, 8, ["placement", "options"])]),
+    			"update-field": (field, value) => $setup.config.updateGlobalPlacement("wrapperPlacement", field, value)
+    		}, null, 8, [
+    			"placement",
+    			"options",
+    			"update-field"
+    		])]),
     		_: 1
     	})]);
     }
-    var VisualizerGlobalInjectionPanels = /* @__PURE__ */ _export_sfc(_sfc_main$4, [["render", _sfc_render$4], ["__scopeId", "data-v-24d3de96"]]);
+    var VisualizerGlobalInjectionPanels = /* @__PURE__ */ _export_sfc(_sfc_main$4, [["render", _sfc_render$4], ["__scopeId", "data-v-39cb08e9"]]);
 
     var _sfc_main$3 = /*@__PURE__*/ defineComponent({
         __name: 'VisualizerNavigation',
