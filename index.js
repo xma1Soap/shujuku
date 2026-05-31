@@ -13297,25 +13297,7 @@ $CONTENT
                     }
                     const generateUrl = `/api/backends/chat-completions/generate`;
                     const headers = { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' };
-                    const body = JSON.stringify({
-                        "messages": messages,
-                        "model": effectiveApiConfig.model,
-                        "temperature": effectiveApiConfig.temperature,
-                        "top_p": effectiveApiConfig.top_p || 0.9,
-                        "max_tokens": effectiveApiConfig.max_tokens,
-                        "stream": settings_ACU.streamingEnabled || false,
-                        "chat_completion_source": "custom",
-                        "group_names": [],
-                        "include_reasoning": false,
-                        "reasoning_effort": "medium",
-                        "enable_web_search": false,
-                        "request_images": false,
-                        "custom_prompt_post_processing": "strict",
-                        "reverse_proxy": effectiveApiConfig.url,
-                        "proxy_password": "",
-                        "custom_url": effectiveApiConfig.url,
-                        "custom_include_headers": effectiveApiConfig.apiKey ? `Authorization: Bearer ${effectiveApiConfig.apiKey}` : ""
-                    });
+                    const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens: effectiveApiConfig.max_tokens, temperature: effectiveApiConfig.temperature, topP: effectiveApiConfig.top_p, stripModelPrefix: false }));
                     logDebug_ACU('ACU: 调用新的后端生成API:', generateUrl, 'Model:', effectiveApiConfig.model);
                     const response = await fetch(generateUrl, { method: 'POST', headers, body, signal: abortSignal });
                     if (!response.ok) {
@@ -24824,12 +24806,7 @@ $CONTENT
                         const res = await fetch(`/api/backends/chat-completions/generate`, {
                             method: 'POST',
                             headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                "messages": finalMessages, "model": settings_ACU.apiConfig.model, "temperature": settings_ACU.apiConfig.temperature,
-                                "max_tokens": settings_ACU.apiConfig.max_tokens || 4096, "stream": settings_ACU.streamingEnabled || false, "chat_completion_source": "custom",
-                                "reverse_proxy": settings_ACU.apiConfig.url, "custom_url": settings_ACU.apiConfig.url,
-                                "custom_include_headers": settings_ACU.apiConfig.apiKey ? `Authorization: Bearer ${settings_ACU.apiConfig.apiKey}` : ""
-                            })
+                            body: JSON.stringify(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { maxTokens: settings_ACU.apiConfig.max_tokens || 4096, temperature: settings_ACU.apiConfig.temperature, stripModelPrefix: false }))
                         });
                         if (!res.ok)
                             throw new Error(`API请求失败: ${res.status} ${await res.text()}`);
@@ -50056,26 +50033,7 @@ $CONTENT
                                 return null;
                             }
                             const url = `/api/backends/chat-completions/generate`;
-                            const body = JSON.stringify({
-                                "messages": messages,
-                                "model": effectiveApiConfig.model,
-                                "temperature": effectiveApiConfig.temperature || 1.0,
-                                "top_p": effectiveApiConfig.top_p || 0.9,
-                                "max_tokens": maxTokens,
-                                "stream": settings_ACU.streamingEnabled || false,
-                                "chat_completion_source": "custom",
-                                "group_names": [],
-                                "include_reasoning": false,
-                                "reasoning_effort": "medium",
-                                "enable_web_search": false,
-                                "request_images": false,
-                                "custom_prompt_post_processing": "strict",
-                                "reverse_proxy": effectiveApiConfig.url,
-                                "proxy_password": "",
-                                "custom_url": effectiveApiConfig.url,
-                                "custom_include_headers": effectiveApiConfig.apiKey ?
-                                    `Authorization: Bearer ${effectiveApiConfig.apiKey}` : ""
-                            });
+                            const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, temperature: effectiveApiConfig.temperature || 1.0, topP: effectiveApiConfig.top_p, stripModelPrefix: false }));
                             const headers = {
                                 ...getHostRequestHeaders_ACU(),
                                 'Content-Type': 'application/json'
