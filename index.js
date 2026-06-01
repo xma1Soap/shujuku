@@ -5207,6 +5207,29 @@ $CONTENT
         return msg.TavernDB_ACU_IsolatedData[isolationKey];
     }
     /**
+     * 统一的 checkpoint 写入接口。
+     * 将完整表格快照写入指定消息的指定隔离标签槽位，并标记 _acu_storage_mode='checkpoint'。
+     * 用于播种、导入、模板覆盖、清理边界兆底等场景。
+     *
+     * @param msg 聊天消息对象
+     * @param isolationKey 隔离标签键名
+     * @param independentData 完整表格快照
+     * @param options 可选配置（modifiedKeys/updateGroupKeys/baseState）
+     */
+    function writeTableCheckpointToMessage_ACU(msg, isolationKey, independentData, options) {
+        if (!msg)
+            return;
+        const tagData = initIsolatedTagSlot_ACU(msg, isolationKey);
+        tagData.independentData = independentData;
+        tagData.modifiedKeys = options?.modifiedKeys ?? [];
+        tagData.updateGroupKeys = options?.updateGroupKeys ?? [];
+        tagData._acu_storage_mode = 'checkpoint';
+        tagData._acu_storage_version = 1;
+        if (options?.baseState !== undefined) {
+            tagData._acu_base_state = options.baseState;
+        }
+    }
+    /**
      * 同步写入旧版兼容字段（IndependentData/ModifiedKeys/UpdateGroupKeys）。
      *
      * @param msg 聊天消息对象
@@ -5581,6 +5604,232 @@ $CONTENT
         return safeClone(container);
     }
 
+    /**
+     * service/table/table-delta.ts — 表格增量(delta)纯函数
+     *
+     * 职责：
+     * 1. buildTableDelta_ACU — 对比 base/next 两版 Sheet_ACU，生成行级增量
+     * 2. applyTableDelta_ACU — 将增量应用到 base Sheet_ACU，重建 next
+     * 3. isDeltaTagData_ACU / isCheckpointTagData_ACU — 存储模式判定
+     *
+     * 约定：content[i][0] 为 row_id；缺失/重复/列结构变化时退化为 checkpoint。
+     */
+    // ── 常量 ──
+    const LOG_TAG_DELTA = '[表格增量]';
+    const LOG_TAG_CHECKPOINT = '[表格Checkpoint]';
+    const LOG_TAG_REBUILD = '[表格重建]';
+    // ── 退化判定 ──
+    /**
+     * 检查一张表的 content 是否具备稳定 row_id（content[i][0] 非空且无重复）。
+     * 返回 true 表示可以安全做行级 delta；false 表示必须退化为 checkpoint。
+     */
+    function hasStableRowIds_ACU(content) {
+        if (!content || content.length === 0)
+            return true; // 空表视为可 delta（delta 为空）
+        const ids = new Set();
+        for (let i = 0; i < content.length; i++) {
+            const row = content[i];
+            if (!row || row.length === 0)
+                return false;
+            const id = row[0];
+            if (id == null || id === '')
+                return false;
+            if (ids.has(id))
+                return false;
+            ids.add(id);
+        }
+        return true;
+    }
+    /**
+     * 检查两张表的列结构是否一致（以第一行列数为准）。
+     * 列数变化意味着结构变更，必须退化。
+     */
+    function hasStructureChanged_ACU(baseContent, nextContent) {
+        const baseColCount = baseContent.length > 0 ? (baseContent[0]?.length ?? 0) : 0;
+        const nextColCount = nextContent.length > 0 ? (nextContent[0]?.length ?? 0) : 0;
+        return baseColCount !== nextColCount;
+    }
+    // ── 元数据变更检测 ──
+    /** 需要追踪的元数据字段 */
+    const META_KEYS = [
+        'name', 'orderNo', 'updateConfig', 'exportConfig', 'sourceData',
+    ];
+    function detectMetaChanges_ACU(base, next) {
+        const changes = {};
+        let hasChange = false;
+        for (const key of META_KEYS) {
+            if (JSON.stringify(base[key]) !== JSON.stringify(next[key])) {
+                changes[key] = next[key];
+                hasChange = true;
+            }
+        }
+        return hasChange ? changes : undefined;
+    }
+    /**
+     * 对比 base 和 next 两版 Sheet_ACU，生成行级增量。
+     * 如果无法安全生成增量（row_id 缺失/重复/列结构变化），返回 degraded=true。
+     *
+     * @param base 上一版快照（undefined 表示首次写入，直接退化为 checkpoint）
+     * @param next 当前版本
+     * @param sheetKey 表键名（用于日志）
+     */
+    function buildTableDelta_ACU(base, next, sheetKey) {
+        // 首次写入 → checkpoint
+        if (!base) {
+            logDebug_ACU(`${LOG_TAG_DELTA} ${sheetKey}: 无基底，退化为 checkpoint`);
+            return { degraded: true, degradeReason: 'no_base' };
+        }
+        const baseContent = base.content ?? [];
+        const nextContent = next.content ?? [];
+        // 列结构变化 → checkpoint
+        if (hasStructureChanged_ACU(baseContent, nextContent)) {
+            logWarn_ACU(`${LOG_TAG_DELTA} ${sheetKey}: 列结构变化，退化为 checkpoint`);
+            return { degraded: true, degradeReason: 'structure_changed' };
+        }
+        // row_id 稳定性检查
+        if (!hasStableRowIds_ACU(baseContent)) {
+            logWarn_ACU(`${LOG_TAG_DELTA} ${sheetKey}: base 缺少稳定 row_id，退化为 checkpoint`);
+            return { degraded: true, degradeReason: 'base_no_stable_row_id' };
+        }
+        if (!hasStableRowIds_ACU(nextContent)) {
+            logWarn_ACU(`${LOG_TAG_DELTA} ${sheetKey}: next 缺少稳定 row_id，退化为 checkpoint`);
+            return { degraded: true, degradeReason: 'next_no_stable_row_id' };
+        }
+        // 构建 base 行索引 map: row_id → 完整行
+        const baseMap = new Map();
+        for (const row of baseContent) {
+            baseMap.set(row[0], row);
+        }
+        // 构建 next 行索引 map
+        const nextMap = new Map();
+        for (const row of nextContent) {
+            nextMap.set(row[0], row);
+        }
+        const rowDeltas = [];
+        // 检测 upsert（新增或修改的行）
+        for (const [rowId, nextRow] of nextMap) {
+            const baseRow = baseMap.get(rowId);
+            if (!baseRow) {
+                // 新增行
+                rowDeltas.push({ row_id: rowId, op: 'upsert', cells: nextRow });
+            }
+            else if (JSON.stringify(baseRow) !== JSON.stringify(nextRow)) {
+                // 修改行
+                rowDeltas.push({ row_id: rowId, op: 'upsert', cells: nextRow });
+            }
+        }
+        // 检测 delete（base 中有但 next 中没有的行）
+        for (const rowId of baseMap.keys()) {
+            if (!nextMap.has(rowId)) {
+                rowDeltas.push({ row_id: rowId, op: 'delete' });
+            }
+        }
+        // 元数据变更
+        const metaChanged = detectMetaChanges_ACU(base, next);
+        // 判断是否为 noop
+        if (rowDeltas.length === 0 && !metaChanged) {
+            logDebug_ACU(`${LOG_TAG_DELTA} ${sheetKey}: 无变化，noop`);
+        }
+        else {
+            logDebug_ACU(`${LOG_TAG_DELTA} ${sheetKey}: ${rowDeltas.length} 行变更, meta=${metaChanged ? 'changed' : 'unchanged'}`);
+        }
+        return {
+            degraded: false,
+            delta: {
+                sheetUid: next.uid,
+                rowDeltas,
+                metaChanged,
+                structureChanged: false,
+            },
+        };
+    }
+    /**
+     * 将增量应用到 base Sheet_ACU，重建出 next 版本。
+     * 纯函数，不修改 base。
+     *
+     * @param base 基底快照
+     * @param delta 增量描述
+     * @param sheetKey 表键名（用于日志）
+     * @returns 重建后的 Sheet_ACU
+     */
+    function applyTableDelta_ACU(base, delta, sheetKey) {
+        logDebug_ACU(`${LOG_TAG_REBUILD} ${sheetKey}: 应用 ${delta.rowDeltas.length} 行变更`);
+        // 深拷贝 base 避免副作用
+        const result = JSON.parse(JSON.stringify(base));
+        // 应用元数据变更
+        if (delta.metaChanged) {
+            if (delta.metaChanged.name !== undefined)
+                result.name = delta.metaChanged.name;
+            if (delta.metaChanged.orderNo !== undefined)
+                result.orderNo = delta.metaChanged.orderNo;
+            if (delta.metaChanged.updateConfig !== undefined)
+                result.updateConfig = delta.metaChanged.updateConfig;
+            if (delta.metaChanged.exportConfig !== undefined)
+                result.exportConfig = delta.metaChanged.exportConfig;
+            if (delta.metaChanged.sourceData !== undefined)
+                result.sourceData = delta.metaChanged.sourceData;
+        }
+        // 构建当前行索引 map: row_id → index
+        const rowIndexMap = new Map();
+        for (let i = 0; i < result.content.length; i++) {
+            const row = result.content[i];
+            if (row && row[0]) {
+                rowIndexMap.set(row[0], i);
+            }
+        }
+        // 应用行级变更
+        const toDelete = new Set();
+        for (const rd of delta.rowDeltas) {
+            if (rd.op === 'delete') {
+                const idx = rowIndexMap.get(rd.row_id);
+                if (idx !== undefined) {
+                    toDelete.add(idx);
+                }
+                else {
+                    logWarn_ACU(`${LOG_TAG_REBUILD} ${sheetKey}: 删除目标 row_id=${rd.row_id} 不存在，跳过`);
+                }
+            }
+            else if (rd.op === 'upsert') {
+                const idx = rowIndexMap.get(rd.row_id);
+                if (idx !== undefined) {
+                    // 更新已有行
+                    result.content[idx] = rd.cells;
+                }
+                else {
+                    // 新增行追加到末尾
+                    result.content.push(rd.cells);
+                    // 更新索引以处理同批次多次 upsert 同一新 row_id 的情况
+                    rowIndexMap.set(rd.row_id, result.content.length - 1);
+                }
+            }
+        }
+        // 执行删除（从后往前删避免索引偏移）
+        if (toDelete.size > 0) {
+            const sortedIndices = [...toDelete].sort((a, b) => b - a);
+            for (const idx of sortedIndices) {
+                result.content.splice(idx, 1);
+            }
+        }
+        return result;
+    }
+    // ── 存储模式判定 ──
+    /**
+     * 判断一个 IsolationTagData_ACU 是否为 delta 模式存储。
+     */
+    function isDeltaTagData_ACU(tagData) {
+        return tagData._acu_storage_mode === 'delta';
+    }
+    /**
+     * 判断一个 IsolationTagData_ACU 是否为 checkpoint 模式存储。
+     * checkpoint 包含完整 independentData 快照。
+     * legacy（无标记）也视为 checkpoint（旧版完整快照）。
+     */
+    function isCheckpointTagData_ACU(tagData) {
+        return tagData._acu_storage_mode === 'checkpoint'
+            || tagData._acu_storage_mode === 'legacy'
+            || !tagData._acu_storage_mode;
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // service/table/table-service.ts — 表格数据操作 service 层
     // 从 data/repositories/table-repo.ts 迁入（消除 data 层越权）
@@ -5622,6 +5871,17 @@ $CONTENT
             return { saved: false, error: 'no AI message found' };
         }
         const currentIsolationKey = getCurrentIsolationKey_ACU();
+        // 查找上一个 AI 楼层的 tagData 作为 delta 的 base
+        let prevTagData = null;
+        for (let i = finalIndex - 1; i >= 0; i--) {
+            if (!chat[i].is_user) {
+                const td = readIsolatedTagData_ACU(chat[i], currentIsolationKey);
+                if (td && td.independentData && Object.keys(td.independentData).some(k => k.startsWith('sheet_'))) {
+                    prevTagData = td;
+                }
+                break;
+            }
+        }
         try {
             const existingGuide = getChatSheetGuideDataForIsolationKey_ACU(currentIsolationKey);
             if (!existingGuide || !Object.keys(existingGuide).some(k => k.startsWith('sheet_'))) {
@@ -5664,6 +5924,47 @@ $CONTENT
             }
         });
         currentTagData.independentData = independentData;
+        // ── 增量/checkpoint 模式判定 ──
+        if (prevTagData && prevTagData.independentData) {
+            // 尝试对每个要保存的表构建 delta
+            const incrementalData = {};
+            let anyDegraded = false;
+            for (const sheetKey of keysToSave) {
+                const nextSheet = independentData[sheetKey];
+                if (!nextSheet)
+                    continue;
+                const baseSheet = prevTagData.independentData[sheetKey];
+                const result = buildTableDelta_ACU(baseSheet, nextSheet, sheetKey);
+                if (result.degraded) {
+                    anyDegraded = true;
+                    logDebug_ACU(`[表格增量] ${sheetKey} 退化: ${result.degradeReason}，本楼层将使用 checkpoint 模式`);
+                    break;
+                }
+                if (result.delta && (result.delta.rowDeltas.length > 0 || result.delta.metaChanged)) {
+                    incrementalData[sheetKey] = result.delta;
+                }
+            }
+            if (!anyDegraded) {
+                // delta 模式：写入增量数据，independentData 清空以节省存储空间
+                currentTagData.incrementalData = incrementalData;
+                currentTagData.independentData = {};
+                currentTagData._acu_storage_mode = 'delta';
+                currentTagData._acu_storage_version = 1;
+                logDebug_ACU(`[表格增量] 楼层 #${finalIndex} 使用 delta 模式，${Object.keys(incrementalData).length} 张表有变更`);
+            }
+            else {
+                // checkpoint 模式：退化，写完整快照
+                currentTagData._acu_storage_mode = 'checkpoint';
+                currentTagData._acu_storage_version = 1;
+                logDebug_ACU(`[表格Checkpoint] 楼层 #${finalIndex} 使用 checkpoint 模式`);
+            }
+        }
+        else {
+            // 无上一楼层 base → checkpoint 模式（首楼层或首次出现该标签）
+            currentTagData._acu_storage_mode = 'checkpoint';
+            currentTagData._acu_storage_version = 1;
+            logDebug_ACU(`[表格Checkpoint] 楼层 #${finalIndex} 无 base，使用 checkpoint 模式`);
+        }
         if (trackAsUpdate && actuallyModifiedKeys.length > 0) {
             const existingModifiedKeys = currentTagData.modifiedKeys || [];
             currentTagData.modifiedKeys = [...new Set([...existingModifiedKeys, ...actuallyModifiedKeys])];
@@ -5682,22 +5983,7 @@ $CONTENT
             enabled: settings_ACU.dataIsolationEnabled,
             code: settings_ACU.dataIsolationCode,
         });
-        writeLegacyCompatData_ACU(targetMessage, independentData, currentTagData.modifiedKeys, currentTagData.updateGroupKeys);
         logDebug_ACU(`Saved ${keysToSave.length} tables for tag [${currentIsolationKey || '无标签'}] to message at index ${finalIndex}. Actually modified: ${actuallyModifiedKeys.length} tables.`);
-        const legacyStandardData = { mate: { type: 'chatSheets', version: 1 } };
-        const legacySummaryData = { mate: { type: 'chatSheets', version: 1 } };
-        keysToSave.forEach(sheetKey => {
-            const table = currentJsonTableData_ACU[sheetKey];
-            if (table) {
-                if (isSummaryOrOutlineTable_ACU(table.name)) {
-                    legacySummaryData[sheetKey] = sanitizeSheetForStorage_ACU(JSON.parse(JSON.stringify(table)));
-                }
-                else {
-                    legacyStandardData[sheetKey] = sanitizeSheetForStorage_ACU(JSON.parse(JSON.stringify(table)));
-                }
-            }
-        });
-        writeLegacyStandardAndSummary_ACU(targetMessage, legacyStandardData, legacySummaryData);
         await saveChatToHost_ACU();
         return { saved: true, messageIndex: finalIndex };
     }
@@ -9096,6 +9382,8 @@ $CONTENT
         // 1. [优化] 不使用模板作为基础，动态收集聊天记录中的所有实际数据
         let mergedData = {};
         const foundSheets = {};
+        // 收集 delta 楼层的增量数据（逆序收集，后续正序叠加）
+        const pendingDeltas = [];
         for (let i = chat.length - 1; i >= 0; i--) {
             const message = chat[i];
             if (message.is_user)
@@ -9103,6 +9391,14 @@ $CONTENT
             // [优先级1] 检查新版按标签分组存储
             const tagData = readIsolatedTagData_ACU(message, currentIsolationKey);
             if (tagData) {
+                // delta 楼层：收集增量数据，稍后正序叠加
+                if (isDeltaTagData_ACU(tagData)) {
+                    if (tagData.incrementalData && Object.keys(tagData.incrementalData).length > 0) {
+                        pendingDeltas.push({ index: i, tagData });
+                    }
+                    continue;
+                }
+                // checkpoint / legacy 楼层：使用现有的 first-write-wins 逻辑
                 const independentData = tagData.independentData || {};
                 const modifiedKeys = tagData.modifiedKeys || [];
                 const updateGroupKeys = tagData.updateGroupKeys || [];
@@ -9217,6 +9513,35 @@ $CONTENT
                             independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
                         }
                     });
+                }
+            }
+        }
+        // ── 正序叠加 delta 楼层的增量数据到已找到的 base 上 ──
+        if (pendingDeltas.length > 0 && Object.keys(foundSheets).length > 0) {
+            // pendingDeltas 是逆序收集的，需要反转为正序（从旧到新）
+            pendingDeltas.reverse();
+            logDebug_ACU(`[表格重建] 正序叠加 ${pendingDeltas.length} 个 delta 楼层到 base 上`);
+            for (const { index: deltaIndex, tagData: deltaTagData } of pendingDeltas) {
+                const incrementalData = deltaTagData.incrementalData || {};
+                for (const [sheetKey, delta] of Object.entries(incrementalData)) {
+                    if (!templateSheetKeySet.has(sheetKey))
+                        continue;
+                    if (!mergedData[sheetKey]) {
+                        logWarn_ACU(`[表格重建] delta 楼层 #${deltaIndex} 引用了 sheetKey=${sheetKey}，但 base 中不存在该表，跳过`);
+                        continue;
+                    }
+                    try {
+                        mergedData[sheetKey] = applyTableDelta_ACU(mergedData[sheetKey], delta, sheetKey);
+                        // 更新 lastUpdatedAiFloor 为 delta 楼层（最新变更来源）
+                        if (!independentTableStates_ACU[sheetKey]) {
+                            independentTableStates_ACU[sheetKey] = {};
+                        }
+                        const currentAiFloor = chat.slice(0, deltaIndex + 1).filter((m) => !m.is_user).length;
+                        independentTableStates_ACU[sheetKey].lastUpdatedAiFloor = currentAiFloor;
+                    }
+                    catch (e) {
+                        logError_ACU(`[表格重建] 应用 delta 失败: sheetKey=${sheetKey}, 楼层=#${deltaIndex}`, e);
+                    }
                 }
             }
         }
@@ -9468,6 +9793,8 @@ $CONTENT
             tagData.modifiedKeys = [];
             tagData.updateGroupKeys = [];
             tagData._acu_base_state = GREETING_LOCAL_BASE_STATE_MARKER_ACU;
+            tagData._acu_storage_mode = 'checkpoint';
+            tagData._acu_storage_version = 1;
             // 同步旧格式（兼容老逻辑）
             writeLegacyCompatData_ACU(greetingMsg, JSON.parse(JSON.stringify(indep)), [], []);
             // 标记幂等
@@ -9546,6 +9873,8 @@ $CONTENT
             tagData.independentData = indep;
             tagData.modifiedKeys = [];
             tagData.updateGroupKeys = [];
+            tagData._acu_storage_mode = 'checkpoint';
+            tagData._acu_storage_version = 1;
             // 同步旧格式（兼容老逻辑）
             writeLegacyCompatData_ACU(firstMsg, JSON.parse(JSON.stringify(indep)), [], []);
             // 同时更新指导表与聊天级模板快照（确保表头、参数、预设名同步）
@@ -20380,6 +20709,8 @@ $CONTENT
                     for (const [sheetKey, sheetData] of sheetMap) {
                         anchorTagData.independentData[sheetKey] = JSON.parse(JSON.stringify(sheetData));
                     }
+                    anchorTagData._acu_storage_mode = 'checkpoint';
+                    anchorTagData._acu_storage_version = 1;
                 }
                 // 立即持久化兜底数据，再继续删除循环
                 try {
@@ -20711,6 +21042,8 @@ $CONTENT
             // 更新修改标记
             tagData.modifiedKeys = Object.keys(tagData.independentData);
             tagData.updateGroupKeys = tagData.modifiedKeys;
+            tagData._acu_storage_mode = 'checkpoint';
+            tagData._acu_storage_version = 1;
             // 保存聊天记录
             await saveChatToHost_ACU();
         }
@@ -31929,6 +32262,9 @@ $CONTENT
             updateGroupKeys: Array.isArray(existingTagData.updateGroupKeys) ? [...existingTagData.updateGroupKeys] : [],
             ...(existingTagData.vectorMemoryState ? { vectorMemoryState: existingTagData.vectorMemoryState } : {}),
             ...(existingTagData._acu_base_state ? { _acu_base_state: existingTagData._acu_base_state } : {}),
+            ...(existingTagData.incrementalData ? { incrementalData: existingTagData.incrementalData } : {}),
+            ...(existingTagData._acu_storage_mode ? { _acu_storage_mode: existingTagData._acu_storage_mode } : {}),
+            ...(existingTagData._acu_storage_version != null ? { _acu_storage_version: existingTagData._acu_storage_version } : {}),
         };
         if (nextState) {
             const previousManifest = existingTagData.summaryVectorIndexManifest || previousState?.manifest || null;
@@ -31993,6 +32329,9 @@ $CONTENT
             updateGroupKeys: Array.isArray(existingTagData.updateGroupKeys) ? [...existingTagData.updateGroupKeys] : [],
             ...(existingTagData.vectorMemoryState ? { vectorMemoryState: existingTagData.vectorMemoryState } : {}),
             ...(existingTagData._acu_base_state ? { _acu_base_state: existingTagData._acu_base_state } : {}),
+            ...(existingTagData.incrementalData ? { incrementalData: existingTagData.incrementalData } : {}),
+            ...(existingTagData._acu_storage_mode ? { _acu_storage_mode: existingTagData._acu_storage_mode } : {}),
+            ...(existingTagData._acu_storage_version != null ? { _acu_storage_version: existingTagData._acu_storage_version } : {}),
         };
         assignSummaryVectorIndexStateToTagData_ACU(nextTagData, null);
         nextIsolatedData[isolationKey] = nextTagData;
@@ -32109,6 +32448,9 @@ $CONTENT
             updateGroupKeys: Array.isArray(existingTagData.updateGroupKeys) ? [...existingTagData.updateGroupKeys] : [],
             ...(existingTagData.vectorMemoryState ? { vectorMemoryState: existingTagData.vectorMemoryState } : {}),
             ...(existingTagData._acu_base_state ? { _acu_base_state: existingTagData._acu_base_state } : {}),
+            ...(existingTagData.incrementalData ? { incrementalData: existingTagData.incrementalData } : {}),
+            ...(existingTagData._acu_storage_mode ? { _acu_storage_mode: existingTagData._acu_storage_mode } : {}),
+            ...(existingTagData._acu_storage_version != null ? { _acu_storage_version: existingTagData._acu_storage_version } : {}),
         };
         assignSummaryVectorIndexStateToTagData_ACU(nextTagData, persisted.state, persisted.manifest);
         nextIsolatedData[isolationKey] = nextTagData;
@@ -32640,6 +32982,8 @@ $CONTENT
     function loadBatchBaseData_ACU(chatHistory, firstMessageIndexOfBatch, batchIsolationKey, batchSheetKeys, mergedBatchData) {
         const batchFoundSheets = {};
         batchSheetKeys.forEach(k => batchFoundSheets[k] = false);
+        // 收集 delta 楼层的增量数据（逆序收集，后续正序叠加）
+        const pendingDeltas = [];
         // [修复] 保存指导表基底中每个 sheet 的结构快照（sourceData/DDL/表头/表名等），
         // 以便从聊天记录加载旧数据覆盖后恢复。防止旧数据中的旧 DDL/旧表头覆盖用户在可视化编辑器中的修改。
         const guideSnapshots = {};
@@ -32655,6 +32999,14 @@ $CONTENT
             // [优先级1] 新版按标签分组存储
             if (msg.TavernDB_ACU_IsolatedData && msg.TavernDB_ACU_IsolatedData[batchIsolationKey]) {
                 const tagData = msg.TavernDB_ACU_IsolatedData[batchIsolationKey];
+                // delta 楼层：收集增量，不做整表覆盖
+                if (isDeltaTagData_ACU(tagData)) {
+                    if (tagData.incrementalData) {
+                        pendingDeltas.push({ msgIndex: j, incrementalData: tagData.incrementalData });
+                    }
+                    continue;
+                }
+                // checkpoint / legacy 楼层：原 first-write-wins 逻辑
                 const independentData = tagData.independentData || {};
                 Object.keys(independentData).forEach(storedSheetKey => {
                     if (batchFoundSheets[storedSheetKey] === false && mergedBatchData[storedSheetKey]) {
@@ -32707,6 +33059,24 @@ $CONTENT
             }
             if (Object.values(batchFoundSheets).every(v => v === true)) {
                 break;
+            }
+        }
+        // 正序叠加 delta 增量到已找到的 base 数据上
+        if (pendingDeltas.length > 0) {
+            pendingDeltas.reverse(); // 逆序收集 → 正序叠加
+            for (const { incrementalData } of pendingDeltas) {
+                for (const sheetKey of Object.keys(incrementalData)) {
+                    if (!mergedBatchData[sheetKey] || batchFoundSheets[sheetKey] === undefined)
+                        continue;
+                    try {
+                        mergedBatchData[sheetKey] = applyTableDelta_ACU(mergedBatchData[sheetKey], incrementalData[sheetKey], sheetKey);
+                        restoreGuideStructure(mergedBatchData[sheetKey], guideSnapshots[sheetKey]);
+                        batchFoundSheets[sheetKey] = true;
+                    }
+                    catch (e) {
+                        logWarn_ACU(`[表格增量] loadBatchBaseData: 叠加 delta 失败 (sheet=${sheetKey}): ${e?.message || e}`);
+                    }
+                }
             }
         }
         const foundCount = Object.values(batchFoundSheets).filter(v => v === true).length;
@@ -48132,6 +48502,8 @@ $CONTENT
                                     tagData.independentData = newIndependentData;
                                     tagData.modifiedKeys = Object.keys(newIndependentData);
                                     tagData.updateGroupKeys = Object.keys(newIndependentData);
+                                    tagData._acu_storage_mode = 'checkpoint';
+                                    tagData._acu_storage_version = 1;
                                     isolatedContainer[currentIsolationKey] = tagData;
                                     targetMessage.TavernDB_ACU_IsolatedData = isolatedContainer;
                                     if (settings_ACU.dataIsolationEnabled) {
