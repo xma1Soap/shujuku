@@ -14508,15 +14508,51 @@ $CONTENT
             return '';
         return `<${normalizedTagName}>${normalizedContents.join('\n\n')}</${normalizedTagName}>`;
     }
-    function replacePlotTagPlaceholders_ACU(text, tagSourceMap) {
+    function hasMeaningfulTagContents_ACU(contents) {
+        if (Array.isArray(contents)) {
+            return contents.some((content) => String(content ?? '').trim() !== '');
+        }
+        return String(contents ?? '').trim() !== '';
+    }
+    function getPlotTagMapValue_ACU(tagSourceMap, rawTagName) {
+        const normalizedTagName = String(rawTagName || '').trim();
+        if (!(tagSourceMap instanceof Map) || !normalizedTagName) {
+            return { found: false, value: undefined, actualTagName: '' };
+        }
+        if (tagSourceMap.has(normalizedTagName)) {
+            return {
+                found: true,
+                value: tagSourceMap.get(normalizedTagName),
+                actualTagName: normalizedTagName,
+            };
+        }
+        const loweredTagName = normalizedTagName.toLowerCase();
+        for (const [candidateTagName, candidateValue] of tagSourceMap.entries()) {
+            if (String(candidateTagName || '').trim().toLowerCase() === loweredTagName) {
+                return {
+                    found: true,
+                    value: candidateValue,
+                    actualTagName: String(candidateTagName || '').trim(),
+                };
+            }
+        }
+        return { found: false, value: undefined, actualTagName: '' };
+    }
+    function resolvePlotTagValueWithFallback_ACU(primaryTagMap, fallbackTagMap, rawTagName) {
+        const primaryValue = getPlotTagMapValue_ACU(primaryTagMap, rawTagName);
+        if (primaryValue.found && hasMeaningfulTagContents_ACU(primaryValue.value)) {
+            return primaryValue;
+        }
+        return getPlotTagMapValue_ACU(fallbackTagMap, rawTagName);
+    }
+    function replacePlotTagPlaceholders_ACU(text, tagSourceMap, fallbackTagSourceMap = new Map()) {
         const sourceText = String(text || '');
         if (!sourceText)
             return '';
         const placeholderPattern = /\{\{(\w+)\}\}/g;
         return sourceText.replace(placeholderPattern, (placeholder, tagName) => {
-            if (!(tagSourceMap instanceof Map))
-                return '';
-            return buildPlotTagBlock_ACU(tagName, tagSourceMap.get(tagName));
+            const resolvedValue = resolvePlotTagValueWithFallback_ACU(tagSourceMap, fallbackTagSourceMap, tagName);
+            return buildPlotTagBlock_ACU(tagName, resolvedValue.value);
         });
     }
     // ═══ 任务级世界书触发文本构造 ═══
@@ -14537,7 +14573,7 @@ $CONTENT
      * @param relayTagMap - 本轮先前阶段的聚合标签结果（Map<string, string[]>），可选
      * @returns 拼接后的世界书触发文本；无匹配标签时返回空字符串
      */
-    function buildTaskWorldbookTriggerText_ACU(taskPromptGroup, plotContent, relayTagMap) {
+    function buildTaskWorldbookTriggerText_ACU(taskPromptGroup, plotContent, relayTagMap, fallbackTagMap) {
         const messages = Array.isArray(taskPromptGroup) ? taskPromptGroup : [];
         const sourcePlotContent = String(plotContent || '');
         if (!messages.length)
@@ -14561,24 +14597,16 @@ $CONTENT
         // 2. 确定标签内容来源：优先使用 relayTagMap（本轮先前阶段结果），
         //    否则从上轮剧情历史文本中提取
         const blocks = [];
-        if (relayTagMap instanceof Map && relayTagMap.size > 0) {
-            // 本轮先前阶段的聚合结果
-            for (const tagName of allTagNames) {
-                if (relayTagMap.has(tagName)) {
-                    const block = buildPlotTagBlock_ACU(tagName, relayTagMap.get(tagName));
-                    if (block)
-                        blocks.push(block);
-                }
-            }
-        }
-        else if (sourcePlotContent.trim()) {
-            // 上轮剧情历史
-            const tagMap = buildPlotTagMapFromText_ACU(sourcePlotContent, allTagNames);
-            tagMap.forEach((contents, tagName) => {
-                const block = buildPlotTagBlock_ACU(tagName, contents);
-                if (block)
-                    blocks.push(block);
-            });
+        const historyTagMap = fallbackTagMap instanceof Map
+            ? fallbackTagMap
+            : buildPlotTagMapFromText_ACU(sourcePlotContent, allTagNames);
+        for (const tagName of allTagNames) {
+            const resolvedValue = resolvePlotTagValueWithFallback_ACU(relayTagMap instanceof Map ? relayTagMap : new Map(), historyTagMap, tagName);
+            if (!resolvedValue.found || !hasMeaningfulTagContents_ACU(resolvedValue.value))
+                continue;
+            const block = buildPlotTagBlock_ACU(tagName, resolvedValue.value);
+            if (block)
+                blocks.push(block);
         }
         return blocks.join('\n');
     }
@@ -14647,20 +14675,28 @@ $CONTENT
         if (aggregatedTags instanceof Map && aggregatedTags.size > 0) {
             if (placeholderNames.length > 0) {
                 const matchedTags = new Set();
+                const injectOnlyTagNamesLower = new Set(Array.from(injectOnlyTagNames).map((name) => String(name || '').toLowerCase()));
                 const finalDirectiveWithTags = baseDirective.replace(placeholderPattern, (placeholder, tagName) => {
-                    matchedTags.add(tagName);
-                    const contents = aggregatedTags.get(tagName);
-                    if (Array.isArray(contents) && contents.length > 0) {
-                        return `<${tagName}>${contents.map(content => content ?? '').join('\n\n')}</${tagName}>`;
+                    const resolvedValue = getPlotTagMapValue_ACU(aggregatedTags, tagName);
+                    matchedTags.add(String(tagName || '').toLowerCase());
+                    if (resolvedValue.found) {
+                        matchedTags.add(String(resolvedValue.actualTagName || '').toLowerCase());
+                    }
+                    const contents = resolvedValue.value;
+                    if (hasMeaningfulTagContents_ACU(contents)) {
+                        return `<${tagName}>${(Array.isArray(contents) ? contents : [contents]).map(content => content ?? '').join('\n\n')}</${tagName}>`;
                     }
                     return '';
                 });
                 const unusedTagBlocks = [];
                 aggregatedTags.forEach((contents, tagName) => {
-                    if (matchedTags.has(tagName))
+                    const loweredTagName = String(tagName || '').toLowerCase();
+                    if (matchedTags.has(loweredTagName))
                         return;
                     // injectOnly 标签（extractInjectTags 提取的）即使未使用也不追加到末尾
-                    if (injectOnlyTagNames.has(tagName))
+                    if (injectOnlyTagNamesLower.has(loweredTagName))
+                        return;
+                    if (!hasMeaningfulTagContents_ACU(contents))
                         return;
                     unusedTagBlocks.push(`<${tagName}>${(Array.isArray(contents) ? contents : [contents]).map(content => content ?? '').join('\n\n')}</${tagName}>`);
                 });
@@ -14670,8 +14706,9 @@ $CONTENT
             }
             // 没有占位符时：只追加非 injectOnly 的标签块
             const filteredTags = new Map();
+            const injectOnlyTagNamesLower = new Set(Array.from(injectOnlyTagNames).map((name) => String(name || '').toLowerCase()));
             aggregatedTags.forEach((contents, tagName) => {
-                if (!injectOnlyTagNames.has(tagName)) {
+                if (!injectOnlyTagNamesLower.has(String(tagName || '').toLowerCase()) && hasMeaningfulTagContents_ACU(contents)) {
                     filteredTags.set(tagName, contents);
                 }
             });
@@ -14986,6 +15023,10 @@ $CONTENT
     async function renderPlotTaskMessages_ACU(task, sharedContext, runtimeOptions = {}) {
         const promptGroup = JSON.parse(JSON.stringify(task?.promptGroup || []));
         const messagesToUse = Array.isArray(promptGroup) ? promptGroup : [];
+        const historyTagMap = runtimeOptions.historyTagMap instanceof Map
+            ? runtimeOptions.historyTagMap
+            : buildPlotTagMapFromText_ACU(sharedContext.lastPlotContent, null);
+        const relayTagMap = runtimeOptions.relayTagMap instanceof Map ? runtimeOptions.relayTagMap : new Map();
         // 构建 $1 的任务级覆盖值（任务级世界书内容）
         const replacementOverrides = {};
         if (sharedContext.taskWorldbookContent !== undefined) {
@@ -14997,10 +15038,7 @@ $CONTENT
             let c = seg.content;
             c = await tryRenderPlotTemplateWithEjs_ACU(c);
             c = sharedContext.performReplacements(c, replacementOverrides);
-            const relayTagMap = runtimeOptions.useHistoryRelay
-                ? buildPlotTagMapFromText_ACU(sharedContext.lastPlotContent, getPlotPlaceholderTagNames_ACU(c))
-                : (runtimeOptions.relayTagMap instanceof Map ? runtimeOptions.relayTagMap : new Map());
-            c = replacePlotTagPlaceholders_ACU(c, relayTagMap);
+            c = replacePlotTagPlaceholders_ACU(c, relayTagMap, historyTagMap);
             c = renderPlotTaskContentWithIsolatedVariables_ACU(c, sharedContext);
             seg.__renderedContent = c;
         }
@@ -15017,16 +15055,16 @@ $CONTENT
         // 任务级世界书计算：基于当前任务实际使用的 {{tag}} 注入内容 + 本轮上下文触发，
         // 而不是固定使用整段上一轮剧情内容。
         // 标签来源与 renderPlotTaskMessages_ACU 一致：
-        // - 第一阶段（useHistoryRelay=true）：relayTagMap 为空，走 lastPlotContent
-        // - 后续阶段（useHistoryRelay=false）：relayTagMap 含本轮先前阶段结果
+        // - 若本轮已完成任务产出目标标签：优先用本轮 relayTagMap
+        // - 否则回退到 historyTagMap / lastPlotContent（上一轮历史）
         let taskWorldbookContent = '';
         try {
             const taskPlotContent = String(sharedContext.lastPlotContent || '');
-            const effectiveRelayTagMap = runtimeOptions.useHistoryRelay
-                ? undefined // 第一阶段：从 lastPlotContent 提取
-                : (runtimeOptions.relayTagMap instanceof Map ? runtimeOptions.relayTagMap : undefined);
+            const effectiveRelayTagMap = runtimeOptions.relayTagMap instanceof Map
+                ? runtimeOptions.relayTagMap
+                : undefined;
             // 从任务 prompt 中提取 {{tag}}，按实际标签来源取对应内容，构造触发文本
-            const worldbookTriggerText = buildTaskWorldbookTriggerText_ACU(normalizedTask.promptGroup, taskPlotContent, effectiveRelayTagMap);
+            const worldbookTriggerText = buildTaskWorldbookTriggerText_ACU(normalizedTask.promptGroup, taskPlotContent, effectiveRelayTagMap, runtimeOptions.historyTagMap);
             if (worldbookTriggerText) {
                 logDebug_ACU(`[剧情推进] [任务:${taskLabel}] 基于 {{tag}} 注入内容构造世界书触发文本，长度: ${worldbookTriggerText.length}`);
             }
@@ -15176,6 +15214,7 @@ $CONTENT
             hasExistingUserMessage,
         });
         checkPlotAbortRequested_ACU();
+        const historyTagMap = buildPlotTagMapFromText_ACU(sharedContext.lastPlotContent || '', null);
         // 构建历史检索选项，供任务级历史回溯使用
         const historyAnchorText = String(inputForHash ?? userMessage ?? '');
         const historyLookupOptions = hasExistingUserMessage && historyAnchorText.trim()
@@ -15187,20 +15226,46 @@ $CONTENT
         const successfulResults = [];
         const failedResults = [];
         let aggregatedTags = new Map();
+        let completedSuccessfulResults = [];
         let aggregatedInjectOnlyTagNames = new Set();
         for (let stageIndex = 0; stageIndex < stageGroups.length; stageIndex++) {
             const stageGroup = stageGroups[stageIndex];
+            let stageEffectivePreset = String(settings_ACU.plotApiPreset || '').trim();
+            for (const stageTask of stageGroup.tasks) {
+                const taskId = String(stageTask?.id || '').trim();
+                const mappedPreset = taskId ? String(getPlotTaskApiPresetOverrides_ACU$1()[taskId] || '').trim() : '';
+                const legacyTaskPreset = String(stageTask?.taskApiPreset || '').trim();
+                const explicitTaskPreset = mappedPreset || legacyTaskPreset;
+                if (explicitTaskPreset) {
+                    stageEffectivePreset = explicitTaskPreset;
+                    break;
+                }
+            }
             logDebug_ACU(`[剧情推进] 阶段 ${stageGroup.stage} 开始执行，任务级API预设将按各任务独立决议。`);
-            const stageResults = await Promise.all(stageGroup.tasks.map((task) => executeSinglePlotTask_ACU(task, sharedContext, {
-                relayTagMap: aggregatedTags,
-                useHistoryRelay: stageIndex === 0,
-                historyLookupOptions,
-            })));
+            const stageResults = [];
+            for (const task of stageGroup.tasks) {
+                const stageTask = stageEffectivePreset
+                    ? { ...task, taskApiPreset: stageEffectivePreset }
+                    : task;
+                const result = await executeSinglePlotTask_ACU(stageTask, sharedContext, {
+                    relayTagMap: aggregatedTags,
+                    historyTagMap,
+                    historyLookupOptions,
+                });
+                stageResults.push(result);
+                if (result?.success) {
+                    completedSuccessfulResults = [...completedSuccessfulResults, result];
+                    const { aggregated: stageAggregated, injectOnlyTagNames: stageInjectOnly } = aggregatePlotTaskTags_ACU(completedSuccessfulResults);
+                    aggregatedTags = stageAggregated;
+                    stageInjectOnly.forEach((name) => aggregatedInjectOnlyTagNames.add(name));
+                }
+            }
             checkPlotAbortRequested_ACU();
             const stageSuccessfulResults = stageResults.filter((result) => result?.success);
             const stageFailedResults = stageResults.filter((result) => result && !result.success);
             successfulResults.push(...stageSuccessfulResults);
             failedResults.push(...stageFailedResults);
+            completedSuccessfulResults = [...successfulResults];
             if (stageFailedResults.length > 0) {
                 stageFailedResults.forEach((result) => {
                     logWarn_ACU(`[剧情推进] [阶段:${result.stage ?? stageGroup.stage}] [任务:${result.taskName || result.taskId || '未命名任务'}] 未产出有效结果: ${result.error || '未知错误'}`);
@@ -15217,10 +15282,6 @@ $CONTENT
                     errorMessage: `剧情任务阶段 ${stageGroup.stage} 执行失败（${failedTaskNames}），后续阶段已停止。`,
                 };
             }
-            const { aggregated: stageAggregated, injectOnlyTagNames: stageInjectOnly } = aggregatePlotTaskTags_ACU(successfulResults);
-            aggregatedTags = stageAggregated;
-            // 合并 injectOnly 标签名
-            stageInjectOnly.forEach((name) => aggregatedInjectOnlyTagNames.add(name));
             logDebug_ACU(`[剧情推进] 阶段 ${stageGroup.stage} 已完成，成功任务数: ${stageSuccessfulResults.length}`);
         }
         if (!successfulResults.length) {
