@@ -5966,22 +5966,30 @@ $CONTENT
                         }
                         continue;
                     }
-                    independentData[sheetKey] = applyTableDelta_ACU(baseSheet, delta, sheetKey);
+                    const normalizedBaseSheet = JSON.parse(JSON.stringify(baseSheet));
+                    if (Array.isArray(normalizedBaseSheet.content)) {
+                        normalizedBaseSheet.content = ensureStableRowIdsForSheetContent_ACU(normalizedBaseSheet.content);
+                    }
+                    independentData[sheetKey] = applyTableDelta_ACU(normalizedBaseSheet, delta, sheetKey);
                 }
             }
             else {
                 independentData = JSON.parse(JSON.stringify(currentTagData.independentData || {}));
             }
-            let keysToSave = targetSheetKeys;
-            if (!keysToSave) {
-                keysToSave = getSortedSheetKeys_ACU(effectiveTableData);
-            }
-            const trackingKeySet = new Set(Array.isArray(trackingSheetKeys)
-                ? trackingSheetKeys.filter((sheetKey) => typeof sheetKey === 'string' && sheetKey.length > 0)
-                : []);
+            let keysToSave = Array.isArray(targetSheetKeys)
+                ? targetSheetKeys.filter((sheetKey) => typeof sheetKey === 'string' && sheetKey.length > 0)
+                : getSortedSheetKeys_ACU(effectiveTableData);
+            keysToSave = [...new Set(keysToSave.filter(sheetKey => Boolean(effectiveTableData[sheetKey])))];
+            const trackingCandidateKeys = [
+                ...keysToSave,
+                ...(Array.isArray(trackingSheetKeys)
+                    ? trackingSheetKeys.filter((sheetKey) => typeof sheetKey === 'string' && sheetKey.length > 0)
+                    : []),
+            ];
+            const trackingKeySet = new Set(trackingCandidateKeys.filter(sheetKey => Boolean(effectiveTableData[sheetKey])));
             const actuallyModifiedKeys = [...trackingKeySet];
             const metadataOnlyUpdateGroupKeys = Array.isArray(updateGroupKeys)
-                ? updateGroupKeys.filter(sheetKey => trackingKeySet.has(sheetKey))
+                ? [...new Set(updateGroupKeys.filter(sheetKey => trackingKeySet.has(sheetKey) && Boolean(effectiveTableData[sheetKey])))]
                 : [];
             if (keysToSave.length === 0 && trackAsUpdate && actuallyModifiedKeys.length > 0) {
                 const existingModifiedKeys = currentTagData.modifiedKeys || [];
@@ -6020,8 +6028,11 @@ $CONTENT
                     const nextSheet = independentData[sheetKey];
                     if (!nextSheet)
                         continue;
-                    const baseSheet = prevTagData.independentData[sheetKey];
-                    const result = buildTableDelta_ACU(baseSheet, nextSheet, sheetKey);
+                    const normalizedBaseSheet = JSON.parse(JSON.stringify(prevTagData.independentData[sheetKey] || null));
+                    if (normalizedBaseSheet && Array.isArray(normalizedBaseSheet.content)) {
+                        normalizedBaseSheet.content = ensureStableRowIdsForSheetContent_ACU(normalizedBaseSheet.content);
+                    }
+                    const result = buildTableDelta_ACU(normalizedBaseSheet, nextSheet, sheetKey);
                     if (result.degraded) {
                         anyDegraded = true;
                         logDebug_ACU(`[表格增量] ${sheetKey} 退化: ${result.degradeReason}，本楼层将使用 checkpoint 模式`);
@@ -31398,6 +31409,9 @@ $CONTENT
                     try {
                         mergedBatchData[sheetKey] = applyTableDelta_ACU(mergedBatchData[sheetKey], incrementalData[sheetKey], sheetKey);
                         restoreGuideStructure(mergedBatchData[sheetKey], guideSnapshots[sheetKey]);
+                        if (Array.isArray(mergedBatchData[sheetKey]?.content)) {
+                            mergedBatchData[sheetKey].content = ensureStableRowIdsForSheetContent_ACU(mergedBatchData[sheetKey].content);
+                        }
                         batchFoundSheets[sheetKey] = true;
                     }
                     catch (e) {
@@ -31667,6 +31681,7 @@ $CONTENT
         let workingTableData = sqlInitialization.workingTableData;
         const initializedSheetKeys = sqlInitialization.initializedSheetKeys;
         const modifiedKeySet = new Set();
+        const trackingKeySet = new Set();
         for (const response of sortedResponses) {
             let parseResult;
             if (isSqliteMode() && typeof response.tableEditText === 'string' && isSqlContent(response.tableEditText)) {
@@ -31696,9 +31711,6 @@ $CONTENT
                         : `统一提交失败：group ${response.job.groupKey} 解析或应用失败。`,
                 };
             }
-            if (response.tableEditText && parsedKeys.length === 0 && appliedEdits <= 0) {
-                return { success: false, modifiedKeys: [], error: `统一提交失败：group ${response.job.groupKey} 未形成任何实质性操作。` };
-            }
             if (Array.isArray(response.job.targetSheetKeys) && response.job.targetSheetKeys.length > 0) {
                 const allowedSheetKeys = new Set(response.job.targetSheetKeys);
                 const unauthorizedKeys = parsedKeys.filter((sheetKey) => !allowedSheetKeys.has(sheetKey));
@@ -31710,18 +31722,30 @@ $CONTENT
                     };
                 }
             }
+            for (const sheetKey of (response.job?.targetSheetKeys || [])) {
+                if (workingTableData && workingTableData[sheetKey]) {
+                    trackingKeySet.add(sheetKey);
+                }
+            }
             parsedKeys.forEach((sheetKey) => modifiedKeySet.add(sheetKey));
         }
         applySpecialIndexSequenceToSummaryTables_ACU(workingTableData);
         const modifiedKeys = [...modifiedKeySet].sort();
         if (!options.isImportMode) {
+            const isFirstTimeInit = await checkIfFirstTimeInit_ACU();
+            const allUnifiedSheetKeys = getSortedSheetKeys_ACU(workingTableData);
             const initializedKeys = [...initializedSheetKeys].sort();
-            const allTargetSheetKeys = [...new Set([...allTargetSheetKeySet, ...initializedKeys])].sort();
+            const keysToSave = isFirstTimeInit
+                ? allUnifiedSheetKeys
+                : [...new Set([...modifiedKeys, ...initializedKeys])].sort();
+            const keysToTrack = isFirstTimeInit
+                ? allUnifiedSheetKeys
+                : [...new Set([...trackingKeySet, ...initializedKeys])].sort();
             const saveResult = await persistTablesToChatMessage_ACU({
                 targetMessageIndex: options.saveTargetIndex,
-                targetSheetKeys: [...new Set([...modifiedKeys, ...initializedKeys])].sort(),
-                updateGroupKeys: allTargetSheetKeys,
-                trackingSheetKeys: allTargetSheetKeys,
+                targetSheetKeys: keysToSave,
+                updateGroupKeys: keysToTrack,
+                trackingSheetKeys: keysToTrack,
                 tableData: workingTableData,
                 trackAsUpdate: true,
             });
@@ -31959,10 +31983,13 @@ $CONTENT
                             }
                             const isFirstTimeInit = await checkIfFirstTimeInit_ACU();
                             const hasTargetSheetTracking = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0;
+                            const allSheetKeys = getSortedSheetKeys_ACU(currentJsonTableData_ACU);
+                            const targetTrackingKeys = hasTargetSheetTracking
+                                ? targetSheetKeys.filter((sheetKey) => Boolean(currentJsonTableData_ACU?.[sheetKey]))
+                                : [];
                             if (keysToPersist.length > 0 || isFirstTimeInit || hasTargetSheetTracking) {
                                 let keysToActuallySave = keysToPersist;
                                 if (isFirstTimeInit) {
-                                    const allSheetKeys = getSortedSheetKeys_ACU(currentJsonTableData_ACU);
                                     keysToActuallySave = allSheetKeys;
                                     const fullTemplate = parseTableTemplateJson_ACU({ stripSeedRows: false });
                                     if (fullTemplate) {
@@ -31975,10 +32002,14 @@ $CONTENT
                                     }
                                     logDebug_ACU('[Init] First time initialization detected. Saving complete template structure with all tables.');
                                 }
-                                const updateGroupKeysRaw = isFirstTimeInit ? keysToPersist : targetSheetKeys;
-                                const keysToTrackAsUpdated = (keysToPersist.length === 0 && hasTargetSheetTracking)
-                                    ? [...targetSheetKeys]
-                                    : keysToPersist.filter((sheetKey) => keysToActuallySave.includes(sheetKey));
+                                const keysToTrackAsUpdated = isFirstTimeInit
+                                    ? [...allSheetKeys]
+                                    : (hasTargetSheetTracking
+                                        ? [...targetTrackingKeys]
+                                        : keysToPersist.filter((sheetKey) => keysToActuallySave.includes(sheetKey)));
+                                const updateGroupKeysRaw = isFirstTimeInit
+                                    ? [...allSheetKeys]
+                                    : (hasTargetSheetTracking ? [...targetTrackingKeys] : targetSheetKeys);
                                 const updateGroupKeysToUse = Array.isArray(updateGroupKeysRaw)
                                     ? updateGroupKeysRaw.filter(sheetKey => {
                                         const table = currentJsonTableData_ACU?.[sheetKey];
@@ -71319,9 +71350,9 @@ Expected function or array of functions, received type ${typeof value}.`
             /**
              * 仅刷新展示用状态（presets / activePresetName / streaming）。
              *
-             * 实际把 chat 绑定的预设写回 apiMode/apiConfig/tavernProfile 的副作用由 service 层
-             * 的 applyCurrentChatApiPresetSelection_ACU() 负责（见 injection-engine-state.ts
-             * loadSettings_ACU()）。store 不重复调用，避免与 chat-changed 监听器形成竞争或循环写入。
+             * 切换聊天后的 settings 刷新由 service 层的 loadSettings_ACU() 完成，
+             * v2 chat-changed listener 只负责让 store 重新读取最新 settings。
+             * 当前聊天 API 配置的显式写回只在 setActivePresetForCurrentChat()/savePreset() 中执行，避免刷新阶段产生循环写入。
              */
             refreshFromSettings() {
                 ensureSettingsShape$3();
@@ -71383,8 +71414,10 @@ Expected function or array of functions, received type ${typeof value}.`
                 const preset = normalizePreset(presetInput);
                 if (!preset)
                     return false;
-                const hadPresets = this.presets.length > 0;
                 const oldName = String(originalName || '').trim();
+                const activePresetNameBeforeSave = String(this.activePresetName || '').trim();
+                const isRenamingActivePreset = !!oldName && activePresetNameBeforeSave === oldName;
+                const hadPresets = this.presets.length > 0;
                 const existingByNewName = this.presets.findIndex(p => p.name === preset.name);
                 if (existingByNewName >= 0 && this.presets[existingByNewName].name !== oldName) {
                     this.presets[existingByNewName] = preset;
@@ -71411,8 +71444,15 @@ Expected function or array of functions, received type ${typeof value}.`
                     }
                 }
                 this.persist();
-                if (!hadPresets || !this.activePresetName || this.activePresetName === preset.name) {
+                const shouldSyncActivePresetAfterSave = !hadPresets
+                    || !activePresetNameBeforeSave
+                    || activePresetNameBeforeSave === preset.name
+                    || isRenamingActivePreset;
+                if (shouldSyncActivePresetAfterSave) {
                     this.setActivePresetForCurrentChat(preset.name);
+                }
+                else if (this.activePresetName !== activePresetNameBeforeSave) {
+                    this.activePresetName = activePresetNameBeforeSave;
                 }
                 return true;
             },
