@@ -6001,7 +6001,11 @@ $CONTENT
             keysToSave.forEach(sheetKey => {
                 const table = effectiveTableData[sheetKey];
                 if (table) {
-                    independentData[sheetKey] = sanitizeSheetForStorage_ACU(JSON.parse(JSON.stringify(table)));
+                    const normalizedTable = JSON.parse(JSON.stringify(table));
+                    if (Array.isArray(normalizedTable.content)) {
+                        normalizedTable.content = ensureStableRowIdsForSheetContent_ACU(normalizedTable.content);
+                    }
+                    independentData[sheetKey] = sanitizeSheetForStorage_ACU(normalizedTable);
                 }
             });
             currentTagData.independentData = independentData;
@@ -10685,6 +10689,7 @@ $CONTENT
                     if (Array.isArray(seedRows) && seedRows.length > 0) {
                         // seedRows 是不含表头的纯数据行，拼接到表头后面
                         sheetCopy.content = [sheetCopy.content[0] || [], ...seedRows];
+                        sheetCopy.content = ensureStableRowIdsForSheetContent_ACU(sheetCopy.content);
                         logDebug_ACU(`[SqlTableService] 表 ${key} (${sheetCopy.name}) 注入 ${seedRows.length} 行 seedRows 作为初版快照`);
                     }
                 }
@@ -22637,6 +22642,50 @@ $CONTENT
      * service/template/chat-scope/chat-scope-guide.ts
      * Sheet Guide 数据操作（D 组）
      */
+    function cloneTableRows_ACU(rows) {
+        return Array.isArray(rows) ? JSON.parse(JSON.stringify(rows)) : [];
+    }
+    function normalizeSeedRow_ACU(row) {
+        return Array.isArray(row) ? [...row] : [];
+    }
+    function assignMissingStableRowIds_ACU(rows) {
+        const reservedIds = new Set();
+        const missingIndexes = [];
+        rows.forEach((row, index) => {
+            const rowId = row[0];
+            const normalizedId = rowId == null ? '' : String(rowId).trim();
+            if (!normalizedId || reservedIds.has(normalizedId)) {
+                missingIndexes.push(index);
+                return;
+            }
+            reservedIds.add(normalizedId);
+            row[0] = normalizedId;
+        });
+        let nextId = 1;
+        missingIndexes.forEach(index => {
+            while (reservedIds.has(String(nextId)))
+                nextId += 1;
+            const assignedId = String(nextId);
+            reservedIds.add(assignedId);
+            rows[index][0] = assignedId;
+            nextId += 1;
+        });
+        return rows;
+    }
+    function ensureStableRowIdsForSeedRows_ACU(seedRows) {
+        const normalizedRows = cloneTableRows_ACU(seedRows).map(normalizeSeedRow_ACU);
+        return assignMissingStableRowIds_ACU(normalizedRows);
+    }
+    function ensureStableRowIdsForSheetContent_ACU(content) {
+        if (!Array.isArray(content) || content.length === 0)
+            return [];
+        const clonedContent = cloneTableRows_ACU(content);
+        const headerRow = Array.isArray(clonedContent[0]) ? [...clonedContent[0]] : ['row_id'];
+        if (clonedContent.length === 1)
+            return [headerRow];
+        const normalizedRows = clonedContent.slice(1).map(normalizeSeedRow_ACU);
+        return [headerRow, ...assignMissingStableRowIds_ACU(normalizedRows)];
+    }
     function materializeDataFromSheetGuide_ACU(guideData, { includeSeedRows = true } = {}) {
         const normalized = normalizeGuideData_ACU(guideData);
         if (!normalized)
@@ -22650,9 +22699,11 @@ $CONTENT
             const next = JSON.parse(JSON.stringify(s));
             // content: header + (可选) seedRows
             const seedRows = includeSeedRows && Array.isArray(s?.[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU])
-                ? JSON.parse(JSON.stringify(s[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU]))
+                ? ensureStableRowIdsForSeedRows_ACU(s[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU])
                 : [];
             next.content = [headerRow, ...seedRows];
+            if (Array.isArray(next[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU]))
+                next[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU] = ensureStableRowIdsForSeedRows_ACU(next[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU]);
             // 保留 seedRows 字段本身（便于后续再次写回/二次处理），但不会影响表格使用者（他们只看 content）
             out[k] = next;
         });
@@ -23061,23 +23112,23 @@ $CONTENT
                 return [];
             const direct = currentJsonTableData_ACU?.[sheetKey]?.[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU];
             if (Array.isArray(direct) && direct.length > 0)
-                return JSON.parse(JSON.stringify(direct));
+                return ensureStableRowIdsForSeedRows_ACU(direct);
             const g = guideData || (() => {
                 const isolationKey = getCurrentIsolationKey_ACU();
                 return getChatSheetGuideDataForIsolationKey_ACU(isolationKey);
             })();
             const sr1 = g?.[sheetKey]?.[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU];
             if (Array.isArray(sr1) && sr1.length > 0)
-                return JSON.parse(JSON.stringify(sr1));
+                return ensureStableRowIdsForSeedRows_ACU(sr1);
             const any = pickAnyGuideSeedRowsSlot_ACU(sheetKey);
             if (Array.isArray(any) && any.length > 0)
-                return any;
+                return ensureStableRowIdsForSeedRows_ACU(any);
             if (!allowTemplateFallback)
                 return [];
             const templateObj = getTemplateObjForSeedRows_ACU();
             const tplRows = templateObj?.[sheetKey]?.content;
             if (Array.isArray(tplRows) && tplRows.length > 1)
-                return JSON.parse(JSON.stringify(tplRows.slice(1)));
+                return ensureStableRowIdsForSeedRows_ACU(tplRows.slice(1));
             return [];
         }
         catch (e) {
@@ -23103,7 +23154,7 @@ $CONTENT
                     return;
                 const sr = g?.[k]?.[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU];
                 if (Array.isArray(sr) && sr.length > 0) {
-                    table[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU] = JSON.parse(JSON.stringify(sr));
+                    table[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU] = ensureStableRowIdsForSeedRows_ACU(sr);
                     changed = true;
                 }
             });
@@ -23141,13 +23192,13 @@ $CONTENT
             // 需求4：结构/表名/参数变更时，仅更新指导表元信息，不修改"基础数据(seedRows)"
             const preserved = preserveSeedRowsFromGuideData?.[k]?.[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU];
             if (Array.isArray(preserved)) {
-                blank[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU] = JSON.parse(JSON.stringify(preserved));
+                blank[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU] = ensureStableRowIdsForSeedRows_ACU(preserved);
             }
             else {
                 // 需求1：首次生成指导表时，把模板预置数据写入 seedRows（仅在未能从既有指导表继承时）
                 const tplRows = seedRowsFromTemplateObj?.[k]?.content;
                 if (Array.isArray(tplRows) && tplRows.length > 1) {
-                    blank[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU] = JSON.parse(JSON.stringify(tplRows.slice(1)));
+                    blank[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU] = ensureStableRowIdsForSeedRows_ACU(tplRows.slice(1));
                 }
             }
             if (Number.isFinite(s?.[TABLE_ORDER_FIELD_ACU]))
@@ -23190,7 +23241,7 @@ $CONTENT
                 base.content = [["row_id"]];
             // v2: 保存模板预置数据为 seedRows，但指导表本体 content 仍只保留表头
             if (Array.isArray(base.content) && base.content.length > 1) {
-                base[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU] = JSON.parse(JSON.stringify(base.content.slice(1)));
+                base[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU] = ensureStableRowIdsForSeedRows_ACU(base.content.slice(1));
             }
             if (stripSeedRows && Array.isArray(base.content) && base.content.length > 1)
                 base.content = [base.content[0]];
@@ -31572,6 +31623,7 @@ $CONTENT
                 const seedRows = getEffectiveSeedRowsForSheet_ACU(sheetKey, { guideData, allowTemplateFallback: true });
                 if (Array.isArray(seedRows) && seedRows.length > 0) {
                     targetSheet.content = [targetSheet.content[0] || [], ...JSON.parse(JSON.stringify(seedRows))];
+                    targetSheet.content = ensureStableRowIdsForSheetContent_ACU(targetSheet.content);
                     sheetChanged = true;
                 }
             }
