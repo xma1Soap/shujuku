@@ -13761,7 +13761,7 @@ $CONTENT
                         }
                     }
                     logDebug_ACU(`ACU: 通过酒馆连接预设 (ID: ${profileId}, Name: ${targetProfileName}) 发送请求...`);
-                    responsePromise = sendConnectionManagerRequest_ACU(profileId, messages, effectiveApiConfig.max_tokens || 4096);
+                    responsePromise = sendConnectionManagerRequest_ACU(profileId, messages, effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096);
                     rawResult = await responsePromise;
                 }
                 catch (error) {
@@ -13849,7 +13849,7 @@ $CONTENT
                     }
                     const generateUrl = `/api/backends/chat-completions/generate`;
                     const headers = { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' };
-                    const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens: effectiveApiConfig.max_tokens, temperature: effectiveApiConfig.temperature, topP: effectiveApiConfig.top_p, stripModelPrefix: false }));
+                    const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }));
                     logDebug_ACU('ACU: 调用新的后端生成API:', generateUrl, 'Model:', effectiveApiConfig.model);
                     const response = await fetch(generateUrl, { method: 'POST', headers, body, signal: abortSignal });
                     if (!response.ok) {
@@ -14002,7 +14002,7 @@ $CONTENT
         const model = opts.stripModelPrefix !== false
             ? (effectiveApiConfig.model || '').replace(/^models\//, '')
             : (effectiveApiConfig.model || '');
-        const maxTokens = opts.maxTokens || effectiveApiConfig.max_tokens || effectiveApiConfig.maxTokens || 20000;
+        const maxTokens = opts.maxTokens ?? effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 20000;
         const temperature = opts.temperature ?? effectiveApiConfig.temperature ?? 1.0;
         const topP = opts.topP ?? effectiveApiConfig.top_p ?? effectiveApiConfig.topP ?? 0.95;
         // 基础 Authorization 头
@@ -14090,7 +14090,7 @@ $CONTENT
             if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
                 throw new Error('自定义API的URL或模型未配置。');
             }
-            const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { temperature: 0.7, topP: 0.95 });
+            const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig);
             const response = await fetch('/api/backends/chat-completions/generate', {
                 method: 'POST',
                 headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
@@ -14134,7 +14134,7 @@ $CONTENT
             if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
                 throw new Error('自定义API的URL或模型未配置。');
             }
-            const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { temperature: 0.7, topP: 0.95 });
+            const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig);
             const response = await fetch('/api/backends/chat-completions/generate', {
                 method: 'POST',
                 headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
@@ -14186,7 +14186,7 @@ $CONTENT
         // Duplicating API calling logic for safety and isolation
         if (settings_ACU.apiMode === 'tavern') {
             const profileId = settings_ACU.tavernProfile;
-            return await sendConnectionManagerRequest_ACU(profileId, messages, settings_ACU.apiConfig.max_tokens || 4096).then(r => r.result.choices[0].message.content);
+            return await sendConnectionManagerRequest_ACU(profileId, messages, settings_ACU.apiConfig.max_tokens ?? settings_ACU.apiConfig.maxTokens ?? 4096).then(r => r.result.choices[0].message.content);
         }
         else {
             // Custom API（流式传输）
@@ -14218,7 +14218,7 @@ $CONTENT
         const effectiveApiMode = apiPresetConfig.apiMode;
         const effectiveApiConfig = apiPresetConfig.apiConfig || {};
         const effectiveTavernProfile = apiPresetConfig.tavernProfile;
-        const maxTokens = effectiveApiConfig.max_tokens || effectiveApiConfig.maxTokens || 4096;
+        const maxTokens = effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096;
         logDebug_ACU(`[callAIWithPreset] 调用 AI，消息数=${messages.length}，预设=${presetName || '当前配置'}，模式=${effectiveApiMode}`);
         if (effectiveApiMode === 'tavern') {
             const profileId = effectiveTavernProfile || settings_ACU.tavernProfile;
@@ -14245,7 +14245,7 @@ $CONTENT
         if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
             throw new Error('自定义API的URL或模型未配置。');
         }
-        const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, temperature: effectiveApiConfig.temperature || 1.0, topP: effectiveApiConfig.top_p || 0.9, stripModelPrefix: false }));
+        const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false }));
         const res = await fetch('/api/backends/chat-completions/generate', {
             method: 'POST',
             headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
@@ -25453,7 +25453,7 @@ $CONTENT
                 }
                 const finalMessages = messagesToUse.map((m) => ({ role: m.role.toLowerCase(), content: m.content }));
                 if (settings_ACU.apiMode === 'tavern') {
-                    const result = await sendConnectionManagerRequest_ACU(settings_ACU.tavernProfile, finalMessages, settings_ACU.apiConfig.max_tokens || 4096);
+                    const result = await sendConnectionManagerRequest_ACU(settings_ACU.tavernProfile, finalMessages, settings_ACU.apiConfig.max_tokens ?? settings_ACU.apiConfig.maxTokens ?? 4096);
                     if (result && result.ok)
                         aiResponseText = result.result.choices[0].message.content;
                     else
@@ -25469,7 +25469,7 @@ $CONTENT
                         const res = await fetch(`/api/backends/chat-completions/generate`, {
                             method: 'POST',
                             headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-                            body: JSON.stringify(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { maxTokens: settings_ACU.apiConfig.max_tokens || 4096, temperature: settings_ACU.apiConfig.temperature, stripModelPrefix: false }))
+                            body: JSON.stringify(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false }))
                         });
                         if (!res.ok)
                             throw new Error(`API请求失败: ${res.status} ${await res.text()}`);
@@ -51232,14 +51232,15 @@ $CONTENT
                     const effectiveApiConfig = apiPresetConfig.apiConfig || {};
                     const effectiveTavernProfile = apiPresetConfig.tavernProfile;
                     logDebug_ACU(`[callAI] Calling AI with ${messages.length} messages, preset: ${presetName || '当前配置'}, mode: ${effectiveApiMode}`);
-                    const maxTokensRaw = options.max_tokens ?? options.maxTokens ?? effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096;
-                    const maxTokensNumber = Number(maxTokensRaw);
-                    const maxTokens = Number.isFinite(maxTokensNumber) && maxTokensNumber > 0
-                        ? Math.trunc(maxTokensNumber)
-                        : 4096;
+                    // options 层 override：调用方显式传入的 max_tokens（custom 路径专用，0 合法）
+                    // tavern 路径 max_tokens 与其他入口统一使用 ?? 链，0 为合法值
+                    const optionsMaxTokens = (options.max_tokens !== undefined || options.maxTokens !== undefined)
+                        ? Number(options.max_tokens ?? options.maxTokens)
+                        : undefined;
                     if (effectiveApiMode === 'tavern') {
                         const profileId = effectiveTavernProfile || settings_ACU.tavernProfile;
-                        const response = await sendConnectionManagerRequest_ACU(profileId, messages, maxTokens);
+                        const tavernMaxTokens = effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096;
+                        const response = await sendConnectionManagerRequest_ACU(profileId, messages, tavernMaxTokens);
                         if (response && response.result && response.result.choices && response.result.choices[0]) {
                             return response.result.choices[0].message.content;
                         }
@@ -51271,7 +51272,10 @@ $CONTENT
                                 return null;
                             }
                             const url = `/api/backends/chat-completions/generate`;
-                            const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, temperature: effectiveApiConfig.temperature || 1.0, topP: effectiveApiConfig.top_p, stripModelPrefix: false }));
+                            const customOverrides = { stripModelPrefix: false };
+                            if (optionsMaxTokens !== undefined)
+                                customOverrides.maxTokens = optionsMaxTokens;
+                            const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, customOverrides));
                             const headers = {
                                 ...getHostRequestHeaders_ACU(),
                                 'Content-Type': 'application/json'

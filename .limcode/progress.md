@@ -1,37 +1,40 @@
 # 项目进度
 - Project: SP数据库
-- Updated At: 2026-06-01T17:38:22.542Z
+- Updated At: 2026-06-03T02:44:15.892Z
 - Status: active
-- Phase: plan
+- Phase: implementation
 
 ## 当前摘要
 
 <!-- LIMCODE_PROGRESS_SUMMARY_START -->
 - 当前进度：尚无里程碑记录
-- 当前焦点：清理楼层时冷表全量兜底快照
-- 最新结论：9 项验收全部通过。唯一发现的缺陷（main-popup-api.ts L76 缩进）已修复。spv3.7 在 parseKeyValueLines 类型守卫、clearApiConfig_ACU 三字段重置、rerankInstruction 默认值三处优于 spv6.9 参考实现。TypeScript 编译零错误，两条全链路闭环确认完整。**接受交付。*…
+- 当前焦点：spv3.9.8.1 已发布，等待 housekeeping / tsconfig / 下版本号决策
+- 最新结论：spv3.9.8.1 发布完成：release commit 2f74398 推送至 main，annotated tag 905d8768 推送并指向 2f74398；9 个发布文件（5 src + 3 tests + 1 dist/index.bundle.js + 1 index.js）精确不含污染，build exitCode 0，架构 guard…
+- 当前阻塞：无技术阻塞。
+- 下一步：由助手决定后续动作：是否清理 .limcode/* 与 .analysis-archive/* 临时产物、是否处理 tsconfig.json:19 baseUrl 弃用诊断、是否进入 spv3.9.8.2 计划。
 <!-- LIMCODE_PROGRESS_SUMMARY_END -->
 
 ## 关联文档
 
 <!-- LIMCODE_PROGRESS_ARTIFACTS_START -->
-- 计划：`.limcode/plans/修复多组并发填表快照覆盖与串行落盘计划.md`
+- 计划：`.limcode/plans/修复剧情推进自定义API温度硬编码优化计划.md`
 - 审查：`.limcode/review/spv69-spv37-完整移植验收报告.md`
 <!-- LIMCODE_PROGRESS_ARTIFACTS_END -->
 
 ## 当前 TODO 快照
 
 <!-- LIMCODE_PROGRESS_TODOS_START -->
-- [x] 已补齐保存链路侦察：确认 processUpdatesBatch 的批次目标楼层、保存调用与自动/手动路径差异  `#t1`
-- [x] 为表格填表完成阶段增加短队列：按聊天+隔离+目标楼层串行执行“恢复本组基底→解析应用→保存→触发快照”  `#t2`
-- [x] 调整 persistTablesToChatMessage_ACU 在锁内重新读取目标消息现有 tagData，并合并同楼层已有 independentData/incrementalData/modifiedKeys/updateGroupKeys  `#t3`
-- [x] 修正 delta 模式下同楼层多组连续写入的基底重建逻辑，避免后写组用过期 currentTagData 覆盖先写组  `#t4`
-- [x] 修正 prepare/parse/save 对全局 currentJsonTableData_ACU 的并发依赖，确保并行 AI 调用不共享可变表对象  `#t5`
-- [x] 修正向量 vectorizeOnly/pending 与 checkpoint 写入：写入前在 scope 锁内重读最新聚合快照并重新合并 parent/active rows  `#t6`
-- [x] 补充并发回归测试：同一目标楼层两个 group 近同时完成后两组表、modifiedKeys、updateGroupKeys 均保留  `#t7`
-- [x] 补充全局运行时数据竞态测试：两个 group AI 返回顺序交错时，各自只应用并保存自己的 targetSheetKeys  `#t8`
-- [x] 补充向量快照回归测试：两次近同时完成的 flush/pending persist 顺序执行并在第二次基于第一次结果叠加  `#t9`
-- [x] 执行限定测试、typecheck 与构建验证，记录失败项、风险与回滚方式  `#t10`
+- [ ] 修复 src/service/ai/api-call.ts 中 buildCustomApiRequestBody_ACU 的 maxTokens 兜底链，将 || 改为 ??，保持 0 值不被误回退  `#T1`
+- [ ] 修复 callApiWithPlotPreset_ACU 与 callApi_ACU 两处 temperature: 0.7 覆盖，移除温度硬编码并让配置温度进入最终请求体  `#T2`
+- [ ] 修复 callAIWithPreset_ACU 中 max_tokens/maxTokens、temperature、top_p/topP 的 || 误回退与别名缺失问题  `#T3`
+- [ ] 修复 src/presentation/bootstrap/api-groups/worldbook-ai-api.ts 的 callAI 自定义 API 请求体温度 || 回退与 topP 别名缺失问题  `#T4`
+- [ ] 修复 src/service/ai/prompt-builder/prompt-api-call.ts 酒馆预设 max_tokens || 4096 回退问题，并评估自定义 API overrides 是否需要最小化调整  `#T5`
+- [ ] 修复 src/service/summary/merge-executor.ts 与 src/service/summary/merge-logic.ts 中 max_tokens || 4096 的同类误回退，覆盖 Tavern 与 custom 分支  `#T6`
+- [ ] 补充 tests/service/ai/api-call.test.ts，覆盖 buildCustomApiRequestBody_ACU、callApi_ACU、callApiWithPlotPreset_ACU、callAIWithPreset_ACU 的参数透传与 0 值边界  `#T7`
+- [ ] 补充或扩展 worldbook-ai-api 对应测试，验证 bootstrap callAI 的 temperature=0、topP/top_p 与 maxTokens 透传行为  `#T8`
+- [ ] 补充 tests/service/summary/merge-executor.test.ts 与 tests/service/summary/merge-logic.test.ts，验证 max_tokens=0 不被 4096 覆盖  `#T9`
+- [ ] 执行针对性测试：tests/service/ai/api-call.test.ts、summary merge 测试、worldbook-ai-api 相关测试，并执行 npm run typecheck  `#T10`
+- [ ] 实施后进行独立验收，复查 src 中 temperature:0.7 与关键 || 回退残留、请求体参数优先级、Tavern/useMainApi/custom 路径兼容性  `#T11`
 <!-- LIMCODE_PROGRESS_TODOS_END -->
 
 ## 项目里程碑
@@ -49,23 +52,26 @@
 ## 最近更新
 
 <!-- LIMCODE_PROGRESS_LOG_START -->
-- 2026-05-29T14:19:16.082Z | created | 初始化项目进度
-- 2026-05-29T14:19:16.082Z | artifact_changed | plan | 同步计划文档：.limcode/plans/清理楼层时冷表全量兜底快照.plan.md
-- 2026-05-29T14:22:23.644Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/清理楼层时冷表全量兜底快照.plan.md
-- 2026-05-29T16:59:53.813Z | artifact_changed | plan | 同步计划文档：.limcode/plans/spv69-spv37-移植rerank-指令参数-api-附加-body-参数.plan.md
-- 2026-05-29T17:15:45.783Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/spv69-spv37-移植rerank-指令参数-api-附加-body-参数.plan.md
-- 2026-05-29T17:28:11.358Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/spv69-spv37-移植rerank-指令参数-api-附加-body-参数.plan.md
-- 2026-05-29T17:36:32.362Z | artifact_changed | plan | 同步计划文档：.limcode/plans/ui-补充移植rerankinstruction-textarea-bodyparamsexcludebodyparamsrequestheaders-textarea.plan.md
-- 2026-05-29T17:38:21.330Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/ui-补充移植rerankinstruction-textarea-bodyparamsexcludebodyparamsrequestheaders-textarea.plan.md
-- 2026-05-29T17:48:52.480Z | artifact_changed | review | 同步审查文档：.limcode/review/spv69-spv37-完整移植验收报告.md
-- 2026-05-29T17:48:57.626Z | artifact_changed | review | 同步审查结论：.limcode/review/spv69-spv37-完整移植验收报告.md
-- 2026-05-30T10:42:33.536Z | artifact_changed | plan | 同步计划文档：.limcode/plans/修复-bodyparams-不支持-json-输入导致附加参数不生效.plan.md
-- 2026-05-30T10:49:37.988Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/修复-bodyparams-不支持-json-输入导致附加参数不生效.plan.md
-- 2026-05-30T10:49:56.145Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/修复-bodyparams-不支持-json-输入导致附加参数不生效.plan.md
-- 2026-06-01T15:51:27.049Z | artifact_changed | plan | 同步计划文档：.limcode/plans/修复多组并发填表快照覆盖与串行落盘计划.md
-- 2026-06-01T15:55:34.935Z | artifact_changed | plan | 同步计划文档：.limcode/plans/修复多组并发填表快照覆盖与串行落盘计划.md
-- 2026-06-01T16:41:06.852Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/修复多组并发填表快照覆盖与串行落盘计划.md
-- 2026-06-01T17:38:22.542Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/修复多组并发填表快照覆盖与串行落盘计划.md
+- 2026-06-02T15:35:24.162Z | updated | spv3.9.7-progress-sync | .limcode/progress.md 已同步：currentFocus = spv3.9.7 发布收口已完成，nextAction 切换到具体收口动作（子代理验收 + 助手裁决三项收尾决策）。
+- 2026-06-02T16:38:39.206Z | artifact_changed | plan | 同步计划文档：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md
+- 2026-06-02T16:53:56.799Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md
+- 2026-06-02T17:00:03.206Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md
+- 2026-06-02T17:08:36.847Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md
+- 2026-06-02T17:33:54.941Z | milestone_recorded | spv3.9.8 | spv3.9.8 发布完成：release commit 324c319 推送至 main，annotated tag 51bd12f 推送并指向 324c319；6 文件 244/244 测试通过，build exit 0，独立验收通过。
+- 2026-06-02T17:33:54.941Z | updated | release-pipeline | 发布链路闭合：目标测试通过 → npm run build → 精确 git add 12 文件（dist/index.bundle.js 用 git add -f）→ git commit → git push origin main → git tag -a spv3.9.8 → git push origin spv3.9.8 → 远端与 tag object 校验。
+- 2026-06-02T17:37:39.349Z | updated | spv3.9.8-cache-archive | spv3.9.8 发布收口：.analysis-cache.md 已归档到 .analysis-archive/2026-06-03_0136_spv3.9.8-发布完成归档.md，并从根目录删除。
+- 2026-06-02T17:45:31.718Z | artifact_changed | plan | 同步计划文档：.limcode/plans/修复运行时base缺少稳定row_id退化checkpoint计划.md
+- 2026-06-02T18:08:09.268Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/修复运行时base缺少稳定row_id退化checkpoint计划.md
+- 2026-06-02T18:26:07.579Z | artifact_changed | plan | 同步计划文档：.limcode/plans/三项填表更新计数与新版API参数持久化优化计划.md
+- 2026-06-02T18:34:44.670Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/三项填表更新计数与新版API参数持久化优化计划.md
+- 2026-06-02T18:34:44.689Z | updated | 三项填表更新计数与新版API参数持久化优化已实现，定向测试与构建通过，等待独立验收。
+- 2026-06-02T19:03:25.629Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/三项填表更新计数与新版API参数持久化优化计划.md
+- 2026-06-02T19:20:05.487Z | milestone_recorded | spv3.9.8.1 | spv3.9.8.1 发布完成：release commit 2f743984bd0b03d4ddf52548e54a5b94b88963ea 推送至 main，annotated tag 905d8768864fcf328eef29f1f89be192b39c9092 推送并指向 2f74398；9 个发布文件（5 src + 3 tests + 1 dist/index.bundle.js + 1 index.js）精确不含污染，build exitCode 0，架构 guard 0 违规，dist/index.bundle.js 与 index.js SHA256 一致（BA212FD20295DF30AB312636B7C4C5D09FA2669FED4D285678384D60977AD7DA），首行 `// ==UserScript==`；8/8 业务修复 TODO 全部 completed。
+- 2026-06-02T19:20:05.487Z | updated | release-pipeline | spv3.9.8.1 发布链路闭合：build 验证 → 精确 git add（src tests + git add -f dist/index.bundle.js + git add index.js）→ git commit → git push origin main → git tag -a spv3.9.8.1 → git push origin spv3.9.8.1 → 远端与 tag object 校验；publish-extension.sh 未触发。
+- 2026-06-02T19:20:05.487Z | updated | spv3.9.8.1-cache-archive | spv3.9.8.1 发布收口：.analysis-cache.md 已归档到 .analysis-archive/2026-06-03_0318_spv3.9.8.1-发布完成归档.md（ASCII 文件名避 cmd 中文编码坑），并从根目录删除。
+- 2026-06-02T19:20:05.487Z | updated | spv3.9.8.1-progress-sync | .limcode/progress.md 已同步：currentFocus = spv3.9.8.1 已发布，等待 housekeeping / tsconfig / 下版本号决策；nextAction 切换到具体收口决策。
+- 2026-06-03T02:38:19.749Z | artifact_changed | plan | 同步计划文档：.limcode/plans/修复剧情推进自定义API温度硬编码优化计划.md
+- 2026-06-03T02:44:15.892Z | artifact_changed | plan | 同步计划文档：.limcode/plans/修复剧情推进自定义API温度硬编码优化计划.md
 <!-- LIMCODE_PROGRESS_LOG_END -->
 
 <!-- LIMCODE_PROGRESS_METADATA_START -->
@@ -75,187 +81,210 @@
   "projectId": "sp数据库",
   "projectName": "SP数据库",
   "createdAt": "2026-05-29T14:19:16.082Z",
-  "updatedAt": "2026-06-01T17:38:22.542Z",
+  "updatedAt": "2026-06-03T02:44:15.892Z",
   "status": "active",
-  "phase": "plan",
-  "currentFocus": "清理楼层时冷表全量兜底快照",
-  "latestConclusion": "9 项验收全部通过。唯一发现的缺陷（main-popup-api.ts L76 缩进）已修复。spv3.7 在 parseKeyValueLines 类型守卫、clearApiConfig_ACU 三字段重置、rerankInstruction 默认值三处优于 spv6.9 参考实现。TypeScript 编译零错误，两条全链路闭环确认完整。**接受交付。**",
-  "currentBlocker": null,
-  "nextAction": null,
+  "phase": "implementation",
+  "currentFocus": "spv3.9.8.1 已发布，等待 housekeeping / tsconfig / 下版本号决策",
+  "latestConclusion": "spv3.9.8.1 发布完成：release commit 2f74398 推送至 main，annotated tag 905d8768 推送并指向 2f74398；9 个发布文件（5 src + 3 tests + 1 dist/index.bundle.js + 1 index.js）精确不含污染，build exitCode 0，架构 guard 0 违规，dist/index.bundle.js 与 index.js SHA256 一致且首行 `// ==UserScript==`；8/8 业务修复 TODO 全部 completed。",
+  "currentBlocker": "无技术阻塞。",
+  "nextAction": "由助手决定后续动作：是否清理 .limcode/* 与 .analysis-archive/* 临时产物、是否处理 tsconfig.json:19 baseUrl 弃用诊断、是否进入 spv3.9.8.2 计划。",
   "activeArtifacts": {
-    "plan": ".limcode/plans/修复多组并发填表快照覆盖与串行落盘计划.md",
+    "plan": ".limcode/plans/修复剧情推进自定义API温度硬编码优化计划.md",
     "review": ".limcode/review/spv69-spv37-完整移植验收报告.md"
   },
   "todos": [
     {
-      "id": "t1",
-      "content": "已补齐保存链路侦察：确认 processUpdatesBatch 的批次目标楼层、保存调用与自动/手动路径差异",
-      "status": "completed"
+      "id": "T1",
+      "content": "修复 src/service/ai/api-call.ts 中 buildCustomApiRequestBody_ACU 的 maxTokens 兜底链，将 || 改为 ??，保持 0 值不被误回退",
+      "status": "pending"
     },
     {
-      "id": "t2",
-      "content": "为表格填表完成阶段增加短队列：按聊天+隔离+目标楼层串行执行“恢复本组基底→解析应用→保存→触发快照”",
-      "status": "completed"
+      "id": "T2",
+      "content": "修复 callApiWithPlotPreset_ACU 与 callApi_ACU 两处 temperature: 0.7 覆盖，移除温度硬编码并让配置温度进入最终请求体",
+      "status": "pending"
     },
     {
-      "id": "t3",
-      "content": "调整 persistTablesToChatMessage_ACU 在锁内重新读取目标消息现有 tagData，并合并同楼层已有 independentData/incrementalData/modifiedKeys/updateGroupKeys",
-      "status": "completed"
+      "id": "T3",
+      "content": "修复 callAIWithPreset_ACU 中 max_tokens/maxTokens、temperature、top_p/topP 的 || 误回退与别名缺失问题",
+      "status": "pending"
     },
     {
-      "id": "t4",
-      "content": "修正 delta 模式下同楼层多组连续写入的基底重建逻辑，避免后写组用过期 currentTagData 覆盖先写组",
-      "status": "completed"
+      "id": "T4",
+      "content": "修复 src/presentation/bootstrap/api-groups/worldbook-ai-api.ts 的 callAI 自定义 API 请求体温度 || 回退与 topP 别名缺失问题",
+      "status": "pending"
     },
     {
-      "id": "t5",
-      "content": "修正 prepare/parse/save 对全局 currentJsonTableData_ACU 的并发依赖，确保并行 AI 调用不共享可变表对象",
-      "status": "completed"
+      "id": "T5",
+      "content": "修复 src/service/ai/prompt-builder/prompt-api-call.ts 酒馆预设 max_tokens || 4096 回退问题，并评估自定义 API overrides 是否需要最小化调整",
+      "status": "pending"
     },
     {
-      "id": "t6",
-      "content": "修正向量 vectorizeOnly/pending 与 checkpoint 写入：写入前在 scope 锁内重读最新聚合快照并重新合并 parent/active rows",
-      "status": "completed"
+      "id": "T6",
+      "content": "修复 src/service/summary/merge-executor.ts 与 src/service/summary/merge-logic.ts 中 max_tokens || 4096 的同类误回退，覆盖 Tavern 与 custom 分支",
+      "status": "pending"
     },
     {
-      "id": "t7",
-      "content": "补充并发回归测试：同一目标楼层两个 group 近同时完成后两组表、modifiedKeys、updateGroupKeys 均保留",
-      "status": "completed"
+      "id": "T7",
+      "content": "补充 tests/service/ai/api-call.test.ts，覆盖 buildCustomApiRequestBody_ACU、callApi_ACU、callApiWithPlotPreset_ACU、callAIWithPreset_ACU 的参数透传与 0 值边界",
+      "status": "pending"
     },
     {
-      "id": "t8",
-      "content": "补充全局运行时数据竞态测试：两个 group AI 返回顺序交错时，各自只应用并保存自己的 targetSheetKeys",
-      "status": "completed"
+      "id": "T8",
+      "content": "补充或扩展 worldbook-ai-api 对应测试，验证 bootstrap callAI 的 temperature=0、topP/top_p 与 maxTokens 透传行为",
+      "status": "pending"
     },
     {
-      "id": "t9",
-      "content": "补充向量快照回归测试：两次近同时完成的 flush/pending persist 顺序执行并在第二次基于第一次结果叠加",
-      "status": "completed"
+      "id": "T9",
+      "content": "补充 tests/service/summary/merge-executor.test.ts 与 tests/service/summary/merge-logic.test.ts，验证 max_tokens=0 不被 4096 覆盖",
+      "status": "pending"
     },
     {
-      "id": "t10",
-      "content": "执行限定测试、typecheck 与构建验证，记录失败项、风险与回滚方式",
-      "status": "completed"
+      "id": "T10",
+      "content": "执行针对性测试：tests/service/ai/api-call.test.ts、summary merge 测试、worldbook-ai-api 相关测试，并执行 npm run typecheck",
+      "status": "pending"
+    },
+    {
+      "id": "T11",
+      "content": "实施后进行独立验收，复查 src 中 temperature:0.7 与关键 || 回退残留、请求体参数优先级、Tavern/useMainApi/custom 路径兼容性",
+      "status": "pending"
     }
   ],
   "milestones": [],
   "risks": [],
   "log": [
     {
-      "at": "2026-05-29T14:19:16.082Z",
-      "type": "created",
-      "message": "初始化项目进度"
+      "at": "2026-06-02T15:35:24.162Z",
+      "type": "updated",
+      "refId": "spv3.9.7-progress-sync",
+      "message": ".limcode/progress.md 已同步：currentFocus = spv3.9.7 发布收口已完成，nextAction 切换到具体收口动作（子代理验收 + 助手裁决三项收尾决策）。"
     },
     {
-      "at": "2026-05-29T14:19:16.082Z",
+      "at": "2026-06-02T16:38:39.206Z",
       "type": "artifact_changed",
       "refId": "plan",
-      "message": "同步计划文档：.limcode/plans/清理楼层时冷表全量兜底快照.plan.md"
+      "message": "同步计划文档：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md"
     },
     {
-      "at": "2026-05-29T14:22:23.644Z",
+      "at": "2026-06-02T16:53:56.799Z",
       "type": "artifact_changed",
       "refId": "plan",
-      "message": "同步计划 TODO 快照：.limcode/plans/清理楼层时冷表全量兜底快照.plan.md"
+      "message": "同步计划 TODO 快照：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md"
     },
     {
-      "at": "2026-05-29T16:59:53.813Z",
+      "at": "2026-06-02T17:00:03.206Z",
       "type": "artifact_changed",
       "refId": "plan",
-      "message": "同步计划文档：.limcode/plans/spv69-spv37-移植rerank-指令参数-api-附加-body-参数.plan.md"
+      "message": "同步计划 TODO 快照：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md"
     },
     {
-      "at": "2026-05-29T17:15:45.783Z",
+      "at": "2026-06-02T17:08:36.847Z",
       "type": "artifact_changed",
       "refId": "plan",
-      "message": "同步计划 TODO 快照：.limcode/plans/spv69-spv37-移植rerank-指令参数-api-附加-body-参数.plan.md"
+      "message": "同步计划 TODO 快照：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md"
     },
     {
-      "at": "2026-05-29T17:28:11.358Z",
+      "at": "2026-06-02T17:33:54.941Z",
+      "type": "milestone_recorded",
+      "refId": "spv3.9.8",
+      "message": "spv3.9.8 发布完成：release commit 324c319 推送至 main，annotated tag 51bd12f 推送并指向 324c319；6 文件 244/244 测试通过，build exit 0，独立验收通过。"
+    },
+    {
+      "at": "2026-06-02T17:33:54.941Z",
+      "type": "updated",
+      "refId": "release-pipeline",
+      "message": "发布链路闭合：目标测试通过 → npm run build → 精确 git add 12 文件（dist/index.bundle.js 用 git add -f）→ git commit → git push origin main → git tag -a spv3.9.8 → git push origin spv3.9.8 → 远端与 tag object 校验。"
+    },
+    {
+      "at": "2026-06-02T17:37:39.349Z",
+      "type": "updated",
+      "refId": "spv3.9.8-cache-archive",
+      "message": "spv3.9.8 发布收口：.analysis-cache.md 已归档到 .analysis-archive/2026-06-03_0136_spv3.9.8-发布完成归档.md，并从根目录删除。"
+    },
+    {
+      "at": "2026-06-02T17:45:31.718Z",
       "type": "artifact_changed",
       "refId": "plan",
-      "message": "同步计划 TODO 快照：.limcode/plans/spv69-spv37-移植rerank-指令参数-api-附加-body-参数.plan.md"
+      "message": "同步计划文档：.limcode/plans/修复运行时base缺少稳定row_id退化checkpoint计划.md"
     },
     {
-      "at": "2026-05-29T17:36:32.362Z",
+      "at": "2026-06-02T18:08:09.268Z",
       "type": "artifact_changed",
       "refId": "plan",
-      "message": "同步计划文档：.limcode/plans/ui-补充移植rerankinstruction-textarea-bodyparamsexcludebodyparamsrequestheaders-textarea.plan.md"
+      "message": "同步计划 TODO 快照：.limcode/plans/修复运行时base缺少稳定row_id退化checkpoint计划.md"
     },
     {
-      "at": "2026-05-29T17:38:21.330Z",
+      "at": "2026-06-02T18:26:07.579Z",
       "type": "artifact_changed",
       "refId": "plan",
-      "message": "同步计划 TODO 快照：.limcode/plans/ui-补充移植rerankinstruction-textarea-bodyparamsexcludebodyparamsrequestheaders-textarea.plan.md"
+      "message": "同步计划文档：.limcode/plans/三项填表更新计数与新版API参数持久化优化计划.md"
     },
     {
-      "at": "2026-05-29T17:48:52.480Z",
-      "type": "artifact_changed",
-      "refId": "review",
-      "message": "同步审查文档：.limcode/review/spv69-spv37-完整移植验收报告.md"
-    },
-    {
-      "at": "2026-05-29T17:48:57.626Z",
-      "type": "artifact_changed",
-      "refId": "review",
-      "message": "同步审查结论：.limcode/review/spv69-spv37-完整移植验收报告.md"
-    },
-    {
-      "at": "2026-05-30T10:42:33.536Z",
+      "at": "2026-06-02T18:34:44.670Z",
       "type": "artifact_changed",
       "refId": "plan",
-      "message": "同步计划文档：.limcode/plans/修复-bodyparams-不支持-json-输入导致附加参数不生效.plan.md"
+      "message": "同步计划 TODO 快照：.limcode/plans/三项填表更新计数与新版API参数持久化优化计划.md"
     },
     {
-      "at": "2026-05-30T10:49:37.988Z",
-      "type": "artifact_changed",
-      "refId": "plan",
-      "message": "同步计划 TODO 快照：.limcode/plans/修复-bodyparams-不支持-json-输入导致附加参数不生效.plan.md"
+      "at": "2026-06-02T18:34:44.689Z",
+      "type": "updated",
+      "message": "三项填表更新计数与新版API参数持久化优化已实现，定向测试与构建通过，等待独立验收。"
     },
     {
-      "at": "2026-05-30T10:49:56.145Z",
+      "at": "2026-06-02T19:03:25.629Z",
       "type": "artifact_changed",
       "refId": "plan",
-      "message": "同步计划 TODO 快照：.limcode/plans/修复-bodyparams-不支持-json-输入导致附加参数不生效.plan.md"
+      "message": "同步计划 TODO 快照：.limcode/plans/三项填表更新计数与新版API参数持久化优化计划.md"
     },
     {
-      "at": "2026-06-01T15:51:27.049Z",
-      "type": "artifact_changed",
-      "refId": "plan",
-      "message": "同步计划文档：.limcode/plans/修复多组并发填表快照覆盖与串行落盘计划.md"
+      "at": "2026-06-02T19:20:05.487Z",
+      "type": "milestone_recorded",
+      "refId": "spv3.9.8.1",
+      "message": "spv3.9.8.1 发布完成：release commit 2f743984bd0b03d4ddf52548e54a5b94b88963ea 推送至 main，annotated tag 905d8768864fcf328eef29f1f89be192b39c9092 推送并指向 2f74398；9 个发布文件（5 src + 3 tests + 1 dist/index.bundle.js + 1 index.js）精确不含污染，build exitCode 0，架构 guard 0 违规，dist/index.bundle.js 与 index.js SHA256 一致（BA212FD20295DF30AB312636B7C4C5D09FA2669FED4D285678384D60977AD7DA），首行 `// ==UserScript==`；8/8 业务修复 TODO 全部 completed。"
     },
     {
-      "at": "2026-06-01T15:55:34.935Z",
-      "type": "artifact_changed",
-      "refId": "plan",
-      "message": "同步计划文档：.limcode/plans/修复多组并发填表快照覆盖与串行落盘计划.md"
+      "at": "2026-06-02T19:20:05.487Z",
+      "type": "updated",
+      "refId": "release-pipeline",
+      "message": "spv3.9.8.1 发布链路闭合：build 验证 → 精确 git add（src tests + git add -f dist/index.bundle.js + git add index.js）→ git commit → git push origin main → git tag -a spv3.9.8.1 → git push origin spv3.9.8.1 → 远端与 tag object 校验；publish-extension.sh 未触发。"
     },
     {
-      "at": "2026-06-01T16:41:06.852Z",
-      "type": "artifact_changed",
-      "refId": "plan",
-      "message": "同步计划 TODO 快照：.limcode/plans/修复多组并发填表快照覆盖与串行落盘计划.md"
+      "at": "2026-06-02T19:20:05.487Z",
+      "type": "updated",
+      "refId": "spv3.9.8.1-cache-archive",
+      "message": "spv3.9.8.1 发布收口：.analysis-cache.md 已归档到 .analysis-archive/2026-06-03_0318_spv3.9.8.1-发布完成归档.md（ASCII 文件名避 cmd 中文编码坑），并从根目录删除。"
     },
     {
-      "at": "2026-06-01T17:38:22.542Z",
+      "at": "2026-06-02T19:20:05.487Z",
+      "type": "updated",
+      "refId": "spv3.9.8.1-progress-sync",
+      "message": ".limcode/progress.md 已同步：currentFocus = spv3.9.8.1 已发布，等待 housekeeping / tsconfig / 下版本号决策；nextAction 切换到具体收口决策。"
+    },
+    {
+      "at": "2026-06-03T02:38:19.749Z",
       "type": "artifact_changed",
       "refId": "plan",
-      "message": "同步计划 TODO 快照：.limcode/plans/修复多组并发填表快照覆盖与串行落盘计划.md"
+      "message": "同步计划文档：.limcode/plans/修复剧情推进自定义API温度硬编码优化计划.md"
+    },
+    {
+      "at": "2026-06-03T02:44:15.892Z",
+      "type": "artifact_changed",
+      "refId": "plan",
+      "message": "同步计划文档：.limcode/plans/修复剧情推进自定义API温度硬编码优化计划.md"
     }
   ],
   "stats": {
     "milestonesTotal": 0,
     "milestonesCompleted": 0,
-    "todosTotal": 10,
-    "todosCompleted": 10,
+    "todosTotal": 11,
+    "todosCompleted": 0,
     "todosInProgress": 0,
     "todosCancelled": 0,
     "activeRisks": 0
   },
   "render": {
     "rendererVersion": 1,
-    "generatedAt": "2026-06-01T17:38:22.542Z",
-    "bodyHash": "sha256:b4dcfb99b70d16674f2894b554bbc17d066b6544828ada00497a38cf4913dc54"
+    "generatedAt": "2026-06-03T02:44:15.892Z",
+    "bodyHash": "sha256:fd502b1d739c46e2768b076b38aac095e47dfa258aab148ddd72554a1da3e072"
   }
 }
 <!-- LIMCODE_PROGRESS_METADATA_END -->
