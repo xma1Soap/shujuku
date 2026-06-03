@@ -69393,6 +69393,47 @@ Expected function or array of functions, received type ${typeof value}.`
         flushedKeys.clear();
     }
 
+    function acuSetTimeout(callback, delayMs) {
+        return getAcuHostWindow().setTimeout(callback, delayMs);
+    }
+    function acuClearTimeout(handle) {
+        if (handle === null || handle === undefined)
+            return;
+        getAcuHostWindow().clearTimeout(handle);
+    }
+    function acuSetInterval(callback, delayMs) {
+        return getAcuHostWindow().setInterval(callback, delayMs);
+    }
+    function acuClearInterval(handle) {
+        if (handle === null || handle === undefined)
+            return;
+        getAcuHostWindow().clearInterval(handle);
+    }
+    function acuRequestAnimationFrame(callback) {
+        const win = getAcuHostWindow();
+        if (typeof win.requestAnimationFrame === 'function') {
+            return win.requestAnimationFrame(callback);
+        }
+        return win.setTimeout(() => callback(Date.now()), 16);
+    }
+    function acuCancelAnimationFrame(handle) {
+        if (handle === null || handle === undefined)
+            return;
+        const win = getAcuHostWindow();
+        if (typeof win.cancelAnimationFrame === 'function') {
+            win.cancelAnimationFrame(handle);
+            return;
+        }
+        win.clearTimeout(handle);
+    }
+    function acuGetComputedStyle(el) {
+        return (el.ownerDocument.defaultView ?? getAcuHostWindow()).getComputedStyle(el);
+    }
+    function acuMatchesMedia(query) {
+        const win = getAcuHostWindow();
+        return typeof win.matchMedia === 'function' && win.matchMedia(query).matches;
+    }
+
     let nextDialogId = 1;
     function makeDialogId() {
         return `dialog-${nextDialogId++}`;
@@ -69714,25 +69755,49 @@ Expected function or array of functions, received type ${typeof value}.`
     }
     var AcuInput = /* @__PURE__ */ _export_sfc(_sfc_main$12, [["render", _sfc_render$12]]);
 
+    const DIALOG_LEAVE_MS = 160;
     const titleId = "acu-dialog-title";
     var _sfc_main$11 = /*@__PURE__*/ defineComponent({
         __name: 'AcuDialogHost',
         setup(__props, { expose: __expose }) {
             __expose();
             const dialog = useDialogStore();
-            const isChoiceDialog = computed(() => dialog.active?.kind === "choice");
+            const renderedDialog = ref(null);
+            const isClosing = ref(false);
+            const isChoiceDialog = computed(() => renderedDialog.value?.kind === "choice");
             const portalTarget = ref(null);
+            let closeTimer;
             onMounted(() => {
                 const doc = getAcuHostDocument();
                 portalTarget.value = doc.getElementById("acu-app-v2") ?? doc.body;
             });
-            const __returned__ = { dialog, titleId, isChoiceDialog, portalTarget, AcuBadge, AcuButton, AcuInput };
+            onBeforeUnmount(() => {
+                acuClearTimeout(closeTimer);
+            });
+            watch(() => dialog.active, (active) => {
+                acuClearTimeout(closeTimer);
+                closeTimer = undefined;
+                if (active) {
+                    renderedDialog.value = active;
+                    isClosing.value = false;
+                    return;
+                }
+                if (!renderedDialog.value)
+                    return;
+                isClosing.value = true;
+                closeTimer = acuSetTimeout(() => {
+                    renderedDialog.value = null;
+                    isClosing.value = false;
+                    closeTimer = undefined;
+                }, DIALOG_LEAVE_MS);
+            }, { immediate: true });
+            const __returned__ = { DIALOG_LEAVE_MS, dialog, titleId, renderedDialog, isClosing, isChoiceDialog, portalTarget, get closeTimer() { return closeTimer; }, set closeTimer(v) { closeTimer = v; }, AcuBadge, AcuButton, AcuInput };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-dialog-layer {\r\n  position: fixed;\r\n  inset: 0;\r\n  z-index: 9600;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  padding: 18px;\r\n  background: rgba(0, 0, 0, 0.52);\r\n  pointer-events: auto;\n}\n.acu-dialog {\r\n  width: min(440px, 100%);\r\n  max-height: min(560px, calc(100vh - 36px));\r\n  max-height: min(560px, calc(100dvh - 36px));\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\r\n  padding: 16px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  box-shadow: var(--acu-shadow);\r\n  overflow: auto;\n}\n.acu-dialog__header {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\n}\n.acu-dialog__header h2 {\r\n  min-width: 0;\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\r\n  line-height: 1.35;\r\n  font-weight: 700;\n}\n.acu-dialog__message {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\n}\n.acu-dialog__field {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.4;\n}\n.acu-dialog__actions {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\r\n  padding-top: 2px;\n}\n.acu-dialog__actions--stacked :deep(.acu-btn) {\r\n  flex: 1 1 128px;\n}\n.acu-dialog-enter-active,\r\n.acu-dialog-leave-active {\r\n  transition: opacity 0.16s ease;\n}\n.acu-dialog-enter-active .acu-dialog,\r\n.acu-dialog-leave-active .acu-dialog {\r\n  transition:\r\n    opacity 0.16s ease,\r\n    transform 0.16s ease;\n}\n.acu-dialog-enter-from,\r\n.acu-dialog-leave-to {\r\n  opacity: 0;\n}\n.acu-dialog-enter-from .acu-dialog,\r\n.acu-dialog-leave-to .acu-dialog {\r\n  opacity: 0;\r\n  transform: translateY(6px);\n}\n@media (max-width: 520px) {\n.acu-dialog-layer {\r\n    align-items: flex-end;\r\n    padding: 12px;\n}\n.acu-dialog {\r\n    width: 100%;\r\n    max-height: calc(100vh - 24px);\r\n    max-height: calc(100dvh - 24px);\n}\n.acu-dialog__actions,\r\n  .acu-dialog__actions--stacked {\r\n    display: grid;\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuDialogHost.vue#style-0");
+    injectSfcStyle("\n.acu-dialog-layer {\n  position: fixed;\r\n  inset: 0;\r\n  z-index: 9600;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  padding: 18px;\r\n  background: rgba(0, 0, 0, 0.52);\r\n  pointer-events: auto;\n  animation: acu-dialog-layer-in 0.16s ease-out both;\n}\n.acu-dialog-layer.is-closing {\n  pointer-events: none;\n  animation: acu-dialog-layer-out 0.16s ease-in both;\n}\n.acu-dialog {\r\n  width: min(440px, 100%);\r\n  max-height: min(560px, calc(100vh - 36px));\r\n  max-height: min(560px, calc(100dvh - 36px));\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\r\n  padding: 16px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  box-shadow: var(--acu-shadow);\r\n  overflow: auto;\n  animation: acu-dialog-panel-in 0.16s ease-out both;\n}\n.acu-dialog__header {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\n}\n.acu-dialog__header h2 {\r\n  min-width: 0;\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\r\n  line-height: 1.35;\r\n  font-weight: 700;\n}\n.acu-dialog__message {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\n}\n.acu-dialog__field {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.4;\n}\n.acu-dialog__actions {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\r\n  padding-top: 2px;\n}\n.acu-dialog__actions--stacked :deep(.acu-btn) {\r\n  flex: 1 1 128px;\n}\n.acu-dialog-layer.is-closing .acu-dialog {\n  animation: acu-dialog-panel-out 0.16s ease-in both;\n}\n@keyframes acu-dialog-layer-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-dialog-layer-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-dialog-panel-in {\nfrom {\n    opacity: 0;\n    transform: translateY(6px);\n}\nto {\n    opacity: 1;\n    transform: translateY(0);\n}\n}\n@keyframes acu-dialog-panel-out {\nfrom {\n    opacity: 1;\n    transform: translateY(0);\n}\nto {\n    opacity: 0;\n    transform: translateY(6px);\n}\n}\n@media (max-width: 520px) {\n.acu-dialog-layer {\r\n    align-items: flex-end;\r\n    padding: 12px;\n}\n.acu-dialog {\r\n    width: 100%;\r\n    max-height: calc(100vh - 24px);\r\n    max-height: calc(100dvh - 24px);\n}\n.acu-dialog__actions,\r\n  .acu-dialog__actions--stacked {\r\n    display: grid;\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuDialogHost.vue#style-0");
     var AcuDialogHost_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$Z = { class: "acu-dialog__header" };
@@ -69745,13 +69810,15 @@ Expected function or array of functions, received type ${typeof value}.`
     	return $setup.portalTarget ? (openBlock(), createBlock(Teleport, {
     		key: 0,
     		to: $setup.portalTarget
-    	}, [createVNode(Transition, { name: "acu-dialog" }, {
-    		default: withCtx(() => [$setup.dialog.active ? (openBlock(), createElementBlock("div", {
+    	}, [$setup.renderedDialog ? (openBlock(), createElementBlock(
+    		"div",
+    		{
     			key: 0,
-    			class: "acu-dialog-layer",
+    			class: normalizeClass(["acu-dialog-layer", { "is-closing": $setup.isClosing }]),
     			role: "presentation",
     			onClick: _cache[4] || (_cache[4] = withModifiers((...args) => $setup.dialog.cancelActive && $setup.dialog.cancelActive(...args), ["self"]))
-    		}, [createBaseVNode("section", {
+    		},
+    		[createBaseVNode("section", {
     			class: "acu-dialog",
     			role: "dialog",
     			"aria-modal": "true",
@@ -69761,15 +69828,15 @@ Expected function or array of functions, received type ${typeof value}.`
     			createBaseVNode("header", _hoisted_1$Z, [createBaseVNode(
     				"h2",
     				{ id: $setup.titleId },
-    				toDisplayString($setup.dialog.active.title),
+    				toDisplayString($setup.renderedDialog.title),
     				1
     				/* TEXT */
-    			), $setup.dialog.active.badge ? (openBlock(), createBlock($setup["AcuBadge"], {
+    			), $setup.renderedDialog.badge ? (openBlock(), createBlock($setup["AcuBadge"], {
     				key: 0,
-    				variant: $setup.dialog.active.badge.variant || "neutral"
+    				variant: $setup.renderedDialog.badge.variant || "neutral"
     			}, {
     				default: withCtx(() => [createTextVNode(
-    					toDisplayString($setup.dialog.active.badge.label),
+    					toDisplayString($setup.renderedDialog.badge.label),
     					1
     					/* TEXT */
     				)]),
@@ -69778,21 +69845,21 @@ Expected function or array of functions, received type ${typeof value}.`
     			createBaseVNode(
     				"p",
     				_hoisted_2$P,
-    				toDisplayString($setup.dialog.active.message),
+    				toDisplayString($setup.renderedDialog.message),
     				1
     				/* TEXT */
     			),
-    			$setup.dialog.active.kind === "prompt" ? (openBlock(), createElementBlock("label", _hoisted_3$E, [createBaseVNode(
+    			$setup.renderedDialog.kind === "prompt" ? (openBlock(), createElementBlock("label", _hoisted_3$E, [createBaseVNode(
     				"span",
     				null,
-    				toDisplayString($setup.dialog.active.label),
+    				toDisplayString($setup.renderedDialog.label),
     				1
     				/* TEXT */
     			), createVNode($setup["AcuInput"], {
     				modelValue: $setup.dialog.inputValue,
     				"onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => $setup.dialog.inputValue = $event),
     				autocomplete: "off",
-    				placeholder: $setup.dialog.active.placeholder,
+    				placeholder: $setup.renderedDialog.placeholder,
     				onKeyup: _cache[1] || (_cache[1] = withKeys(($event) => $setup.dialog.submitActive(), ["enter"]))
     			}, null, 8, ["modelValue", "placeholder"])])) : createCommentVNode("v-if", true),
     			createBaseVNode(
@@ -69804,7 +69871,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					[(openBlock(true), createElementBlock(
     						Fragment,
     						null,
-    						renderList($setup.dialog.active.actions, (action) => {
+    						renderList($setup.renderedDialog.actions, (action) => {
     							return openBlock(), createBlock($setup["AcuButton"], {
     								key: action.value,
     								variant: action.variant || "default",
@@ -69822,7 +69889,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						/* KEYED_FRAGMENT */
     					)), createVNode($setup["AcuButton"], { onClick: $setup.dialog.cancelActive }, {
     						default: withCtx(() => [createTextVNode(
-    							toDisplayString($setup.dialog.active.cancelLabel || "取消"),
+    							toDisplayString($setup.renderedDialog.cancelLabel || "取消"),
     							1
     							/* TEXT */
     						)]),
@@ -69835,18 +69902,18 @@ Expected function or array of functions, received type ${typeof value}.`
     					{ key: 1 },
     					[createVNode($setup["AcuButton"], { onClick: $setup.dialog.cancelActive }, {
     						default: withCtx(() => [createTextVNode(
-    							toDisplayString($setup.dialog.active.cancelLabel || "取消"),
+    							toDisplayString($setup.renderedDialog.cancelLabel || "取消"),
     							1
     							/* TEXT */
     						)]),
     						_: 1
     					}, 8, ["onClick"]), createVNode($setup["AcuButton"], {
-    						variant: $setup.dialog.active.confirmVariant || "primary",
+    						variant: $setup.renderedDialog.confirmVariant || "primary",
     						disabled: $setup.dialog.promptConfirmDisabled,
     						onClick: _cache[2] || (_cache[2] = ($event) => $setup.dialog.submitActive())
     					}, {
     						default: withCtx(() => [createTextVNode(
-    							toDisplayString($setup.dialog.active.confirmLabel || "确认"),
+    							toDisplayString($setup.renderedDialog.confirmLabel || "确认"),
     							1
     							/* TEXT */
     						)]),
@@ -69858,9 +69925,10 @@ Expected function or array of functions, received type ${typeof value}.`
     				2
     				/* CLASS */
     			)
-    		])])) : createCommentVNode("v-if", true)]),
-    		_: 1
-    	})], 8, ["to"])) : createCommentVNode("v-if", true);
+    		])],
+    		2
+    		/* CLASS */
+    	)) : createCommentVNode("v-if", true)], 8, ["to"])) : createCommentVNode("v-if", true);
     }
     var AcuDialogHost = /* @__PURE__ */ _export_sfc(_sfc_main$11, [["render", _sfc_render$11]]);
 
@@ -69983,6 +70051,7 @@ Expected function or array of functions, received type ${typeof value}.`
     const DEFAULT_MAX_ITEMS = 4;
     let nextToastId = 1;
     const dismissTimers = new Map();
+    let nextClearVersion = 0;
     function makeToastId() {
         return `toast-${nextToastId++}`;
     }
@@ -70005,7 +70074,7 @@ Expected function or array of functions, received type ${typeof value}.`
         const timer = dismissTimers.get(id);
         if (timer === undefined)
             return;
-        clearTimeout(timer);
+        acuClearTimeout(timer);
         dismissTimers.delete(id);
     }
     function resolveDuration(kind, options) {
@@ -70016,6 +70085,7 @@ Expected function or array of functions, received type ${typeof value}.`
     const useToastStore = defineStore("acu-v2-toast", {
         state: () => ({
             items: [],
+            clearVersion: 0,
         }),
         actions: {
             notify(kind, text, options = {}) {
@@ -70036,7 +70106,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 this.items.push(item);
                 this.pruneToMax(options.maxItems ?? DEFAULT_MAX_ITEMS);
                 if (this.items.some((current) => current.id === id) && durationMs > 0) {
-                    dismissTimers.set(id, setTimeout(() => this.dismiss(id), durationMs));
+                    dismissTimers.set(id, acuSetTimeout(() => this.dismiss(id), durationMs));
                 }
                 return id;
             },
@@ -70070,7 +70140,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 item.dismissible = options.dismissible !== false;
                 item.action = options.action;
                 if (item.durationMs > 0) {
-                    dismissTimers.set(id, setTimeout(() => this.dismiss(id), item.durationMs));
+                    dismissTimers.set(id, acuSetTimeout(() => this.dismiss(id), item.durationMs));
                 }
                 return true;
             },
@@ -70079,6 +70149,7 @@ Expected function or array of functions, received type ${typeof value}.`
                     clearDismissTimer(item.id);
                 }
                 this.items = [];
+                this.clearVersion = ++nextClearVersion;
             },
             pruneToMax(maxItems) {
                 const max = Math.max(1, Math.trunc(maxItems));
@@ -70093,12 +70164,16 @@ Expected function or array of functions, received type ${typeof value}.`
         },
     });
 
+    const TOAST_LEAVE_MS = 160;
     var _sfc_main$_ = /*@__PURE__*/ defineComponent({
         __name: 'AcuToastViewport',
         setup(__props, { expose: __expose }) {
             __expose();
             const toast = useToastStore();
             const portalTarget = ref(null);
+            const renderedItems = ref([]);
+            const leaveTimers = new Map();
+            let observedClearVersion = toast.clearVersion;
             function iconForKind(kind) {
                 if (kind === "success")
                     return "fa-solid fa-check";
@@ -70121,13 +70196,59 @@ Expected function or array of functions, received type ${typeof value}.`
                 const doc = getAcuHostDocument();
                 portalTarget.value = doc.getElementById("acu-app-v2") ?? doc.body;
             });
-            const __returned__ = { toast, portalTarget, iconForKind, runAction, AcuButton, AcuIconButton };
+            onBeforeUnmount(() => {
+                for (const timer of leaveTimers.values()) {
+                    acuClearTimeout(timer);
+                }
+                leaveTimers.clear();
+            });
+            watch(() => [toast.items, toast.clearVersion], ([items, clearVersion]) => {
+                if (clearVersion !== observedClearVersion) {
+                    observedClearVersion = clearVersion;
+                    for (const timer of leaveTimers.values()) {
+                        acuClearTimeout(timer);
+                    }
+                    leaveTimers.clear();
+                    renderedItems.value = [];
+                    return;
+                }
+                const nextById = new Map(items.map((item) => [item.id, item]));
+                const currentById = new Map(renderedItems.value.map((entry) => [entry.item.id, entry]));
+                const nextRendered = [];
+                for (const item of items) {
+                    const existing = currentById.get(item.id);
+                    if (existing) {
+                        acuClearTimeout(leaveTimers.get(item.id));
+                        leaveTimers.delete(item.id);
+                        existing.item = item;
+                        existing.isClosing = false;
+                        nextRendered.push(existing);
+                    }
+                    else {
+                        nextRendered.push({ item, isClosing: false });
+                    }
+                }
+                for (const entry of renderedItems.value) {
+                    if (nextById.has(entry.item.id))
+                        continue;
+                    if (!entry.isClosing) {
+                        entry.isClosing = true;
+                        leaveTimers.set(entry.item.id, acuSetTimeout(() => {
+                            renderedItems.value = renderedItems.value.filter((current) => current.item.id !== entry.item.id);
+                            leaveTimers.delete(entry.item.id);
+                        }, TOAST_LEAVE_MS));
+                    }
+                    nextRendered.push(entry);
+                }
+                renderedItems.value = nextRendered;
+            }, { immediate: true, deep: true });
+            const __returned__ = { TOAST_LEAVE_MS, toast, portalTarget, renderedItems, leaveTimers, get observedClearVersion() { return observedClearVersion; }, set observedClearVersion(v) { observedClearVersion = v; }, iconForKind, runAction, AcuButton, AcuIconButton };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-toast-viewport {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  z-index: 9410;\r\n  box-sizing: border-box;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  min-height: 100%;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\r\n  pointer-events: none;\n}\n.acu-toast-viewport,\r\n.acu-toast-viewport * {\r\n  box-sizing: border-box;\n}\n.acu-toast-viewport__list {\r\n  position: absolute;\r\n  right: 18px;\r\n  bottom: 18px;\r\n  width: min(360px, calc(100% - 36px));\r\n  max-height: calc(100% - 36px);\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  margin: 0;\r\n  padding: 0;\r\n  overflow: hidden auto;\r\n  list-style: none;\n}\n.acu-v2-toast {\r\n  position: relative;\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: 18px minmax(0, 1fr) auto auto;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 10px;\r\n  overflow: hidden;\r\n  border: 1px solid color-mix(in srgb, var(--acu-border) 70%, transparent);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  box-shadow: none;\r\n  color: var(--acu-text-2);\r\n  pointer-events: auto;\n}\n.acu-v2-toast__icon {\r\n  min-width: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1;\n}\n.acu-v2-toast--success .acu-v2-toast__icon {\r\n  color: var(--acu-success);\n}\n.acu-v2-toast--warning .acu-v2-toast__icon {\r\n  color: var(--acu-warning);\n}\n.acu-v2-toast--error .acu-v2-toast__icon {\r\n  color: var(--acu-danger);\n}\n.acu-v2-toast__text {\r\n  min-width: 0;\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-toast__action {\r\n  white-space: nowrap;\n}\n.acu-v2-toast__dismiss {\r\n  flex: 0 0 auto;\n}\n.acu-toast-enter-active,\r\n.acu-toast-leave-active,\r\n.acu-toast-move {\r\n  transition:\r\n    opacity 0.16s ease,\r\n    transform 0.16s ease;\n}\n.acu-toast-enter-from,\r\n.acu-toast-leave-to {\r\n  opacity: 0;\r\n  transform: translateY(6px);\n}\n.acu-toast-leave-active {\r\n  position: absolute;\r\n  right: 0;\r\n  left: 0;\n}\n@media (max-width: 640px) {\n.acu-toast-viewport__list {\r\n    right: 12px;\r\n    bottom: calc(12px + env(safe-area-inset-bottom, 0px));\r\n    left: 12px;\r\n    width: auto;\r\n    max-height: calc(100% - 24px - env(safe-area-inset-bottom, 0px));\n}\n.acu-v2-toast {\r\n    grid-template-columns: 18px minmax(0, 1fr) auto;\n}\n.acu-v2-toast__action {\r\n    grid-column: 2 / 4;\r\n    justify-self: start;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuToastViewport.vue#style-0");
+    injectSfcStyle("\n.acu-toast-viewport {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  z-index: 9410;\r\n  box-sizing: border-box;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  min-height: 100%;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\r\n  pointer-events: none;\n}\n.acu-toast-viewport,\r\n.acu-toast-viewport * {\r\n  box-sizing: border-box;\n}\n.acu-toast-viewport__list {\r\n  position: absolute;\r\n  right: 18px;\r\n  bottom: 18px;\r\n  width: min(360px, calc(100% - 36px));\r\n  max-height: calc(100% - 36px);\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  margin: 0;\r\n  padding: 0;\r\n  overflow: hidden auto;\r\n  list-style: none;\n}\n.acu-v2-toast {\n  position: relative;\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: 18px minmax(0, 1fr) auto auto;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 10px;\r\n  overflow: hidden;\r\n  border: 1px solid color-mix(in srgb, var(--acu-border) 70%, transparent);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  box-shadow: none;\r\n  color: var(--acu-text-2);\n  pointer-events: auto;\n  animation: acu-toast-in 0.16s ease-out both;\n}\n.acu-v2-toast.is-closing {\n  pointer-events: none;\n  animation: acu-toast-out 0.16s ease-in both;\n}\n.acu-v2-toast__icon {\r\n  min-width: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1;\n}\n.acu-v2-toast--success .acu-v2-toast__icon {\r\n  color: var(--acu-success);\n}\n.acu-v2-toast--warning .acu-v2-toast__icon {\r\n  color: var(--acu-warning);\n}\n.acu-v2-toast--error .acu-v2-toast__icon {\r\n  color: var(--acu-danger);\n}\n.acu-v2-toast__text {\r\n  min-width: 0;\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-toast__action {\r\n  white-space: nowrap;\n}\n.acu-v2-toast__dismiss {\r\n  flex: 0 0 auto;\n}\n@keyframes acu-toast-in {\nfrom {\n    opacity: 0;\n    transform: translateY(6px);\n}\nto {\n    opacity: 1;\n    transform: translateY(0);\n}\n}\n@keyframes acu-toast-out {\nfrom {\n    opacity: 1;\n    transform: translateY(0);\n}\nto {\n    opacity: 0;\n    transform: translateY(6px);\n}\n}\n@media (max-width: 640px) {\n.acu-toast-viewport__list {\r\n    right: 12px;\r\n    bottom: calc(12px + env(safe-area-inset-bottom, 0px));\r\n    left: 12px;\r\n    width: auto;\r\n    max-height: calc(100% - 24px - env(safe-area-inset-bottom, 0px));\n}\n.acu-v2-toast {\r\n    grid-template-columns: 18px minmax(0, 1fr) auto;\n}\n.acu-v2-toast__action {\r\n    grid-column: 2 / 4;\r\n    justify-self: start;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuToastViewport.vue#style-0");
     var AcuToastViewport_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$W = {
@@ -70137,73 +70258,71 @@ Expected function or array of functions, received type ${typeof value}.`
     	"aria-label": "通知",
     	style: { zIndex: 9410 }
     };
-    const _hoisted_2$N = ["role"];
-    const _hoisted_3$D = {
+    const _hoisted_2$N = { class: "acu-toast-viewport__list" };
+    const _hoisted_3$D = ["role"];
+    const _hoisted_4$u = {
     	class: "acu-v2-toast__icon",
     	"aria-hidden": "true"
     };
-    const _hoisted_4$u = { class: "acu-v2-toast__text" };
+    const _hoisted_5$o = { class: "acu-v2-toast__text" };
     function _sfc_render$_(_ctx, _cache, $props, $setup, $data, $options) {
     	return $setup.portalTarget ? (openBlock(), createBlock(Teleport, {
     		key: 0,
     		to: $setup.portalTarget
-    	}, [$setup.toast.items.length ? (openBlock(), createElementBlock("div", _hoisted_1$W, [createVNode(TransitionGroup, {
-    		name: "acu-toast",
-    		tag: "ol",
-    		class: "acu-toast-viewport__list"
-    	}, {
-    		default: withCtx(() => [(openBlock(true), createElementBlock(
-    			Fragment,
-    			null,
-    			renderList($setup.toast.items, (item) => {
-    				return openBlock(), createElementBlock("li", {
-    					key: item.id,
-    					class: normalizeClass(["acu-v2-toast", `acu-v2-toast--${item.kind}`]),
-    					role: item.kind === "error" ? "alert" : "status"
-    				}, [
-    					createBaseVNode("span", _hoisted_3$D, [createBaseVNode(
-    						"i",
-    						{ class: normalizeClass($setup.iconForKind(item.kind)) },
-    						null,
-    						2
-    						/* CLASS */
-    					)]),
-    					createBaseVNode(
-    						"p",
-    						_hoisted_4$u,
-    						toDisplayString(item.text),
+    	}, [$setup.renderedItems.length ? (openBlock(), createElementBlock("div", _hoisted_1$W, [createBaseVNode("ol", _hoisted_2$N, [(openBlock(true), createElementBlock(
+    		Fragment,
+    		null,
+    		renderList($setup.renderedItems, (entry) => {
+    			return openBlock(), createElementBlock("li", {
+    				key: entry.item.id,
+    				class: normalizeClass([
+    					"acu-v2-toast",
+    					`acu-v2-toast--${entry.item.kind}`,
+    					{ "is-closing": entry.isClosing }
+    				]),
+    				role: entry.item.kind === "error" ? "alert" : "status"
+    			}, [
+    				createBaseVNode("span", _hoisted_4$u, [createBaseVNode(
+    					"i",
+    					{ class: normalizeClass($setup.iconForKind(entry.item.kind)) },
+    					null,
+    					2
+    					/* CLASS */
+    				)]),
+    				createBaseVNode(
+    					"p",
+    					_hoisted_5$o,
+    					toDisplayString(entry.item.text),
+    					1
+    					/* TEXT */
+    				),
+    				entry.item.action ? (openBlock(), createBlock($setup["AcuButton"], {
+    					key: 0,
+    					class: "acu-v2-toast__action",
+    					size: "sm",
+    					variant: entry.item.action.variant || "default",
+    					onClick: ($event) => $setup.runAction(entry.item)
+    				}, {
+    					default: withCtx(() => [createTextVNode(
+    						toDisplayString(entry.item.action.label),
     						1
     						/* TEXT */
-    					),
-    					item.action ? (openBlock(), createBlock($setup["AcuButton"], {
-    						key: 0,
-    						class: "acu-v2-toast__action",
-    						size: "sm",
-    						variant: item.action.variant || "default",
-    						onClick: ($event) => $setup.runAction(item)
-    					}, {
-    						default: withCtx(() => [createTextVNode(
-    							toDisplayString(item.action.label),
-    							1
-    							/* TEXT */
-    						)]),
-    						_: 2
-    					}, 1032, ["variant", "onClick"])) : createCommentVNode("v-if", true),
-    					item.dismissible ? (openBlock(), createBlock($setup["AcuIconButton"], {
-    						key: 1,
-    						class: "acu-v2-toast__dismiss",
-    						icon: "fa-solid fa-xmark",
-    						size: "sm",
-    						title: "关闭通知",
-    						onClick: ($event) => $setup.toast.dismiss(item.id)
-    					}, null, 8, ["onClick"])) : createCommentVNode("v-if", true)
-    				], 10, _hoisted_2$N);
-    			}),
-    			128
-    			/* KEYED_FRAGMENT */
-    		))]),
-    		_: 1
-    	})])) : createCommentVNode("v-if", true)], 8, ["to"])) : createCommentVNode("v-if", true);
+    					)]),
+    					_: 2
+    				}, 1032, ["variant", "onClick"])) : createCommentVNode("v-if", true),
+    				entry.item.dismissible ? (openBlock(), createBlock($setup["AcuIconButton"], {
+    					key: 1,
+    					class: "acu-v2-toast__dismiss",
+    					icon: "fa-solid fa-xmark",
+    					size: "sm",
+    					title: "关闭通知",
+    					onClick: ($event) => $setup.toast.dismiss(entry.item.id)
+    				}, null, 8, ["onClick"])) : createCommentVNode("v-if", true)
+    			], 10, _hoisted_3$D);
+    		}),
+    		128
+    		/* KEYED_FRAGMENT */
+    	))])])) : createCommentVNode("v-if", true)], 8, ["to"])) : createCommentVNode("v-if", true);
     }
     var AcuToastViewport = /* @__PURE__ */ _export_sfc(_sfc_main$_, [["render", _sfc_render$_]]);
 
@@ -70219,6 +70338,7 @@ Expected function or array of functions, received type ${typeof value}.`
             const trackRef = ref(null);
             const activeId = ref(props.items[0]?.id ?? '');
             let scrollContainer = null;
+            let resizeWindow = null;
             let frame = 0;
             let programmaticTargetId = '';
             const USER_SCROLL_KEYS = new Set([
@@ -70315,7 +70435,8 @@ Expected function or array of functions, received type ${typeof value}.`
                 queueActiveUpdate();
             }
             function onUserScrollIntent(event) {
-                if (event instanceof KeyboardEvent && !USER_SCROLL_KEYS.has(event.key)) {
+                const key = 'key' in event ? String(event.key || '') : '';
+                if (key && !USER_SCROLL_KEYS.has(key)) {
                     return;
                 }
                 releaseProgrammaticTarget();
@@ -70349,20 +70470,17 @@ Expected function or array of functions, received type ${typeof value}.`
             function queueActiveUpdate() {
                 if (frame)
                     return;
-                if (typeof window.requestAnimationFrame === 'function') {
-                    frame = window.requestAnimationFrame(updateActiveFromViewport);
-                    return;
-                }
-                updateActiveFromViewport();
+                frame = acuRequestAnimationFrame(updateActiveFromViewport);
             }
             onMounted(() => {
                 void nextTick(() => {
                     scrollContainer = resolveScrollContainer();
+                    resizeWindow = ownerWindow();
                     scrollContainer.addEventListener('scroll', queueActiveUpdate, { passive: true });
                     scrollContainer.addEventListener('touchmove', onUserScrollIntent, { passive: true });
                     scrollContainer.addEventListener('wheel', onUserScrollIntent, { passive: true });
-                    window.addEventListener('resize', queueActiveUpdate, { passive: true });
-                    ownerWindow().addEventListener('keydown', onUserScrollIntent);
+                    resizeWindow.addEventListener('resize', queueActiveUpdate, { passive: true });
+                    resizeWindow.addEventListener('keydown', onUserScrollIntent);
                     queueActiveUpdate();
                 });
             });
@@ -70372,13 +70490,15 @@ Expected function or array of functions, received type ${typeof value}.`
                     scrollContainer.removeEventListener('touchmove', onUserScrollIntent);
                     scrollContainer.removeEventListener('wheel', onUserScrollIntent);
                 }
-                window.removeEventListener('resize', queueActiveUpdate);
-                ownerWindow().removeEventListener('keydown', onUserScrollIntent);
-                if (frame && typeof window.cancelAnimationFrame === 'function') {
-                    window.cancelAnimationFrame(frame);
+                if (resizeWindow) {
+                    resizeWindow.removeEventListener('resize', queueActiveUpdate);
+                    resizeWindow.removeEventListener('keydown', onUserScrollIntent);
+                    resizeWindow = null;
                 }
+                if (frame)
+                    acuCancelAnimationFrame(frame);
             });
-            const __returned__ = { props, rootRef, trackRef, activeId, get scrollContainer() { return scrollContainer; }, set scrollContainer(v) { scrollContainer = v; }, get frame() { return frame; }, set frame(v) { frame = v; }, get programmaticTargetId() { return programmaticTargetId; }, set programmaticTargetId(v) { programmaticTargetId = v; }, USER_SCROLL_KEYS, panelElements, ownerDocument, ownerWindow, resolveScrollContainer, keepActiveButtonVisible, scrollToPanel, lockProgrammaticTarget, releaseProgrammaticTarget, onUserScrollIntent, updateActiveFromViewport, queueActiveUpdate };
+            const __returned__ = { props, rootRef, trackRef, activeId, get scrollContainer() { return scrollContainer; }, set scrollContainer(v) { scrollContainer = v; }, get resizeWindow() { return resizeWindow; }, set resizeWindow(v) { resizeWindow = v; }, get frame() { return frame; }, set frame(v) { frame = v; }, get programmaticTargetId() { return programmaticTargetId; }, set programmaticTargetId(v) { programmaticTargetId = v; }, USER_SCROLL_KEYS, panelElements, ownerDocument, ownerWindow, resolveScrollContainer, keepActiveButtonVisible, scrollToPanel, lockProgrammaticTarget, releaseProgrammaticTarget, onUserScrollIntent, updateActiveFromViewport, queueActiveUpdate };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
@@ -71024,21 +71144,15 @@ Expected function or array of functions, received type ${typeof value}.`
         const collapsedTransform = options.collapsedTransform ?? 'translateY(-2px)';
         const expandedTransform = options.expandedTransform ?? 'translateY(0)';
         function prefersReducedMotion() {
-            return typeof window !== 'undefined'
-                && typeof window.matchMedia === 'function'
-                && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            return acuMatchesMedia('(prefers-reduced-motion: reduce)');
         }
         function scheduleFrame(callback) {
-            if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-                window.requestAnimationFrame(callback);
-                return;
-            }
-            window.setTimeout(callback, 16);
+            acuRequestAnimationFrame(callback);
         }
         function clearTransitionTimer(el) {
             const timer = transitionTimers.get(el);
             if (timer !== undefined) {
-                window.clearTimeout(timer);
+                acuClearTimeout(timer);
                 transitionTimers.delete(el);
             }
         }
@@ -71061,12 +71175,12 @@ Expected function or array of functions, received type ${typeof value}.`
             restoreOverflow(body);
         }
         function getBorderHeight(el) {
-            const style = window.getComputedStyle(el);
+            const style = acuGetComputedStyle(el);
             return (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.borderBottomWidth) || 0);
         }
         function getExpandedHeight(el) {
             const contentHeight = el.scrollHeight + getBorderHeight(el);
-            const maxHeight = window.getComputedStyle(el).maxHeight;
+            const maxHeight = acuGetComputedStyle(el).maxHeight;
             const parsedMax = Number.parseFloat(maxHeight);
             if (Number.isFinite(parsedMax) && parsedMax > 0) {
                 return Math.min(contentHeight, parsedMax);
@@ -71106,7 +71220,7 @@ Expected function or array of functions, received type ${typeof value}.`
                     finish();
             };
             el.addEventListener('transitionend', onEnd);
-            transitionTimers.set(el, window.setTimeout(finish, duration + 60));
+            transitionTimers.set(el, acuSetTimeout(finish, duration + 60));
         }
         function beforeEnter(el) {
             const body = el;
@@ -71317,7 +71431,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 return fontSize > 0 ? fontSize * 1.45 : 18;
             }
             function getRowsHeight(el, rows) {
-                const style = window.getComputedStyle(el);
+                const style = acuGetComputedStyle(el);
                 const verticalInset = parsePixel(style.paddingTop)
                     + parsePixel(style.paddingBottom)
                     + parsePixel(style.borderTopWidth)
@@ -71346,11 +71460,11 @@ Expected function or array of functions, received type ${typeof value}.`
             }
             function clearScheduledResize() {
                 if (resizeFrame !== null) {
-                    window.cancelAnimationFrame(resizeFrame);
+                    acuCancelAnimationFrame(resizeFrame);
                     resizeFrame = null;
                 }
                 if (resizeTimer !== null) {
-                    window.clearTimeout(resizeTimer);
+                    acuClearTimeout(resizeTimer);
                     resizeTimer = null;
                 }
             }
@@ -71358,11 +71472,11 @@ Expected function or array of functions, received type ${typeof value}.`
                 if (!props.autoResize)
                     return;
                 clearScheduledResize();
-                resizeFrame = window.requestAnimationFrame(() => {
+                resizeFrame = acuRequestAnimationFrame(() => {
                     resizeFrame = null;
                     resizeTextarea();
                 });
-                resizeTimer = window.setTimeout(() => {
+                resizeTimer = acuSetTimeout(() => {
                     resizeTimer = null;
                     resizeTextarea();
                 }, 60);
@@ -71398,7 +71512,7 @@ Expected function or array of functions, received type ${typeof value}.`
                     resizeTextarea();
                     scheduleTextareaResize();
                     watchSizeForAutoResize();
-                    void document.fonts?.ready.then(() => scheduleTextareaResize());
+                    void textareaRef.value?.ownerDocument.fonts?.ready.then(() => scheduleTextareaResize());
                 });
             });
             onBeforeUnmount(() => {
@@ -74433,6 +74547,9 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
+    injectSfcStyle("\n.acu-text {\n  margin: 0;\n  min-width: 0;\n}\n.acu-text--caption {\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: var(--acu-line-height-caption, 1.5);\n  color: var(--acu-text-3);\n}\n.acu-text--meta {\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n  color: var(--acu-text-3);\n}\n.acu-text--hint {\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-readable, 1.55);\n  color: var(--acu-text-3);\n}\n.acu-text--status-line {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-wrap: wrap;\n  min-height: 22px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n  color: var(--acu-text-3);\n}\n.acu-text--empty {\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: var(--acu-line-height-readable, 1.55);\n  color: var(--acu-text-3);\n  text-align: center;\n}\n.acu-text--error {\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n  color: var(--acu-danger);\n}\n.acu-text--section-label {\n  font-size: var(--acu-font-size-section-title, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 600;\n  color: var(--acu-text-2);\n}\n.acu-text--list-title {\n  font-size: var(--acu-font-size-list-title, 13px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 500;\n  color: var(--acu-text-1);\n}\n:deep(.acu-text__value) {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n", "src/presentation-v2/components/_lib/AcuText.vue#style-0");
+    var AcuText_vue_vue_type_style_index_0_lang = null;
+
     function _sfc_render$L(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createBlock(resolveDynamicComponent($props.as), { class: normalizeClass(["acu-text", $setup.variantClass]) }, {
     		default: withCtx(() => [renderSlot(_ctx.$slots, "default")]),
@@ -74508,7 +74625,7 @@ Expected function or array of functions, received type ${typeof value}.`
                     return;
                 isClosing.value = true;
                 clearCloseTimer();
-                closeTimer = setTimeout(() => {
+                closeTimer = acuSetTimeout(() => {
                     isRendered.value = false;
                     isClosing.value = false;
                     closeTimer = undefined;
@@ -74517,7 +74634,7 @@ Expected function or array of functions, received type ${typeof value}.`
             function clearCloseTimer() {
                 if (closeTimer === undefined)
                     return;
-                clearTimeout(closeTimer);
+                acuClearTimeout(closeTimer);
                 closeTimer = undefined;
             }
             const __returned__ = { props, emit, resolvedWidth, isRendered, isClosing, closeGuardPending, DRAWER_LEAVE_MS, get closeTimer() { return closeTimer; }, set closeTimer(v) { closeTimer = v; }, guard, requestClose, requestBack, showDrawer, hideDrawer, clearCloseTimer, AcuIconButton };
@@ -75460,7 +75577,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-plot-drawer__create-btn {\r\n  width: 100%;\n}\n.acu-v2-plot-drawer__empty {\r\n  margin-top: 20px;\n}\n.acu-v2-plot-drawer__actions {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\r\n  padding-top: 12px;\r\n  margin-top: 12px;\n}\r\n\r\n/* manage list */\n.acu-v2-manage-list {\r\n  list-style: none;\r\n  margin: 0;\r\n  padding: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-manage-item {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  padding: 10px 12px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-manage-item:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info {\r\n  flex: 1;\r\n  min-width: 0;\n}\n.acu-v2-manage-item__name {\r\n  display: block;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta {\r\n  display: block;\r\n  margin-top: 2px;\n}\n.acu-v2-manage-item__actions {\r\n  display: flex;\r\n  gap: 4px;\n}\r\n\r\n/* form */\n.acu-v2-form {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-form__section {\r\n  min-width: 0;\r\n  margin: 0;\r\n  padding: 0 0 14px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-form__section:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-form__section legend {\r\n  padding: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-section-title, 12px);\r\n  font-weight: 600;\n}\n.acu-v2-plot-drawer__rules {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  min-width: 0;\n}\n.acu-v2-error {\r\n  padding: 8px 10px;\r\n  background: color-mix(in srgb, var(--acu-danger) 10%, transparent);\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\n}\r\n", "src/presentation-v2/components/PlotPresetDrawer.vue#style-0");
+    injectSfcStyle("\n.acu-v2-plot-drawer__create-btn {\r\n  width: 100%;\n}\n.acu-v2-plot-drawer__empty {\r\n  margin-top: 20px;\n}\n.acu-v2-plot-drawer__actions {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\r\n  padding-top: 12px;\r\n  margin-top: 12px;\n}\r\n\r\n/* manage list */\n.acu-v2-manage-list {\r\n  list-style: none;\r\n  margin: 0;\r\n  padding: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-manage-item {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  padding: 10px 12px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-manage-item:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info {\r\n  flex: 1;\r\n  min-width: 0;\n}\n.acu-v2-manage-item__name {\n  display: block;\n  font-size: var(--acu-font-size-list-title, 13px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 500;\n  color: var(--acu-text-1);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta {\n  display: block;\n  margin-top: 2px;\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: var(--acu-line-height-caption, 1.5);\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions {\r\n  display: flex;\r\n  gap: 4px;\n}\r\n\r\n/* form */\n.acu-v2-form {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-form__section {\r\n  min-width: 0;\r\n  margin: 0;\r\n  padding: 0 0 14px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-form__section:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-form__section legend {\r\n  padding: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-section-title, 12px);\r\n  font-weight: 600;\n}\n.acu-v2-plot-drawer__rules {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  min-width: 0;\n}\n.acu-v2-error {\r\n  padding: 8px 10px;\r\n  background: color-mix(in srgb, var(--acu-danger) 10%, transparent);\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\n}\r\n", "src/presentation-v2/components/PlotPresetDrawer.vue#style-0");
     var PlotPresetDrawer_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$D = {
@@ -75855,7 +75972,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-plot-preset-panel__status-line {\r\n  margin: 0 0 10px;\n}\n.acu-plot-preset-panel__select-row {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  margin-bottom: 12px;\r\n  min-width: 0;\n}\r\n", "src/presentation-v2/components/PlotPresetPanel.vue#style-0");
+    injectSfcStyle("\n.acu-plot-preset-panel__status-line {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-plot-preset-panel__select-row {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  margin-bottom: 12px;\r\n  min-width: 0;\n}\r\n", "src/presentation-v2/components/PlotPresetPanel.vue#style-0");
     var PlotPresetPanel_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$C = { class: "acu-text__value" };
@@ -76071,7 +76188,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-table-drawer__top-actions {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\n}\n.acu-v2-manage-list {\r\n  list-style: none;\r\n  margin: 0;\r\n  padding: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-manage-item {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  padding: 10px 12px;\r\n  border: 0;\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-manage-item:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info {\r\n  flex: 1;\r\n  min-width: 0;\n}\n.acu-v2-manage-item__name {\r\n  display: block;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta {\r\n  display: block;\r\n  margin-top: 2px;\n}\n.acu-v2-manage-item__actions {\r\n  display: flex;\r\n  gap: 4px;\n}\n.acu-v2-table-drawer__empty {\r\n  margin: 12px 0;\n}\r\n\r\n", "src/presentation-v2/components/TablePresetDrawer.vue#style-0");
+    injectSfcStyle("\n.acu-v2-table-drawer__top-actions {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\n}\n.acu-v2-manage-list {\r\n  list-style: none;\r\n  margin: 0;\r\n  padding: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-manage-item {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  padding: 10px 12px;\r\n  border: 0;\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-manage-item:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info {\r\n  flex: 1;\r\n  min-width: 0;\n}\n.acu-v2-manage-item__name {\n  display: block;\n  font-size: var(--acu-font-size-list-title, 13px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 500;\n  color: var(--acu-text-1);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta {\n  display: block;\n  margin-top: 2px;\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: var(--acu-line-height-caption, 1.5);\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions {\r\n  display: flex;\r\n  gap: 4px;\n}\n.acu-v2-table-drawer__empty {\r\n  margin: 12px 0;\n}\r\n\r\n", "src/presentation-v2/components/TablePresetDrawer.vue#style-0");
     var TablePresetDrawer_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$B = { class: "acu-v2-table-drawer__top-actions" };
@@ -77323,7 +77440,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-table-template-panel__status-line {\r\n  margin: 0 0 10px;\n}\n.acu-table-template-panel__preset-row {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(2, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  min-width: 0;\n}\n.acu-table-template-panel__action-area {\r\n  margin-top: 10px;\n}\n.acu-table-template-panel__visualizer-button {\r\n  width: 100%;\n}\r\n\r\n", "src/presentation-v2/components/TableTemplatePresetPanel.vue#style-0");
+    injectSfcStyle("\n.acu-table-template-panel__status-line {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-table-template-panel__preset-row {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(2, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  min-width: 0;\n}\n.acu-table-template-panel__action-area {\r\n  margin-top: 10px;\n}\n.acu-table-template-panel__visualizer-button {\r\n  width: 100%;\n}\r\n\r\n", "src/presentation-v2/components/TableTemplatePresetPanel.vue#style-0");
     var TableTemplatePresetPanel_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$A = { class: "acu-text__value" };
@@ -78895,7 +79012,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-dashboard-page {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-dashboard-page__toggle-list {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\r\n  margin-top: 14px;\n}\n.acu-v2-dashboard-page__health-list {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-item {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: 30px minmax(0, 1fr) max-content;\r\n  column-gap: 10px;\r\n  row-gap: 8px;\r\n  align-items: center;\r\n  padding: 10px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  transition:\r\n    border-color 0.15s ease,\r\n    background 0.15s ease;\n}\n.acu-v2-dashboard-page__health-item--error {\r\n  border-color: color-mix(in srgb, var(--acu-danger) 38%, var(--acu-border));\n}\n.acu-v2-dashboard-page__health-icon {\r\n  width: 30px;\r\n  height: 30px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-2);\n}\n.acu-v2-dashboard-page__health-item--ok .acu-v2-dashboard-page__health-icon {\r\n  color: var(--acu-success);\r\n  background: color-mix(in srgb, var(--acu-success) 10%, transparent);\n}\n.acu-v2-dashboard-page__health-item--warning\r\n  .acu-v2-dashboard-page__health-icon {\r\n  color: var(--acu-warning);\r\n  background: color-mix(in srgb, var(--acu-warning) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-item--error .acu-v2-dashboard-page__health-icon {\r\n  color: var(--acu-danger);\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-body {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-dashboard-page__health-heading {\r\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-heading strong {\r\n  min-width: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 650;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-dashboard-page__health-body p {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  line-height: 1.55;\n}\n.acu-v2-dashboard-page__health-side {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-end;\r\n  gap: 8px;\r\n  justify-self: end;\n}\n.acu-v2-dashboard-page__health-action {\r\n  white-space: nowrap;\n}\n@media (max-width: 860px) {\n.acu-v2-dashboard-page {\r\n    padding: 14px;\n}\n.acu-v2-dashboard-page__health-item {\r\n    grid-template-columns: 30px minmax(0, 1fr);\r\n    align-items: center;\n}\n.acu-v2-dashboard-page__health-side {\r\n    grid-column: 2;\r\n    align-items: flex-start;\r\n    justify-self: start;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\n}\n.acu-v2-dashboard-page__health-action {\r\n    justify-self: start;\n}\n}\r\n", "src/presentation-v2/pages/DashboardPage.vue#style-0");
+    injectSfcStyle("\n.acu-v2-dashboard-page {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-dashboard-page__toggle-list {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\r\n  margin-top: 14px;\n}\n.acu-v2-dashboard-page__health-list {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-item {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: 30px minmax(0, 1fr) max-content;\r\n  column-gap: 10px;\r\n  row-gap: 8px;\r\n  align-items: center;\r\n  padding: 10px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  transition:\r\n    border-color 0.15s ease,\r\n    background 0.15s ease;\n}\n.acu-v2-dashboard-page__health-item--error {\r\n  border-color: color-mix(in srgb, var(--acu-danger) 38%, var(--acu-border));\n}\n.acu-v2-dashboard-page__health-icon {\r\n  width: 30px;\r\n  height: 30px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-2);\n}\n.acu-v2-dashboard-page__health-item--ok .acu-v2-dashboard-page__health-icon {\r\n  color: var(--acu-success);\r\n  background: color-mix(in srgb, var(--acu-success) 10%, transparent);\n}\n.acu-v2-dashboard-page__health-item--warning\r\n  .acu-v2-dashboard-page__health-icon {\r\n  color: var(--acu-warning);\r\n  background: color-mix(in srgb, var(--acu-warning) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-item--error .acu-v2-dashboard-page__health-icon {\r\n  color: var(--acu-danger);\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-body {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-dashboard-page__health-heading {\r\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-heading strong {\r\n  min-width: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 650;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-dashboard-page__health-body p {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-v2-dashboard-page__health-side {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-end;\r\n  gap: 8px;\r\n  justify-self: end;\n}\n.acu-v2-dashboard-page__health-action {\r\n  white-space: nowrap;\n}\n@media (max-width: 860px) {\n.acu-v2-dashboard-page {\r\n    padding: 14px;\n}\n.acu-v2-dashboard-page__health-item {\r\n    grid-template-columns: 30px minmax(0, 1fr);\r\n    align-items: center;\n}\n.acu-v2-dashboard-page__health-side {\r\n    grid-column: 2;\r\n    align-items: flex-start;\r\n    justify-self: start;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\n}\n.acu-v2-dashboard-page__health-action {\r\n    justify-self: start;\n}\n}\r\n", "src/presentation-v2/pages/DashboardPage.vue#style-0");
     var DashboardPage_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$w = { class: "acu-v2-dashboard-page" };
@@ -79526,7 +79643,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-form-fill-page {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-form-fill-page__grid {\r\n  grid-template-areas:\r\n    \"status update\"\r\n    \"manual template\"\r\n    \"manual template\";\n}\n.acu-v2-form-fill-page__panel--status {\r\n  grid-area: status;\n}\n.acu-v2-form-fill-page__panel--update {\r\n  grid-area: update;\n}\n.acu-v2-form-fill-page__panel--template {\r\n  grid-area: template;\n}\n.acu-v2-form-fill-page__panel--manual {\r\n  grid-area: manual;\n}\n.acu-v2-form-fill-page__manual-number-grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-form-fill-page__status-line {\r\n  margin: 0 0 10px;\n}\n.acu-v2-form-fill-page__status-chat {\r\n  max-width: min(42ch, 100%);\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-form-fill-page__manual-extra {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\n}\n.acu-v2-form-fill-page__table-wrap {\r\n  min-width: 0;\r\n  overflow: auto;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\n}\n.acu-v2-form-fill-page__status-table {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  min-width: 560px;\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-form-fill-page__status-table th,\r\n.acu-v2-form-fill-page__status-table td {\r\n  padding: 8px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  text-align: left;\n}\n.acu-v2-form-fill-page__status-table th {\r\n  color: var(--acu-text-3);\r\n  font-weight: 600;\r\n  background: var(--acu-bg-1);\n}\n.acu-v2-form-fill-page__status-table td {\r\n  color: var(--acu-text-2);\n}\n.acu-v2-form-fill-page__status-table tr:last-child td {\r\n  border-bottom: 0;\n}\n.acu-v2-form-fill-page__status-row--ready td {\r\n  color: var(--acu-text-1);\n}\n.acu-v2-form-fill-page__empty {\r\n  text-align: center !important;\r\n  color: var(--acu-text-3) !important;\n}\n.acu-v2-form-fill-page__actions {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-form-fill-page {\r\n    padding: 14px;\n}\n.acu-v2-form-fill-page__grid {\r\n    grid-template-areas:\r\n      \"status\"\r\n      \"update\"\r\n      \"manual\"\r\n      \"template\";\n}\n.acu-v2-form-fill-page__manual-number-grid {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/pages/FormFillPage.vue#style-0");
+    injectSfcStyle("\n.acu-v2-form-fill-page {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-form-fill-page__grid {\r\n  grid-template-areas:\r\n    \"status update\"\r\n    \"manual template\"\r\n    \"manual template\";\n}\n.acu-v2-form-fill-page__panel--status {\r\n  grid-area: status;\n}\n.acu-v2-form-fill-page__panel--update {\r\n  grid-area: update;\n}\n.acu-v2-form-fill-page__panel--template {\r\n  grid-area: template;\n}\n.acu-v2-form-fill-page__panel--manual {\r\n  grid-area: manual;\n}\n.acu-v2-form-fill-page__manual-number-grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-form-fill-page__status-line {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-v2-form-fill-page__status-chat {\r\n  max-width: min(42ch, 100%);\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-form-fill-page__manual-extra {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\n}\n.acu-v2-form-fill-page__table-wrap {\r\n  min-width: 0;\r\n  overflow: auto;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\n}\n.acu-v2-form-fill-page__status-table {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  min-width: 560px;\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-form-fill-page__status-table th,\r\n.acu-v2-form-fill-page__status-table td {\r\n  padding: 8px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  text-align: left;\n}\n.acu-v2-form-fill-page__status-table th {\r\n  color: var(--acu-text-3);\r\n  font-weight: 600;\r\n  background: var(--acu-bg-1);\n}\n.acu-v2-form-fill-page__status-table td {\r\n  color: var(--acu-text-2);\n}\n.acu-v2-form-fill-page__status-table tr:last-child td {\r\n  border-bottom: 0;\n}\n.acu-v2-form-fill-page__status-row--ready td {\r\n  color: var(--acu-text-1);\n}\n.acu-v2-form-fill-page__empty {\r\n  text-align: center !important;\r\n  color: var(--acu-text-3) !important;\n}\n.acu-v2-form-fill-page__actions {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-form-fill-page {\r\n    padding: 14px;\n}\n.acu-v2-form-fill-page__grid {\r\n    grid-template-areas:\r\n      \"status\"\r\n      \"update\"\r\n      \"manual\"\r\n      \"template\";\n}\n.acu-v2-form-fill-page__manual-number-grid {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/pages/FormFillPage.vue#style-0");
     var FormFillPage_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$t = { class: "acu-v2-form-fill-page" };
@@ -81329,7 +81446,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
         function clearDisplayTick() {
             if (displayInterval) {
-                window.clearInterval(displayInterval);
+                acuClearInterval(displayInterval);
                 displayInterval = null;
             }
         }
@@ -81353,17 +81470,17 @@ Expected function or array of functions, received type ${typeof value}.`
             clearDisplayTick();
             updateTimer();
             if (getRemainingMs() !== null) {
-                displayInterval = window.setInterval(updateTimer, 1000);
+                displayInterval = acuSetInterval(updateTimer, 1000);
             }
         }
         function ensureDurationGuardTick() {
             if (loopState_ACU.tickInterval)
                 return;
-            loopState_ACU.tickInterval = setInterval(() => {
+            loopState_ACU.tickInterval = acuSetInterval(() => {
                 const remaining = getRemainingMs();
                 if (remaining === null) {
                     if (loopState_ACU.tickInterval) {
-                        clearInterval(loopState_ACU.tickInterval);
+                        acuClearInterval(loopState_ACU.tickInterval);
                         loopState_ACU.tickInterval = null;
                     }
                     return;
@@ -81395,7 +81512,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 toast.error('找不到酒馆输入框，请确认当前页面可以正常发送消息。', { muteable: false });
                 return;
             }
-            window.setTimeout(() => {
+            acuSetTimeout(() => {
                 if (!loopState_ACU.isLooping)
                     return;
                 if (!clickSendButton()) {
@@ -84471,7 +84588,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-content-replace-preset-drawer__top-actions {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\n}\n.acu-content-replace-preset-drawer__empty {\r\n  margin: 12px 0;\n}\n.acu-v2-manage-list {\r\n  list-style: none;\r\n  margin: 0;\r\n  padding: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-manage-item {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  padding: 10px 12px;\r\n  border: 0;\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-manage-item:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info {\r\n  flex: 1;\r\n  min-width: 0;\n}\n.acu-v2-manage-item__name {\r\n  display: block;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta {\r\n  display: block;\r\n  margin-top: 2px;\n}\n.acu-v2-manage-item__actions {\r\n  display: flex;\r\n  gap: 4px;\n}\r\n", "src/presentation-v2/components/ContentReplacePresetDrawer.vue#style-0");
+    injectSfcStyle("\n.acu-content-replace-preset-drawer__top-actions {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\n}\n.acu-content-replace-preset-drawer__empty {\r\n  margin: 12px 0;\n}\n.acu-v2-manage-list {\r\n  list-style: none;\r\n  margin: 0;\r\n  padding: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-manage-item {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  padding: 10px 12px;\r\n  border: 0;\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-manage-item:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info {\r\n  flex: 1;\r\n  min-width: 0;\n}\n.acu-v2-manage-item__name {\n  display: block;\n  font-size: var(--acu-font-size-list-title, 13px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 500;\n  color: var(--acu-text-1);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta {\n  display: block;\n  margin-top: 2px;\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: var(--acu-line-height-caption, 1.5);\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions {\r\n  display: flex;\r\n  gap: 4px;\n}\r\n", "src/presentation-v2/components/ContentReplacePresetDrawer.vue#style-0");
     var ContentReplacePresetDrawer_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$e = { class: "acu-content-replace-preset-drawer__top-actions" };
@@ -86108,12 +86225,6 @@ Expected function or array of functions, received type ${typeof value}.`
      * 页面只消费本 composable；日志读写集中对接 shared/log-buffer，避免 v2
      * Vue 组件复用旧 presentation/log-viewer 的 jQuery 状态机。
      */
-    const requestFrame = typeof requestAnimationFrame === 'function'
-        ? requestAnimationFrame
-        : (callback) => window.setTimeout(() => callback(Date.now()), 16);
-    const cancelFrame = typeof cancelAnimationFrame === 'function'
-        ? cancelAnimationFrame
-        : (handle) => window.clearTimeout(handle);
     const levelOptions = [
         { value: 'all', label: '全部级别' },
         { value: 'debug', label: 'Debug' },
@@ -86123,12 +86234,13 @@ Expected function or array of functions, received type ${typeof value}.`
     function downloadJson(filename, data) {
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
+        const doc = getAcuHostDocument();
+        const a = doc.createElement('a');
         a.href = url;
         a.download = filename;
-        document.body.appendChild(a);
+        doc.body.appendChild(a);
         a.click();
-        document.body.removeChild(a);
+        doc.body.removeChild(a);
         URL.revokeObjectURL(url);
     }
     function useLogViewer() {
@@ -86183,7 +86295,7 @@ Expected function or array of functions, received type ${typeof value}.`
         function scheduleRefresh() {
             if (rafId !== null)
                 return;
-            rafId = requestFrame(() => {
+            rafId = acuRequestAnimationFrame(() => {
                 rafId = null;
                 refresh();
             });
@@ -86239,7 +86351,7 @@ Expected function or array of functions, received type ${typeof value}.`
             unsubscribe?.();
             unsubscribe = null;
             if (rafId !== null) {
-                cancelFrame(rafId);
+                acuCancelAnimationFrame(rafId);
                 rafId = null;
             }
         });
@@ -90476,7 +90588,7 @@ Expected function or array of functions, received type ${typeof value}.`
                     return;
                 isMobileNavClosing.value = true;
                 clearMobileNavCloseTimer();
-                mobileNavCloseTimer = setTimeout(() => {
+                mobileNavCloseTimer = acuSetTimeout(() => {
                     isMobileNavRendered.value = false;
                     isMobileNavClosing.value = false;
                     mobileNavCloseTimer = undefined;
@@ -90485,7 +90597,7 @@ Expected function or array of functions, received type ${typeof value}.`
             function clearMobileNavCloseTimer() {
                 if (mobileNavCloseTimer === undefined)
                     return;
-                clearTimeout(mobileNavCloseTimer);
+                acuClearTimeout(mobileNavCloseTimer);
                 mobileNavCloseTimer = undefined;
             }
             function selectNavSheet(key) {
@@ -91015,7 +91127,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-visualizer-surface {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: grid;\r\n  grid-template-columns: 260px minmax(0, 1fr);\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__sidebar {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 1px solid var(--acu-border-2);\r\n  background: var(--acu-sidebar-bg);\n}\n.acu-visualizer-surface__main {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  min-height: 50px;\r\n  padding: 8px 12px 8px 16px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar-context {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  gap: 10px;\n}\n.acu-visualizer-surface__mobile-menu {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-visualizer-surface__mobile-menu:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__context-items {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  justify-content: flex-start;\r\n  gap: 16px;\n}\n.acu-visualizer-surface__context-item {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 2px;\n}\n.acu-visualizer-surface__context-item:first-child {\r\n  flex: 0 1 auto;\r\n  max-width: min(560px, 42vw);\n}\n.acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item {\r\n  flex: 0 0 auto;\r\n  max-width: min(260px, 20vw);\n}\n.acu-visualizer-surface__context-item span {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__context-item strong {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\r\n  line-height: 1.25;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__context-item:first-child strong {\r\n  overflow: visible;\r\n  text-overflow: clip;\r\n  white-space: normal;\r\n  word-break: break-word;\n}\n.acu-visualizer-surface__context-badge {\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__conflict {\r\n  flex: 0 0 auto;\r\n  margin: 12px 16px 0;\n}\n.acu-visualizer-surface__conflict-actions {\r\n  display: inline-flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px;\r\n  margin-left: 8px;\n}\n.acu-visualizer-surface__data-toolbar,\r\n.acu-visualizer-surface__data-toolbar-actions,\r\n.acu-visualizer-surface__database-toolbar,\r\n.acu-visualizer-surface__pagination,\r\n.acu-visualizer-surface__pagination-pages,\r\n.acu-visualizer-surface__card-header {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__workspace {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  overflow: auto;\r\n  padding: 16px;\n}\n.acu-visualizer-surface__loading {\r\n  min-height: 140px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 8px;\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__mode-tabs {\r\n  flex: 0 0 auto;\r\n  width: min(360px, 42vw);\n}\n.acu-visualizer-surface__close {\r\n  width: 30px;\r\n  height: 30px;\r\n  flex: 0 0 auto;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-visualizer-surface__close:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__data-toolbar {\r\n  flex: 0 0 auto;\r\n  justify-content: space-between;\r\n  padding: 4px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__data-toolbar-actions {\r\n  flex: 0 0 auto;\r\n  justify-content: flex-end;\n}\n.acu-visualizer-surface__pagination {\r\n  flex: 0 0 auto;\r\n  justify-content: center;\r\n  gap: 14px;\r\n  padding: 6px 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-visualizer-surface__pagination-pages {\r\n  min-width: 0;\r\n  flex-wrap: wrap;\r\n  justify-content: center;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__page-button {\r\n  width: 34px;\r\n  min-width: 34px;\r\n  height: 34px;\r\n  padding: 0;\r\n  border: 1px solid var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 500;\n}\n.acu-visualizer-surface__page-button:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__page-button--active,\r\n.acu-visualizer-surface__page-button--active:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\n}\n.acu-visualizer-surface__page-button:disabled:not(\r\n    .acu-visualizer-surface__page-button--active\r\n  ) {\r\n  border-color: var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-2);\r\n  opacity: 1;\r\n  cursor: default;\n}\n.acu-visualizer-surface__page-jump {\r\n  flex: 0 0 64px;\r\n  width: 64px;\n}\n.acu-visualizer-surface__page-jump :deep(.acu-input) {\r\n  min-height: 34px;\r\n  border: 1px solid var(--acu-border) !important;\r\n  background: var(--acu-bg-0) !important;\r\n  text-align: center;\r\n  font-size: var(--acu-font-size-body-lg, 13px) !important;\r\n  font-variant-numeric: tabular-nums;\n}\n.acu-visualizer-surface__data-range {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__database-toolbar {\r\n  flex: 0 0 auto;\r\n  padding: 0 0 4px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar h2 {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__database-toolbar p {\r\n  margin: 5px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-readable, 1.55);\n}\n.acu-visualizer-surface__empty {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-visualizer-surface__card-grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));\r\n  gap: 12px;\n}\n.acu-visualizer-surface__data-card {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  height: 100%;\r\n  padding: 16px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\n}\n.acu-visualizer-surface__card-header strong {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-visualizer-surface__card-header span {\r\n  min-width: 0;\r\n  margin-right: auto;\r\n  overflow: hidden;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__card-header :deep(.acu-icon-btn) {\r\n  background: transparent;\n}\n.acu-visualizer-surface__card-header\r\n  :deep(.acu-icon-btn--default:hover:not(:disabled)) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\n}\n.acu-visualizer-surface__card-header :deep(.acu-icon-btn--accent) {\r\n  background: var(--acu-accent-glow);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__card-header\r\n  :deep(.acu-icon-btn--danger:hover:not(:disabled)) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-visualizer-surface__fields {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__field-row {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 8px;\r\n  align-items: stretch;\n}\n.acu-visualizer-surface__field-row.is-wide {\r\n  grid-template-columns: minmax(0, 1fr);\n}\n.acu-visualizer-surface__field {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\r\n  padding: 2px;\r\n  border: 1px solid transparent;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  transition:\r\n    background 0.15s ease,\r\n    border-color 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field :deep(.acu-textarea) {\r\n  flex: 1 1 auto;\r\n  min-height: 34px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\n}\n.acu-visualizer-surface__field-preview {\r\n  width: 100%;\r\n  min-height: 34px;\r\n  box-sizing: border-box;\r\n  padding: 8px 10px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-1);\r\n  cursor: text;\r\n  display: block;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\r\n  transition:\r\n    background 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field-preview:hover,\r\n.acu-visualizer-surface__field-preview:focus-visible {\r\n  outline: none;\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    var(--acu-bg-2);\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field-preview.is-empty {\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__field-label {\r\n  min-width: 0;\r\n  min-height: 24px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 6px;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 600;\n}\n.acu-visualizer-surface__field-label > span:first-child {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__field-locks {\r\n  flex: 0 0 auto;\r\n  min-width: 51px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  gap: 3px;\r\n  opacity: 0.44;\r\n  transition: opacity 0.15s ease;\n}\n.acu-visualizer-surface__field:hover .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field:focus-within\r\n  .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field.is-actions-active\r\n  .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field.is-locked .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field.is-special-index\r\n  .acu-visualizer-surface__field-locks {\r\n  opacity: 1;\n}\n.acu-visualizer-surface__field-locks :deep(.acu-icon-btn) {\r\n  --acu-icon-btn-size: 24px;\r\n  --acu-icon-btn-font-size: 11px;\r\n  width: 24px;\r\n  height: 24px;\r\n  background: transparent !important;\n}\n.acu-visualizer-surface__field-locks\r\n  :deep(.acu-icon-btn--default:hover:not(:disabled)) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__field-locks :deep(.acu-icon-btn--accent) {\r\n  color: var(--acu-accent);\r\n  background: var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field.is-locked {\r\n  border-color: var(--acu-border);\r\n  background: color-mix(in srgb, var(--acu-warning) 8%, transparent);\n}\n.acu-visualizer-surface__field.is-actions-active:not(.is-locked) {\r\n  background: color-mix(in srgb, var(--acu-accent) 6%, transparent);\n}\n.acu-visualizer-surface__footer {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  padding: 12px 16px;\r\n  border-top: 1px solid var(--acu-border-2);\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__footer-actions {\r\n  display: flex;\r\n  gap: 8px;\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__footer-actions :deep(.acu-btn) {\r\n  min-width: 132px;\n}\n.acu-visualizer-surface__mobile-nav-layer {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9350;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: visualizer-mobile-nav-layer-in 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing {\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-layer-out 0.15s ease-in both;\n}\n.acu-visualizer-surface__mobile-nav {\r\n  width: 280px;\r\n  max-width: calc(100vw - 72px);\r\n  height: 100%;\r\n  max-height: 100vh;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 280px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 0;\r\n  background: var(--acu-sidebar-bg);\r\n  box-shadow: var(--acu-shadow);\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-drawer-in 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing\r\n  .acu-visualizer-surface__mobile-nav {\r\n  animation: visualizer-mobile-nav-drawer-out 0.15s ease-in both;\n}\n@supports (width: min(280px, calc(100vw - 72px))) {\n.acu-visualizer-surface__mobile-nav {\r\n    width: min(280px, calc(100vw - 72px));\r\n    flex: 0 0 min(280px, calc(100vw - 72px));\n}\n}\n@supports (width: 100dvw) {\n.acu-visualizer-surface__mobile-nav {\r\n    max-width: calc(100dvw - 72px);\n}\n}\n@supports (height: 100dvh) {\n.acu-visualizer-surface__mobile-nav {\r\n    height: 100dvh;\r\n    max-height: 100dvh;\n}\n}\n@keyframes visualizer-mobile-nav-layer-in {\nfrom {\r\n    opacity: 0;\n}\nto {\r\n    opacity: 1;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-in {\nfrom {\r\n    transform: translateX(-100%);\n}\nto {\r\n    transform: translateX(0);\n}\n}\n@keyframes visualizer-mobile-nav-layer-out {\nfrom {\r\n    opacity: 1;\n}\nto {\r\n    opacity: 0;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-out {\nfrom {\r\n    transform: translateX(0);\n}\nto {\r\n    transform: translateX(-100%);\n}\n}\n@media (max-width: 1024px) {\n.acu-visualizer-surface {\r\n    grid-template-columns: 220px minmax(0, 1fr);\n}\n.acu-visualizer-surface__card-grid {\r\n    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));\n}\n.acu-visualizer-surface__topbar {\r\n    flex-wrap: wrap;\n}\n.acu-visualizer-surface__mode-tabs {\r\n    order: 3;\r\n    width: min(420px, 100%);\n}\n}\n@media (max-width: 767px) {\n.acu-visualizer-surface {\r\n    grid-template-columns: 1fr;\r\n    grid-template-rows: minmax(0, 1fr);\n}\n.acu-visualizer-surface__sidebar {\r\n    display: none;\n}\n.acu-visualizer-surface__topbar {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 1fr) auto;\r\n    gap: 8px;\r\n    min-height: 0;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__topbar-context {\r\n    grid-column: 1;\r\n    display: grid;\r\n    grid-template-columns: auto minmax(0, 1fr) auto;\r\n    align-items: center;\r\n    gap: 8px;\r\n    min-width: 0;\n}\n.acu-visualizer-surface__mobile-menu {\r\n    display: inline-flex;\n}\n.acu-visualizer-surface__context-items {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 8px;\n}\n.acu-visualizer-surface__context-item:first-child,\r\n  .acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item {\r\n    max-width: none;\n}\n.acu-visualizer-surface__mobile-nav-layer {\r\n    display: flex;\n}\n.acu-visualizer-surface__close {\r\n    grid-column: 2;\r\n    grid-row: 1;\r\n    align-self: center;\n}\n.acu-visualizer-surface__mode-tabs {\r\n    grid-column: 1 / -1;\r\n    width: 100%;\n}\n.acu-visualizer-surface__workspace {\r\n    padding: 10px;\n}\n.acu-visualizer-surface__data-toolbar,\r\n  .acu-visualizer-surface__database-toolbar {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__data-toolbar :deep(.acu-btn),\r\n  .acu-visualizer-surface__database-toolbar :deep(.acu-btn) {\r\n    width: 100%;\n}\n.acu-visualizer-surface__data-toolbar-actions {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__pagination {\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 6px;\r\n    padding: 2px 0 6px;\n}\n.acu-visualizer-surface__pagination-pages {\r\n    flex: 0 1 auto;\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 5px;\n}\n.acu-visualizer-surface__page-button {\r\n    width: 36px;\r\n    min-width: 36px;\r\n    height: 34px;\r\n    flex: 0 0 36px;\n}\n.acu-visualizer-surface__page-jump {\r\n    flex: 0 0 54px;\r\n    width: 54px;\n}\n.acu-visualizer-surface__footer {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\r\n    align-items: center;\r\n    gap: 8px;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__footer > span {\r\n    min-width: 0;\r\n    overflow: hidden;\r\n    text-overflow: ellipsis;\r\n    white-space: nowrap;\n}\n.acu-visualizer-surface__footer-actions {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 6px;\n}\n.acu-visualizer-surface__footer-actions :deep(.acu-btn) {\r\n    min-width: 0;\r\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-visualizer-surface__card-grid {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__fields {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__mode-tabs {\r\n    width: 100%;\n}\n.acu-visualizer-surface__conflict-actions {\r\n    display: flex;\r\n    margin: 8px 0 0;\n}\n.acu-visualizer-surface__footer {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__footer > span {\r\n    display: none;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue#style-0");
+    injectSfcStyle("\n.acu-visualizer-surface {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: grid;\r\n  grid-template-columns: 260px minmax(0, 1fr);\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__sidebar {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 1px solid var(--acu-border-2);\r\n  background: var(--acu-sidebar-bg);\n}\n.acu-visualizer-surface__main {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  min-height: 50px;\r\n  padding: 8px 12px 8px 16px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar-context {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  gap: 10px;\n}\n.acu-visualizer-surface__mobile-menu {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-visualizer-surface__mobile-menu:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__context-items {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  justify-content: flex-start;\r\n  gap: 16px;\n}\n.acu-visualizer-surface__context-item {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 2px;\n}\n.acu-visualizer-surface__context-item:first-child {\r\n  flex: 0 1 auto;\r\n  max-width: min(560px, 42vw);\n}\n.acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item {\r\n  flex: 0 0 auto;\r\n  max-width: min(260px, 20vw);\n}\n.acu-visualizer-surface__context-item span {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__context-item strong {\n  min-width: 0;\n  overflow: hidden;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 600;\n  line-height: 1.25;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__context-item:first-child strong {\r\n  overflow: visible;\r\n  text-overflow: clip;\r\n  white-space: normal;\r\n  word-break: break-word;\n}\n.acu-visualizer-surface__context-badge {\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__conflict {\r\n  flex: 0 0 auto;\r\n  margin: 12px 16px 0;\n}\n.acu-visualizer-surface__conflict-actions {\r\n  display: inline-flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px;\r\n  margin-left: 8px;\n}\n.acu-visualizer-surface__data-toolbar,\r\n.acu-visualizer-surface__data-toolbar-actions,\r\n.acu-visualizer-surface__database-toolbar,\r\n.acu-visualizer-surface__pagination,\r\n.acu-visualizer-surface__pagination-pages,\r\n.acu-visualizer-surface__card-header {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__workspace {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  overflow: auto;\r\n  padding: 16px;\n}\n.acu-visualizer-surface__loading {\r\n  min-height: 140px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 8px;\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__mode-tabs {\r\n  flex: 0 0 auto;\r\n  width: min(360px, 42vw);\n}\n.acu-visualizer-surface__close {\r\n  width: 30px;\r\n  height: 30px;\r\n  flex: 0 0 auto;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-visualizer-surface__close:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__data-toolbar {\r\n  flex: 0 0 auto;\r\n  justify-content: space-between;\r\n  padding: 4px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__data-toolbar-actions {\r\n  flex: 0 0 auto;\r\n  justify-content: flex-end;\n}\n.acu-visualizer-surface__pagination {\r\n  flex: 0 0 auto;\r\n  justify-content: center;\r\n  gap: 14px;\r\n  padding: 6px 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-visualizer-surface__pagination-pages {\r\n  min-width: 0;\r\n  flex-wrap: wrap;\r\n  justify-content: center;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__page-button {\r\n  width: 34px;\r\n  min-width: 34px;\r\n  height: 34px;\r\n  padding: 0;\r\n  border: 1px solid var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 500;\n}\n.acu-visualizer-surface__page-button:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__page-button--active,\r\n.acu-visualizer-surface__page-button--active:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\n}\n.acu-visualizer-surface__page-button:disabled:not(\r\n    .acu-visualizer-surface__page-button--active\r\n  ) {\r\n  border-color: var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-2);\r\n  opacity: 1;\r\n  cursor: default;\n}\n.acu-visualizer-surface__page-jump {\r\n  flex: 0 0 64px;\r\n  width: 64px;\n}\n.acu-visualizer-surface__page-jump :deep(.acu-input) {\r\n  min-height: 34px;\r\n  border: 1px solid var(--acu-border) !important;\r\n  background: var(--acu-bg-0) !important;\r\n  text-align: center;\r\n  font-size: var(--acu-font-size-body-lg, 13px) !important;\r\n  font-variant-numeric: tabular-nums;\n}\n.acu-visualizer-surface__data-range {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__database-toolbar {\r\n  flex: 0 0 auto;\r\n  padding: 0 0 4px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar h2 {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__database-toolbar p {\r\n  margin: 5px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-readable, 1.55);\n}\n.acu-visualizer-surface__empty {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-visualizer-surface__card-grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));\r\n  gap: 12px;\n}\n.acu-visualizer-surface__data-card {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  height: 100%;\r\n  padding: 16px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\n}\n.acu-visualizer-surface__card-header strong {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-visualizer-surface__card-header span {\r\n  min-width: 0;\r\n  margin-right: auto;\r\n  overflow: hidden;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__card-header :deep(.acu-icon-btn) {\r\n  background: transparent;\n}\n.acu-visualizer-surface__card-header\r\n  :deep(.acu-icon-btn--default:hover:not(:disabled)) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\n}\n.acu-visualizer-surface__card-header :deep(.acu-icon-btn--accent) {\r\n  background: var(--acu-accent-glow);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__card-header\r\n  :deep(.acu-icon-btn--danger:hover:not(:disabled)) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-visualizer-surface__fields {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__field-row {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 8px;\r\n  align-items: stretch;\n}\n.acu-visualizer-surface__field-row.is-wide {\r\n  grid-template-columns: minmax(0, 1fr);\n}\n.acu-visualizer-surface__field {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\r\n  padding: 2px;\r\n  border: 1px solid transparent;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  transition:\r\n    background 0.15s ease,\r\n    border-color 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field :deep(.acu-textarea) {\r\n  flex: 1 1 auto;\r\n  min-height: 34px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\n}\n.acu-visualizer-surface__field-preview {\r\n  width: 100%;\r\n  min-height: 34px;\r\n  box-sizing: border-box;\r\n  padding: 8px 10px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-1);\r\n  cursor: text;\r\n  display: block;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\r\n  transition:\r\n    background 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field-preview:hover,\r\n.acu-visualizer-surface__field-preview:focus-visible {\r\n  outline: none;\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    var(--acu-bg-2);\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field-preview.is-empty {\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__field-label {\r\n  min-width: 0;\r\n  min-height: 24px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 6px;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 600;\n}\n.acu-visualizer-surface__field-label > span:first-child {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__field-locks {\r\n  flex: 0 0 auto;\r\n  min-width: 51px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  gap: 3px;\r\n  opacity: 0.44;\r\n  transition: opacity 0.15s ease;\n}\n.acu-visualizer-surface__field:hover .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field:focus-within\r\n  .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field.is-actions-active\r\n  .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field.is-locked .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field.is-special-index\r\n  .acu-visualizer-surface__field-locks {\r\n  opacity: 1;\n}\n.acu-visualizer-surface__field-locks :deep(.acu-icon-btn) {\r\n  --acu-icon-btn-size: 24px;\r\n  --acu-icon-btn-font-size: 11px;\r\n  width: 24px;\r\n  height: 24px;\r\n  background: transparent !important;\n}\n.acu-visualizer-surface__field-locks\r\n  :deep(.acu-icon-btn--default:hover:not(:disabled)) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__field-locks :deep(.acu-icon-btn--accent) {\r\n  color: var(--acu-accent);\r\n  background: var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field.is-locked {\r\n  border-color: var(--acu-border);\r\n  background: color-mix(in srgb, var(--acu-warning) 8%, transparent);\n}\n.acu-visualizer-surface__field.is-actions-active:not(.is-locked) {\r\n  background: color-mix(in srgb, var(--acu-accent) 6%, transparent);\n}\n.acu-visualizer-surface__footer {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  padding: 12px 16px;\r\n  border-top: 1px solid var(--acu-border-2);\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__footer-actions {\r\n  display: flex;\r\n  gap: 8px;\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__footer-actions :deep(.acu-btn) {\r\n  min-width: 132px;\n}\n.acu-visualizer-surface__mobile-nav-layer {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9350;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: visualizer-mobile-nav-layer-in 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing {\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-layer-out 0.15s ease-in both;\n}\n.acu-visualizer-surface__mobile-nav {\r\n  width: 280px;\r\n  max-width: calc(100vw - 72px);\r\n  height: 100%;\r\n  max-height: 100vh;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 280px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 0;\r\n  background: var(--acu-sidebar-bg);\r\n  box-shadow: var(--acu-shadow);\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-drawer-in 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing\r\n  .acu-visualizer-surface__mobile-nav {\r\n  animation: visualizer-mobile-nav-drawer-out 0.15s ease-in both;\n}\n@supports (width: min(280px, calc(100vw - 72px))) {\n.acu-visualizer-surface__mobile-nav {\r\n    width: min(280px, calc(100vw - 72px));\r\n    flex: 0 0 min(280px, calc(100vw - 72px));\n}\n}\n@supports (width: 100dvw) {\n.acu-visualizer-surface__mobile-nav {\r\n    max-width: calc(100dvw - 72px);\n}\n}\n@supports (height: 100dvh) {\n.acu-visualizer-surface__mobile-nav {\r\n    height: 100dvh;\r\n    max-height: 100dvh;\n}\n}\n@keyframes visualizer-mobile-nav-layer-in {\nfrom {\r\n    opacity: 0;\n}\nto {\r\n    opacity: 1;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-in {\nfrom {\r\n    transform: translateX(-100%);\n}\nto {\r\n    transform: translateX(0);\n}\n}\n@keyframes visualizer-mobile-nav-layer-out {\nfrom {\r\n    opacity: 1;\n}\nto {\r\n    opacity: 0;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-out {\nfrom {\r\n    transform: translateX(0);\n}\nto {\r\n    transform: translateX(-100%);\n}\n}\n@media (max-width: 1024px) {\n.acu-visualizer-surface {\r\n    grid-template-columns: 220px minmax(0, 1fr);\n}\n.acu-visualizer-surface__card-grid {\r\n    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));\n}\n.acu-visualizer-surface__topbar {\r\n    flex-wrap: wrap;\n}\n.acu-visualizer-surface__mode-tabs {\r\n    order: 3;\r\n    width: min(420px, 100%);\n}\n}\n@media (max-width: 767px) {\n.acu-visualizer-surface {\r\n    grid-template-columns: 1fr;\r\n    grid-template-rows: minmax(0, 1fr);\n}\n.acu-visualizer-surface__sidebar {\r\n    display: none;\n}\n.acu-visualizer-surface__topbar {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 1fr) auto;\r\n    gap: 8px;\r\n    min-height: 0;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__topbar-context {\r\n    grid-column: 1;\r\n    display: grid;\r\n    grid-template-columns: auto minmax(0, 1fr) auto;\r\n    align-items: center;\r\n    gap: 8px;\r\n    min-width: 0;\n}\n.acu-visualizer-surface__mobile-menu {\r\n    display: inline-flex;\n}\n.acu-visualizer-surface__context-items {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 8px;\n}\n.acu-visualizer-surface__context-item:first-child,\r\n  .acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item {\r\n    max-width: none;\n}\n.acu-visualizer-surface__mobile-nav-layer {\r\n    display: flex;\n}\n.acu-visualizer-surface__close {\r\n    grid-column: 2;\r\n    grid-row: 1;\r\n    align-self: center;\n}\n.acu-visualizer-surface__mode-tabs {\r\n    grid-column: 1 / -1;\r\n    width: 100%;\n}\n.acu-visualizer-surface__workspace {\r\n    padding: 10px;\n}\n.acu-visualizer-surface__data-toolbar,\r\n  .acu-visualizer-surface__database-toolbar {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__data-toolbar :deep(.acu-btn),\r\n  .acu-visualizer-surface__database-toolbar :deep(.acu-btn) {\r\n    width: 100%;\n}\n.acu-visualizer-surface__data-toolbar-actions {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__pagination {\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 6px;\r\n    padding: 2px 0 6px;\n}\n.acu-visualizer-surface__pagination-pages {\r\n    flex: 0 1 auto;\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 5px;\n}\n.acu-visualizer-surface__page-button {\r\n    width: 36px;\r\n    min-width: 36px;\r\n    height: 34px;\r\n    flex: 0 0 36px;\n}\n.acu-visualizer-surface__page-jump {\r\n    flex: 0 0 54px;\r\n    width: 54px;\n}\n.acu-visualizer-surface__footer {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\r\n    align-items: center;\r\n    gap: 8px;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__footer > span {\r\n    min-width: 0;\r\n    overflow: hidden;\r\n    text-overflow: ellipsis;\r\n    white-space: nowrap;\n}\n.acu-visualizer-surface__footer-actions {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 6px;\n}\n.acu-visualizer-surface__footer-actions :deep(.acu-btn) {\r\n    min-width: 0;\r\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-visualizer-surface__card-grid {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__fields {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__mode-tabs {\r\n    width: 100%;\n}\n.acu-visualizer-surface__conflict-actions {\r\n    display: flex;\r\n    margin: 8px 0 0;\n}\n.acu-visualizer-surface__footer {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__footer > span {\r\n    display: none;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue#style-0");
     var VisualizerSurface_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$1 = {
@@ -91759,7 +91871,7 @@ Expected function or array of functions, received type ${typeof value}.`
                     return;
                 isMobileNavClosing.value = true;
                 clearMobileNavCloseTimer();
-                mobileNavCloseTimer = setTimeout(() => {
+                mobileNavCloseTimer = acuSetTimeout(() => {
                     isMobileNavRendered.value = false;
                     isMobileNavClosing.value = false;
                     mobileNavCloseTimer = undefined;
@@ -91794,7 +91906,7 @@ Expected function or array of functions, received type ${typeof value}.`
                     return;
                 isThemeMenuClosing.value = true;
                 clearThemeMenuCloseTimer();
-                themeMenuCloseTimer = setTimeout(() => {
+                themeMenuCloseTimer = acuSetTimeout(() => {
                     isThemeMenuRendered.value = false;
                     isThemeMenuClosing.value = false;
                     themeMenuCloseTimer = undefined;
@@ -91803,13 +91915,13 @@ Expected function or array of functions, received type ${typeof value}.`
             function clearThemeMenuCloseTimer() {
                 if (themeMenuCloseTimer === undefined)
                     return;
-                clearTimeout(themeMenuCloseTimer);
+                acuClearTimeout(themeMenuCloseTimer);
                 themeMenuCloseTimer = undefined;
             }
             function clearMobileNavCloseTimer() {
                 if (mobileNavCloseTimer === undefined)
                     return;
-                clearTimeout(mobileNavCloseTimer);
+                acuClearTimeout(mobileNavCloseTimer);
                 mobileNavCloseTimer = undefined;
             }
             const __returned__ = { emit, rootShell, router, dialogStore, themeStore, toastStore, uiMode, visualizer, isMobileNavOpen, isMobileNavRendered, isMobileNavClosing, isThemeMenuOpen, isThemeMenuRendered, isThemeMenuClosing, THEME_MENU_LEAVE_MS, MOBILE_NAV_LEAVE_MS, get themeMenuCloseTimer() { return themeMenuCloseTimer; }, set themeMenuCloseTimer(v) { themeMenuCloseTimer = v; }, get mobileNavCloseTimer() { return mobileNavCloseTimer; }, set mobileNavCloseTimer(v) { mobileNavCloseTimer = v; }, shellTitle, toggleThemeMenu, selectTheme, readFileText, importThemeFile, exportTheme, deleteTheme, sanitizeFilename, downloadJson, onDocPointer, devOptions, openMobileNav, closeMobileNav, closeApp, openThemeMenu, closeThemeMenu, clearThemeMenuCloseTimer, clearMobileNavCloseTimer, AcuDialogHost, AcuFileButton, AcuIconButton, AcuToastViewport, MainArea, Sidebar, get isCustomThemeId() { return isCustomThemeId; }, VisualizerSurface };
@@ -91818,7 +91930,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-app {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  --acu-font-size-micro: 10px;\r\n  --acu-font-size-caption: 11px;\r\n  --acu-font-size-body: 12px;\r\n  --acu-font-size-body-lg: 13px;\r\n  --acu-font-size-section-title: 12px;\r\n  --acu-font-size-list-title: 13px;\r\n  --acu-font-size-panel-title: 15px;\r\n  --acu-font-size-page-title: 22px;\r\n  --acu-line-height-caption: 1.5;\r\n  --acu-line-height-body: 1.45;\r\n  --acu-line-height-readable: 1.55;\r\n  font-size: var(--acu-font-size-body);\n}\n.acu-v2-app__shell {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  z-index: 9000;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\n}\n.acu-v2-app,\r\n.acu-v2-app * {\r\n  box-sizing: border-box;\n}\n.acu-v2-app :deep(button) {\r\n  appearance: none;\r\n  -webkit-appearance: none;\r\n  -webkit-tap-highlight-color: transparent;\n}\n.acu-v2-app :deep(button:focus:not(:focus-visible)) {\r\n  outline: none;\r\n  box-shadow: none;\n}\n:global(.acu-text) {\r\n  margin: 0;\r\n  min-width: 0;\n}\n:global(.acu-text--caption) {\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\r\n  color: var(--acu-text-3);\n}\n:global(.acu-text--meta) {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-body, 1.45);\r\n  color: var(--acu-text-3);\n}\n:global(.acu-text--hint) {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-readable, 1.55);\r\n  color: var(--acu-text-3);\n}\n:global(.acu-text--status-line) {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\r\n  min-height: 22px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-body, 1.45);\r\n  color: var(--acu-text-3);\n}\n:global(.acu-text--empty) {\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: var(--acu-line-height-readable, 1.55);\r\n  color: var(--acu-text-3);\r\n  text-align: center;\n}\n:global(.acu-text--error) {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-body, 1.45);\r\n  color: var(--acu-danger);\n}\n:global(.acu-text--section-label) {\r\n  font-size: var(--acu-font-size-section-title, 12px);\r\n  line-height: var(--acu-line-height-body, 1.45);\r\n  font-weight: 600;\r\n  color: var(--acu-text-2);\n}\n:global(.acu-text--list-title) {\r\n  font-size: var(--acu-font-size-list-title, 13px);\r\n  line-height: var(--acu-line-height-body, 1.45);\r\n  font-weight: 500;\r\n  color: var(--acu-text-1);\n}\n:global(.acu-text__value) {\r\n  color: var(--acu-text-1);\r\n  font-weight: 500;\n}\n.acu-v2-app__header {\r\n  position: relative;\r\n  z-index: 40;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  min-height: 50px;\r\n  padding: 8px 12px 8px 20px;\r\n  background: var(--acu-bg-0);\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  flex: 0 0 auto;\n}\n.acu-v2-app__header-left {\r\n  display: flex;\r\n  align-items: center;\r\n  min-width: 0;\r\n  gap: 8px;\r\n  flex: 1 1 auto;\n}\n.acu-v2-app__menu {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  font-size: 14px;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-v2-app__menu:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__page-title {\r\n  min-width: 0;\r\n  margin: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\r\n  letter-spacing: 0;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-app__close {\r\n  width: 30px;\r\n  height: 30px;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  cursor: pointer;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__close:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__body {\r\n  flex: 1 1 auto;\r\n  display: flex;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: hidden;\n}\n.acu-v2-app__content {\r\n  flex: 1 1 auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: hidden;\n}\n.acu-v2-app__mobile-nav-layer {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9300;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: mobile-nav-layer-in 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing {\r\n  pointer-events: auto;\r\n  animation: mobile-nav-layer-out 0.15s ease-in both;\n}\n.acu-v2-app__mobile-nav {\r\n  width: 280px;\r\n  max-width: calc(100vw - 72px);\r\n  height: 100%;\r\n  max-height: 100vh;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 280px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  background: var(--acu-sidebar-bg);\r\n  border-right: 0;\r\n  box-shadow: var(--acu-shadow);\r\n  overflow: hidden;\r\n  pointer-events: auto;\r\n  animation: mobile-nav-drawer-in 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing .acu-v2-app__mobile-nav {\r\n  animation: mobile-nav-drawer-out 0.15s ease-in both;\n}\n@supports (width: min(280px, calc(100vw - 72px))) {\n.acu-v2-app__mobile-nav {\r\n    width: min(280px, calc(100vw - 72px));\r\n    flex: 0 0 min(280px, calc(100vw - 72px));\n}\n}\n@supports (width: 100dvw) {\n.acu-v2-app__mobile-nav {\r\n    max-width: calc(100dvw - 72px);\n}\n}\n@supports (height: 100dvh) {\n.acu-v2-app__mobile-nav {\r\n    height: 100dvh;\r\n    max-height: 100dvh;\n}\n}\r\n\r\n/* ── Theme switcher ── */\n.acu-v2-app__header-right {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 4px;\r\n  flex: 0 0 auto;\n}\n.acu-v2-app__theme-switcher {\r\n  position: relative;\n}\n.acu-v2-app__theme-btn {\r\n  width: 30px;\r\n  height: 30px;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: 14px;\r\n  cursor: pointer;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__theme-btn:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-menu {\r\n  position: absolute;\r\n  top: calc(100% + 6px);\r\n  right: 0;\r\n  z-index: 10;\r\n  list-style: none;\r\n  margin: 0;\r\n  padding: 4px;\r\n  width: min(280px, calc(100vw - 24px));\r\n  min-width: 240px;\r\n  background: var(--acu-bg-1);\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  box-shadow: var(--acu-shadow);\r\n  animation: theme-menu-in 0.12s ease-out both;\n}\n.acu-v2-app__theme-menu.is-closing {\r\n  pointer-events: none;\r\n  animation: theme-menu-out 0.12s ease-in both;\n}\n.acu-v2-app__theme-option {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 8px;\r\n  padding: 7px 10px;\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  color: var(--acu-text-2);\r\n  border-radius: var(--acu-radius-sm);\r\n  cursor: pointer;\r\n  user-select: none;\n}\n.acu-v2-app__theme-option:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active {\r\n  color: var(--acu-on-accent);\r\n  background: var(--acu-accent);\r\n  font-weight: 600;\n}\n.acu-v2-app__theme-option-main {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  min-width: 0;\r\n  flex: 1 1 auto;\n}\n.acu-v2-app__theme-name {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-app__theme-tag {\r\n  flex: 0 0 auto;\r\n  padding: 1px 5px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-accent) 12%, transparent);\r\n  color: var(--acu-accent);\r\n  font-size: var(--acu-font-size-micro, 10px);\r\n  font-weight: 600;\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tag {\r\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 4px;\r\n  flex: 0 0 auto;\r\n  opacity: 0.72;\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn) {\r\n  background: transparent;\r\n  color: inherit;\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn:hover:not(:disabled)) {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools :deep(.acu-icon-btn:hover:not(:disabled)) {\r\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn--danger:hover:not(:disabled)) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\r\n  color: var(--acu-danger);\n}\n.acu-v2-app__theme-option:hover .acu-v2-app__theme-tools,\r\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools {\r\n  opacity: 1;\n}\n.acu-v2-app__theme-swatch {\r\n  display: block;\r\n  width: 18px;\r\n  height: 18px;\r\n  border-radius: 999px;\r\n  flex: 0 0 18px;\r\n  background: linear-gradient(\r\n    135deg,\r\n    var(--acu-theme-swatch-bg) 0 56%,\r\n    var(--acu-theme-swatch-accent) 56% 100%\r\n  );\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-border-2) 72%, transparent);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-swatch {\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-on-accent) 62%, transparent);\n}\n.acu-v2-app__theme-menu-footer {\r\n  display: flex;\r\n  justify-content: stretch;\r\n  margin-top: 4px;\r\n  padding: 7px 6px 4px;\r\n  border-top: 1px solid var(--acu-border);\n}\n.acu-v2-app__theme-menu-footer :deep(.acu-file-button),\r\n.acu-v2-app__theme-menu-footer :deep(.acu-btn) {\r\n  width: 100%;\n}\n@keyframes theme-menu-in {\nfrom {\r\n    opacity: 0;\r\n    transform: translateY(-4px);\n}\nto {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\n}\n@keyframes theme-menu-out {\nfrom {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\nto {\r\n    opacity: 0;\r\n    transform: translateY(-4px);\n}\n}\n@keyframes mobile-nav-layer-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes mobile-nav-drawer-in {\nfrom { transform: translateX(-100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes mobile-nav-layer-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes mobile-nav-drawer-out {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(-100%);\n}\n}\n@media (max-width: 720px) {\n.acu-v2-app__header {\r\n    min-height: 48px;\r\n    padding: 8px 10px;\n}\n.acu-v2-app__header-left {\r\n    gap: 6px;\n}\n.acu-v2-app__menu {\r\n    display: inline-flex;\n}\n.acu-v2-app__page-title {\r\n    font-size: 18px;\n}\n.acu-v2-app__desktop-sidebar {\r\n    display: none;\n}\n.acu-v2-app__mobile-nav-layer {\r\n    display: flex;\n}\n}\r\n", "src/presentation-v2/App.vue#style-0");
+    injectSfcStyle("\n:global(#acu-app-v2) {\n  --acu-font-size-micro: 10px;\n  --acu-font-size-caption: 11px;\n  --acu-font-size-body: 12px;\n  --acu-font-size-body-lg: 13px;\r\n  --acu-font-size-section-title: 12px;\r\n  --acu-font-size-list-title: 13px;\r\n  --acu-font-size-panel-title: 15px;\r\n  --acu-font-size-page-title: 22px;\r\n  --acu-line-height-caption: 1.5;\r\n  --acu-line-height-body: 1.45;\n  --acu-line-height-readable: 1.55;\n  box-sizing: border-box;\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-ui);\n  font-size: var(--acu-font-size-body);\n}\n:global(#acu-app-v2),\n:global(#acu-app-v2 *) {\n  box-sizing: border-box;\n}\n:global(#acu-app-v2 button) {\n  appearance: none;\n  -webkit-appearance: none;\n  -webkit-tap-highlight-color: transparent;\n}\n:global(#acu-app-v2 button:focus:not(:focus-visible)) {\n  outline: none;\n  box-shadow: none;\n}\n.acu-v2-app {\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-ui);\n  font-size: var(--acu-font-size-body);\n}\n.acu-v2-app__shell {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  z-index: 9000;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\n}\n.acu-v2-app__header {\n  position: relative;\r\n  z-index: 40;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  min-height: 50px;\r\n  padding: 8px 12px 8px 20px;\r\n  background: var(--acu-bg-0);\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  flex: 0 0 auto;\n}\n.acu-v2-app__header-left {\r\n  display: flex;\r\n  align-items: center;\r\n  min-width: 0;\r\n  gap: 8px;\r\n  flex: 1 1 auto;\n}\n.acu-v2-app__menu {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  font-size: 14px;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-v2-app__menu:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__page-title {\r\n  min-width: 0;\r\n  margin: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\r\n  letter-spacing: 0;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-app__close {\r\n  width: 30px;\r\n  height: 30px;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  cursor: pointer;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__close:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__body {\r\n  flex: 1 1 auto;\r\n  display: flex;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: hidden;\n}\n.acu-v2-app__content {\r\n  flex: 1 1 auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: hidden;\n}\n.acu-v2-app__mobile-nav-layer {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9300;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: mobile-nav-layer-in 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing {\r\n  pointer-events: auto;\r\n  animation: mobile-nav-layer-out 0.15s ease-in both;\n}\n.acu-v2-app__mobile-nav {\r\n  width: 280px;\r\n  max-width: calc(100vw - 72px);\r\n  height: 100%;\r\n  max-height: 100vh;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 280px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  background: var(--acu-sidebar-bg);\r\n  border-right: 0;\r\n  box-shadow: var(--acu-shadow);\r\n  overflow: hidden;\r\n  pointer-events: auto;\r\n  animation: mobile-nav-drawer-in 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing .acu-v2-app__mobile-nav {\r\n  animation: mobile-nav-drawer-out 0.15s ease-in both;\n}\n@supports (width: min(280px, calc(100vw - 72px))) {\n.acu-v2-app__mobile-nav {\r\n    width: min(280px, calc(100vw - 72px));\r\n    flex: 0 0 min(280px, calc(100vw - 72px));\n}\n}\n@supports (width: 100dvw) {\n.acu-v2-app__mobile-nav {\r\n    max-width: calc(100dvw - 72px);\n}\n}\n@supports (height: 100dvh) {\n.acu-v2-app__mobile-nav {\r\n    height: 100dvh;\r\n    max-height: 100dvh;\n}\n}\r\n\r\n/* ── Theme switcher ── */\n.acu-v2-app__header-right {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 4px;\r\n  flex: 0 0 auto;\n}\n.acu-v2-app__theme-switcher {\r\n  position: relative;\n}\n.acu-v2-app__theme-btn {\r\n  width: 30px;\r\n  height: 30px;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: 14px;\r\n  cursor: pointer;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__theme-btn:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-menu {\r\n  position: absolute;\r\n  top: calc(100% + 6px);\r\n  right: 0;\r\n  z-index: 10;\r\n  list-style: none;\r\n  margin: 0;\r\n  padding: 4px;\r\n  width: min(280px, calc(100vw - 24px));\r\n  min-width: 240px;\r\n  background: var(--acu-bg-1);\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  box-shadow: var(--acu-shadow);\r\n  animation: theme-menu-in 0.12s ease-out both;\n}\n.acu-v2-app__theme-menu.is-closing {\r\n  pointer-events: none;\r\n  animation: theme-menu-out 0.12s ease-in both;\n}\n.acu-v2-app__theme-option {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 8px;\r\n  padding: 7px 10px;\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  color: var(--acu-text-2);\r\n  border-radius: var(--acu-radius-sm);\r\n  cursor: pointer;\r\n  user-select: none;\n}\n.acu-v2-app__theme-option:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active {\r\n  color: var(--acu-on-accent);\r\n  background: var(--acu-accent);\r\n  font-weight: 600;\n}\n.acu-v2-app__theme-option-main {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  min-width: 0;\r\n  flex: 1 1 auto;\n}\n.acu-v2-app__theme-name {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-app__theme-tag {\r\n  flex: 0 0 auto;\r\n  padding: 1px 5px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-accent) 12%, transparent);\r\n  color: var(--acu-accent);\r\n  font-size: var(--acu-font-size-micro, 10px);\r\n  font-weight: 600;\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tag {\r\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 4px;\r\n  flex: 0 0 auto;\r\n  opacity: 0.72;\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn) {\r\n  background: transparent;\r\n  color: inherit;\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn:hover:not(:disabled)) {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools :deep(.acu-icon-btn:hover:not(:disabled)) {\r\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn--danger:hover:not(:disabled)) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\r\n  color: var(--acu-danger);\n}\n.acu-v2-app__theme-option:hover .acu-v2-app__theme-tools,\r\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools {\r\n  opacity: 1;\n}\n.acu-v2-app__theme-swatch {\r\n  display: block;\r\n  width: 18px;\r\n  height: 18px;\r\n  border-radius: 999px;\r\n  flex: 0 0 18px;\r\n  background: linear-gradient(\r\n    135deg,\r\n    var(--acu-theme-swatch-bg) 0 56%,\r\n    var(--acu-theme-swatch-accent) 56% 100%\r\n  );\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-border-2) 72%, transparent);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-swatch {\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-on-accent) 62%, transparent);\n}\n.acu-v2-app__theme-menu-footer {\r\n  display: flex;\r\n  justify-content: stretch;\r\n  margin-top: 4px;\r\n  padding: 7px 6px 4px;\r\n  border-top: 1px solid var(--acu-border);\n}\n.acu-v2-app__theme-menu-footer :deep(.acu-file-button),\r\n.acu-v2-app__theme-menu-footer :deep(.acu-btn) {\r\n  width: 100%;\n}\n@keyframes theme-menu-in {\nfrom {\r\n    opacity: 0;\r\n    transform: translateY(-4px);\n}\nto {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\n}\n@keyframes theme-menu-out {\nfrom {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\nto {\r\n    opacity: 0;\r\n    transform: translateY(-4px);\n}\n}\n@keyframes mobile-nav-layer-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes mobile-nav-drawer-in {\nfrom { transform: translateX(-100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes mobile-nav-layer-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes mobile-nav-drawer-out {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(-100%);\n}\n}\n@media (max-width: 720px) {\n.acu-v2-app__header {\r\n    min-height: 48px;\r\n    padding: 8px 10px;\n}\n.acu-v2-app__header-left {\r\n    gap: 6px;\n}\n.acu-v2-app__menu {\r\n    display: inline-flex;\n}\n.acu-v2-app__page-title {\r\n    font-size: 18px;\n}\n.acu-v2-app__desktop-sidebar {\r\n    display: none;\n}\n.acu-v2-app__mobile-nav-layer {\r\n    display: flex;\n}\n}\r\n", "src/presentation-v2/App.vue#style-0");
     var App_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1 = { class: "acu-v2-app" };
