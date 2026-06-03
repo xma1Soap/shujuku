@@ -31767,7 +31767,6 @@ $CONTENT
         if (!Array.isArray(groups) || groups.length === 0) {
             return { success: true, failedGroups: [] };
         }
-        const chatHistory = getChatArray_ACU();
         const templateForLookup = parseTableTemplateJson_ACU({ stripSeedRows: true });
         const failedGroups = new Set();
         let firstError;
@@ -31784,82 +31783,106 @@ $CONTENT
                 const firstMessageIndexOfBatch = batchIndices[0];
                 const lastMessageIndexOfBatch = batchIndices[batchIndices.length - 1];
                 const finalSaveTargetIndex = lastMessageIndexOfBatch;
-                const baseResult = buildBatchMergeBase_ACU(batchNumber);
-                if (!baseResult.data) {
-                    failedGroups.add(group.key);
-                    firstError = firstError || baseResult.error || '无法构建合并基底，操作已终止。';
-                    continue;
-                }
-                const mergedBatchData = baseResult.data;
-                const batchSheetKeys = getSortedSheetKeys_ACU(mergedBatchData);
-                const batchIsolationKey = getCurrentIsolationKey_ACU();
-                loadBatchBaseData_ACU(chatHistory, firstMessageIndexOfBatch, batchIsolationKey, batchSheetKeys, mergedBatchData);
-                _set_currentJsonTableData_ACU(mergedBatchData);
-                let sliceStartIndex = firstMessageIndexOfBatch;
-                if (sliceStartIndex > 0 && chatHistory[sliceStartIndex - 1]?.is_user) {
-                    sliceStartIndex--;
-                }
-                const messagesForContext = chatHistory.slice(sliceStartIndex, lastMessageIndexOfBatch + 1);
-                const isAutoUpdateMode = mode && mode.startsWith('auto');
-                const lastAiMessageInBatch = chatHistory[lastMessageIndexOfBatch];
-                const lastAiMessageContent = lastAiMessageInBatch?.mes || lastAiMessageInBatch?.message || '';
-                const lastAiMessageLength = lastAiMessageContent.length;
-                const minReplyLength = settings_ACU.autoUpdateTokenThreshold || 0;
-                if (isAutoUpdateMode && lastAiMessageLength < minReplyLength) {
-                    continue;
-                }
                 const updateMode = resolveUpdateMode_ACU(mode);
-                const baseSnapshot = JSON.parse(JSON.stringify(mergedBatchData));
-                let effectiveRequestOptions = group.requestOptions || null;
-                if (!effectiveRequestOptions?.tableApiPreset && Array.isArray(group.sheetKeys) && group.sheetKeys.length > 0) {
-                    const firstTableName = templateForLookup?.[group.sheetKeys[0]]?.name || '';
-                    const resolvedPreset = resolveTableApiPresetOverride_ACU(firstTableName);
-                    if (resolvedPreset) {
-                        effectiveRequestOptions = { ...(effectiveRequestOptions || {}), tableApiPreset: resolvedPreset };
-                    }
-                }
-                const job = {
-                    groupKey: group.key,
-                    groupId: group.groupId,
+                const bucketKey = `${finalSaveTargetIndex}|${batchNumber}|${updateMode}|${options.isImportMode === true ? 1 : 0}`;
+                const plannedJob = {
+                    group,
                     batchNumber,
-                    targetSheetKeys: group.sheetKeys,
-                    messagesForContext,
+                    firstMessageIndexOfBatch,
+                    lastMessageIndexOfBatch,
                     saveTargetIndex: finalSaveTargetIndex,
                     updateMode,
-                    requestOptions: effectiveRequestOptions,
-                    baseSnapshot,
-                    isImportMode: options.isImportMode === true,
                 };
-                const bucketKey = `${finalSaveTargetIndex}|${batchNumber}|${updateMode}|${options.isImportMode === true ? 1 : 0}`;
                 const existingBucket = transactionBuckets.get(bucketKey);
                 if (existingBucket) {
-                    existingBucket.jobs.push(job);
+                    existingBucket.plannedJobs.push(plannedJob);
                 }
                 else {
                     transactionBuckets.set(bucketKey, {
                         saveTargetIndex: finalSaveTargetIndex,
                         batchNumber,
                         updateMode,
-                        baseSnapshot,
-                        jobs: [job],
+                        plannedJobs: [plannedJob],
                     });
                 }
             }
         }
         const orderedBuckets = [...transactionBuckets.values()].sort((a, b) => a.saveTargetIndex - b.saveTargetIndex || a.batchNumber - b.batchNumber);
-        for (const bucket of orderedBuckets) {
+        const emitBucketProgress = (bucketIndex, event) => {
+            options.onProgress?.({
+                ...event,
+                currentBatch: bucketIndex + 1,
+                totalBatches: orderedBuckets.length,
+            });
+        };
+        for (let bucketIndex = 0; bucketIndex < orderedBuckets.length; bucketIndex++) {
+            const bucket = orderedBuckets[bucketIndex];
             const maxBucketRetries = Math.max(1, Number(settings_ACU.tableMaxRetries) || 3);
             let retryUnifiedError = null;
             let bucketSucceeded = false;
             for (let bucketAttempt = 1; bucketAttempt <= maxBucketRetries; bucketAttempt++) {
+                const chatHistory = getChatArray_ACU();
+                const basePlan = bucket.plannedJobs[0];
+                const baseResult = buildBatchMergeBase_ACU(bucket.batchNumber);
+                if (!baseResult.data) {
+                    bucket.plannedJobs.forEach(job => failedGroups.add(job.group.key));
+                    firstError = firstError || baseResult.error || '无法构建合并基底，操作已终止。';
+                    break;
+                }
+                const mergedBatchData = baseResult.data;
+                const batchSheetKeys = getSortedSheetKeys_ACU(mergedBatchData);
+                const batchIsolationKey = getCurrentIsolationKey_ACU();
+                loadBatchBaseData_ACU(chatHistory, basePlan.firstMessageIndexOfBatch, batchIsolationKey, batchSheetKeys, mergedBatchData);
+                _set_currentJsonTableData_ACU(mergedBatchData);
+                const baseSnapshot = JSON.parse(JSON.stringify(mergedBatchData));
+                const jobs = [];
+                for (const plannedJob of bucket.plannedJobs) {
+                    const isAutoUpdateMode = mode && mode.startsWith('auto');
+                    const lastAiMessageInBatch = chatHistory[plannedJob.lastMessageIndexOfBatch];
+                    const lastAiMessageContent = lastAiMessageInBatch?.mes || lastAiMessageInBatch?.message || '';
+                    const lastAiMessageLength = lastAiMessageContent.length;
+                    const minReplyLength = settings_ACU.autoUpdateTokenThreshold || 0;
+                    if (isAutoUpdateMode && lastAiMessageLength < minReplyLength) {
+                        continue;
+                    }
+                    let sliceStartIndex = plannedJob.firstMessageIndexOfBatch;
+                    if (sliceStartIndex > 0 && chatHistory[sliceStartIndex - 1]?.is_user) {
+                        sliceStartIndex--;
+                    }
+                    const messagesForContext = chatHistory.slice(sliceStartIndex, plannedJob.lastMessageIndexOfBatch + 1);
+                    let effectiveRequestOptions = plannedJob.group.requestOptions || null;
+                    if (!effectiveRequestOptions?.tableApiPreset && Array.isArray(plannedJob.group.sheetKeys) && plannedJob.group.sheetKeys.length > 0) {
+                        const firstTableName = templateForLookup?.[plannedJob.group.sheetKeys[0]]?.name || '';
+                        const resolvedPreset = resolveTableApiPresetOverride_ACU(firstTableName);
+                        if (resolvedPreset) {
+                            effectiveRequestOptions = { ...(effectiveRequestOptions || {}), tableApiPreset: resolvedPreset };
+                        }
+                    }
+                    jobs.push({
+                        groupKey: plannedJob.group.key,
+                        groupId: plannedJob.group.groupId,
+                        batchNumber: plannedJob.batchNumber,
+                        targetSheetKeys: plannedJob.group.sheetKeys,
+                        messagesForContext,
+                        saveTargetIndex: plannedJob.saveTargetIndex,
+                        updateMode: plannedJob.updateMode,
+                        requestOptions: effectiveRequestOptions,
+                        baseSnapshot,
+                        isImportMode: options.isImportMode === true,
+                    });
+                }
+                if (jobs.length === 0) {
+                    bucketSucceeded = true;
+                    break;
+                }
                 const collectFeedback = retryUnifiedError ? { lastUnifiedError: retryUnifiedError } : undefined;
-                const settledResponses = await Promise.allSettled(bucket.jobs.map(job => collectGroupFillResponse_ACU(job, collectFeedback, options.abortController)));
+                const settledResponses = await Promise.allSettled(jobs.map(job => collectGroupFillResponse_ACU(job, collectFeedback, options.abortController, { onProgress: event => emitBucketProgress(bucketIndex, event) })));
                 const responses = [];
                 let collectFailed = false;
                 let collectError;
                 for (let i = 0; i < settledResponses.length; i++) {
                     const settledResponse = settledResponses[i];
-                    const job = bucket.jobs[i];
+                    const job = jobs[i];
                     if (settledResponse.status === 'rejected') {
                         collectFailed = true;
                         collectError = collectError || (settledResponse.reason instanceof Error ? settledResponse.reason.message : String(settledResponse.reason || 'AI响应收集失败'));
@@ -31873,11 +31896,11 @@ $CONTENT
                     responses.push(settledResponse.value);
                 }
                 if (collectFailed) {
-                    bucket.jobs.forEach(job => failedGroups.add(job.groupKey));
+                    jobs.forEach(job => failedGroups.add(job.groupKey));
                     firstError = firstError || collectError || 'AI响应收集失败';
                     break;
                 }
-                const applyResult = await applyUnifiedGroupFillResponses_ACU(responses, bucket.baseSnapshot, {
+                const applyResult = await applyUnifiedGroupFillResponses_ACU(responses, baseSnapshot, {
                     saveTargetIndex: bucket.saveTargetIndex,
                     updateMode: bucket.updateMode,
                     isImportMode: options.isImportMode === true,
@@ -31888,8 +31911,16 @@ $CONTENT
                 }
                 retryUnifiedError = applyResult.error || '统一提交失败。';
                 if (bucketAttempt >= maxBucketRetries) {
-                    bucket.jobs.forEach(job => failedGroups.add(job.groupKey));
+                    jobs.forEach(job => failedGroups.add(job.groupKey));
                     firstError = firstError || `统一提交在 ${maxBucketRetries} 次尝试后仍失败: ${retryUnifiedError}`;
+                }
+                else {
+                    emitBucketProgress(bucketIndex, {
+                        phase: 'retry',
+                        attempt: bucketAttempt,
+                        maxRetries: maxBucketRetries,
+                        message: retryUnifiedError.substring(0, 50),
+                    });
                 }
             }
             if (!bucketSucceeded && firstError && options.abortController?.signal.aborted) {
@@ -32331,7 +32362,9 @@ $CONTENT
                         requestOptions: effectiveRequestOptions,
                     };
                 });
-                const chunkResult = await processGroupedRuntimeChunk_ACU(groupedChunk, 'manual_independent');
+                const chunkResult = await processGroupedRuntimeChunk_ACU(groupedChunk, 'manual_independent', {
+                    onProgress: options.onProgress,
+                });
                 if (!chunkResult.success) {
                     chunkResult.failedGroups.forEach(key => {
                         failedGroups.push({ key, error: chunkResult.error || '手动更新失败或被终止。' });
@@ -34470,6 +34503,11 @@ $CONTENT
             return;
         loadingToast.find('.acu-toast-progress-message').text(message);
     }
+    function clearLoadingToast(loadingToast) {
+        if (loadingToast && toastr_API_ACU) {
+            toastr_API_ACU.clear(loadingToast);
+        }
+    }
     /**
      * 根据 service 层返回的进度事件更新 UI
      * presentation 层自己决定"怎么展示"
@@ -34574,6 +34612,7 @@ $CONTENT
      */
     async function handleManualUpdate_ACU() {
         logDebug_ACU('[更新流程] handleManualUpdate: 开始手动更新');
+        let manualProgressToast = null;
         try {
             if (shouldShowVectorMemoryManualUpdateWarning_ACU()) {
                 syncManualUpdateButtonAvailability_ACU();
@@ -34604,8 +34643,29 @@ $CONTENT
             }
             // 调用 service 层，传入 clearBeforeUpdate: true（用户已确认清空）
             _set_wasStoppedByUser_ACU$1(false);
+            notifyTableFillStart();
+            const stopButtonId = `acu-stop-manual-update-btn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const stopButtonHtml = renderStopButton_ACU(stopButtonId, '终止');
+            manualProgressToast = showToastr_ACU('info', `<div><span class="acu-toast-progress-message">手动填表开始。</span>${stopButtonHtml}</div>`, {
+                timeOut: 0,
+                extendedTimeOut: 0,
+                tapToDismiss: false,
+                acuToastCategory: ACU_TOAST_CATEGORY_ACU.MANUAL_TABLE,
+                onShown: function () {
+                    if (typeof bindTableFillStopButton_ACU === 'function') {
+                        bindTableFillStopButton_ACU(stopButtonId, () => {
+                            _set_wasStoppedByUser_ACU$1(true);
+                            abortAllActiveRequests_ACU$1();
+                            _set_isAutoUpdatingCard_ACU$1(false);
+                            updateStatusText('填表任务已终止，正在停止当前任务与后续批次...', false);
+                            updateLoadingToastMessage(manualProgressToast, '填表任务已终止，正在停止当前任务与后续批次...');
+                            showToastr_ACU('warning', '填表任务已由用户终止，当前任务与后续批次将立即停止。');
+                        });
+                    }
+                },
+            });
             const result = await orchestrateManualUpdate_ACU(targetKeys, 
-            // processBatch 回调
+            // processBatch 回调保留给兼容路径；当前手动填表主路径由 service grouped helper 执行。
             async (indices, batchMode, batchOptions) => {
                 return processUpdates_ACU(indices, batchMode, batchOptions);
             }, 
@@ -34614,7 +34674,12 @@ $CONTENT
                 await refreshMergedDataAndNotifyWithUI_ACU();
             }, 
             // [新增] 传入用户确认后的预清空选项
-            { clearBeforeUpdate: true });
+            {
+                clearBeforeUpdate: true,
+                onProgress: event => handleProgressEvent(event, false, manualProgressToast),
+            });
+            clearLoadingToast(manualProgressToast);
+            manualProgressToast = null;
             // UI：根据返回值显示 toast
             if (result.success) {
                 showToastr_ACU('success', '手动更新完成！');
@@ -34633,6 +34698,7 @@ $CONTENT
             }
         }
         finally {
+            clearLoadingToast(manualProgressToast);
             // UI：重置手动更新按钮
             if (typeof resetManualUpdateButton_ACU === 'function')
                 resetManualUpdateButton_ACU();
@@ -80236,7 +80302,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 const restoreAutoUpdateSettings = applyManualSettingsForOrchestrator();
                 let result;
                 try {
-                    result = await orchestrateManualUpdate_ACU(selectedManualTableKeys.value, runProcessBatch, async () => { await reloadStorageProvider(); }, { clearBeforeUpdate });
+                    result = await orchestrateManualUpdate_ACU(selectedManualTableKeys.value, runProcessBatch, async () => { await reloadStorageProvider(); }, { clearBeforeUpdate, onProgress: handleProgress });
                 }
                 finally {
                     restoreAutoUpdateSettings();
