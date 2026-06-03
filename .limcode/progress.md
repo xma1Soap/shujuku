@@ -1,6 +1,6 @@
 # 项目进度
 - Project: SP数据库
-- Updated At: 2026-06-03T02:44:15.892Z
+- Updated At: 2026-06-03T05:49:17.363Z
 - Status: active
 - Phase: implementation
 
@@ -9,16 +9,16 @@
 <!-- LIMCODE_PROGRESS_SUMMARY_START -->
 - 当前进度：尚无里程碑记录
 - 当前焦点：spv3.9.8.1 已发布，等待 housekeeping / tsconfig / 下版本号决策
-- 最新结论：spv3.9.8.1 发布完成：release commit 2f74398 推送至 main，annotated tag 905d8768 推送并指向 2f74398；9 个发布文件（5 src + 3 tests + 1 dist/index.bundle.js + 1 index.js）精确不含污染，build exitCode 0，架构 guard…
+- 最新结论：The error logged during JSON sanitization is a false alarm. It is emitted during an expected and fully recoverable fallback path when AI-generated JSON contains unescaped quotes. T…
 - 当前阻塞：无技术阻塞。
-- 下一步：由助手决定后续动作：是否清理 .limcode/* 与 .analysis-archive/* 临时产物、是否处理 tsconfig.json:19 baseUrl 弃用诊断、是否进入 spv3.9.8.2 计划。
+- 下一步：Downgrade the initial parsing failure log level from `ERROR` to `WARN` or `DEBUG` in `parseTableEditCommandLine_ACU` to prevent false alarms.
 <!-- LIMCODE_PROGRESS_SUMMARY_END -->
 
 ## 关联文档
 
 <!-- LIMCODE_PROGRESS_ARTIFACTS_START -->
 - 计划：`.limcode/plans/修复剧情推进自定义API温度硬编码优化计划.md`
-- 审查：`.limcode/review/spv69-spv37-完整移植验收报告.md`
+- 审查：`.limcode/review/manual-update-toast.md`
 <!-- LIMCODE_PROGRESS_ARTIFACTS_END -->
 
 ## 当前 TODO 快照
@@ -52,10 +52,6 @@
 ## 最近更新
 
 <!-- LIMCODE_PROGRESS_LOG_START -->
-- 2026-06-02T15:35:24.162Z | updated | spv3.9.7-progress-sync | .limcode/progress.md 已同步：currentFocus = spv3.9.7 发布收口已完成，nextAction 切换到具体收口动作（子代理验收 + 助手裁决三项收尾决策）。
-- 2026-06-02T16:38:39.206Z | artifact_changed | plan | 同步计划文档：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md
-- 2026-06-02T16:53:56.799Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md
-- 2026-06-02T17:00:03.206Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md
 - 2026-06-02T17:08:36.847Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md
 - 2026-06-02T17:33:54.941Z | milestone_recorded | spv3.9.8 | spv3.9.8 发布完成：release commit 324c319 推送至 main，annotated tag 51bd12f 推送并指向 324c319；6 文件 244/244 测试通过，build exit 0，独立验收通过。
 - 2026-06-02T17:33:54.941Z | updated | release-pipeline | 发布链路闭合：目标测试通过 → npm run build → 精确 git add 12 文件（dist/index.bundle.js 用 git add -f）→ git commit → git push origin main → git tag -a spv3.9.8 → git push origin spv3.9.8 → 远端与 tag object 校验。
@@ -72,6 +68,10 @@
 - 2026-06-02T19:20:05.487Z | updated | spv3.9.8.1-progress-sync | .limcode/progress.md 已同步：currentFocus = spv3.9.8.1 已发布，等待 housekeeping / tsconfig / 下版本号决策；nextAction 切换到具体收口决策。
 - 2026-06-03T02:38:19.749Z | artifact_changed | plan | 同步计划文档：.limcode/plans/修复剧情推进自定义API温度硬编码优化计划.md
 - 2026-06-03T02:44:15.892Z | artifact_changed | plan | 同步计划文档：.limcode/plans/修复剧情推进自定义API温度硬编码优化计划.md
+- 2026-06-03T05:43:12.749Z | artifact_changed | review | 同步审查文档：.limcode/review/json-sanitization-issue-review.md
+- 2026-06-03T05:45:42.918Z | artifact_changed | review | 同步审查里程碑：M1
+- 2026-06-03T05:45:53.973Z | artifact_changed | review | 同步审查结论：.limcode/review/json-sanitization-issue-review.md
+- 2026-06-03T05:49:17.363Z | artifact_changed | review | 同步审查文档：.limcode/review/manual-update-toast.md
 <!-- LIMCODE_PROGRESS_LOG_END -->
 
 <!-- LIMCODE_PROGRESS_METADATA_START -->
@@ -81,16 +81,16 @@
   "projectId": "sp数据库",
   "projectName": "SP数据库",
   "createdAt": "2026-05-29T14:19:16.082Z",
-  "updatedAt": "2026-06-03T02:44:15.892Z",
+  "updatedAt": "2026-06-03T05:49:17.363Z",
   "status": "active",
   "phase": "implementation",
   "currentFocus": "spv3.9.8.1 已发布，等待 housekeeping / tsconfig / 下版本号决策",
-  "latestConclusion": "spv3.9.8.1 发布完成：release commit 2f74398 推送至 main，annotated tag 905d8768 推送并指向 2f74398；9 个发布文件（5 src + 3 tests + 1 dist/index.bundle.js + 1 index.js）精确不含污染，build exitCode 0，架构 guard 0 违规，dist/index.bundle.js 与 index.js SHA256 一致且首行 `// ==UserScript==`；8/8 业务修复 TODO 全部 completed。",
+  "latestConclusion": "The error logged during JSON sanitization is a false alarm. It is emitted during an expected and fully recoverable fallback path when AI-generated JSON contains unescaped quotes. The data is correctly recovered, parsed, and saved via the loose object parser (`coerceLooseRowObject_ACU`) and sanitization pipeline, without causing any functional impact or data loss. The only impact is developer/user confusion caused by an `ERROR` level log with a stack trace.\n\nThe recommended fix is to downgrade `logError_ACU` to `logWarn_ACU` or `logDebug_ACU` at the initial `JSON.parse` failure block in `src/service/ai/prompt-builder/table-edit-parser.ts`.",
   "currentBlocker": "无技术阻塞。",
-  "nextAction": "由助手决定后续动作：是否清理 .limcode/* 与 .analysis-archive/* 临时产物、是否处理 tsconfig.json:19 baseUrl 弃用诊断、是否进入 spv3.9.8.2 计划。",
+  "nextAction": "Downgrade the initial parsing failure log level from `ERROR` to `WARN` or `DEBUG` in `parseTableEditCommandLine_ACU` to prevent false alarms.",
   "activeArtifacts": {
     "plan": ".limcode/plans/修复剧情推进自定义API温度硬编码优化计划.md",
-    "review": ".limcode/review/spv69-spv37-完整移植验收报告.md"
+    "review": ".limcode/review/manual-update-toast.md"
   },
   "todos": [
     {
@@ -152,30 +152,6 @@
   "milestones": [],
   "risks": [],
   "log": [
-    {
-      "at": "2026-06-02T15:35:24.162Z",
-      "type": "updated",
-      "refId": "spv3.9.7-progress-sync",
-      "message": ".limcode/progress.md 已同步：currentFocus = spv3.9.7 发布收口已完成，nextAction 切换到具体收口动作（子代理验收 + 助手裁决三项收尾决策）。"
-    },
-    {
-      "at": "2026-06-02T16:38:39.206Z",
-      "type": "artifact_changed",
-      "refId": "plan",
-      "message": "同步计划文档：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md"
-    },
-    {
-      "at": "2026-06-02T16:53:56.799Z",
-      "type": "artifact_changed",
-      "refId": "plan",
-      "message": "同步计划 TODO 快照：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md"
-    },
-    {
-      "at": "2026-06-02T17:00:03.206Z",
-      "type": "artifact_changed",
-      "refId": "plan",
-      "message": "同步计划 TODO 快照：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md"
-    },
     {
       "at": "2026-06-02T17:08:36.847Z",
       "type": "artifact_changed",
@@ -270,6 +246,30 @@
       "type": "artifact_changed",
       "refId": "plan",
       "message": "同步计划文档：.limcode/plans/修复剧情推进自定义API温度硬编码优化计划.md"
+    },
+    {
+      "at": "2026-06-03T05:43:12.749Z",
+      "type": "artifact_changed",
+      "refId": "review",
+      "message": "同步审查文档：.limcode/review/json-sanitization-issue-review.md"
+    },
+    {
+      "at": "2026-06-03T05:45:42.918Z",
+      "type": "artifact_changed",
+      "refId": "review",
+      "message": "同步审查里程碑：M1"
+    },
+    {
+      "at": "2026-06-03T05:45:53.973Z",
+      "type": "artifact_changed",
+      "refId": "review",
+      "message": "同步审查结论：.limcode/review/json-sanitization-issue-review.md"
+    },
+    {
+      "at": "2026-06-03T05:49:17.363Z",
+      "type": "artifact_changed",
+      "refId": "review",
+      "message": "同步审查文档：.limcode/review/manual-update-toast.md"
     }
   ],
   "stats": {
@@ -283,8 +283,8 @@
   },
   "render": {
     "rendererVersion": 1,
-    "generatedAt": "2026-06-03T02:44:15.892Z",
-    "bodyHash": "sha256:fd502b1d739c46e2768b076b38aac095e47dfa258aab148ddd72554a1da3e072"
+    "generatedAt": "2026-06-03T05:49:17.363Z",
+    "bodyHash": "sha256:5d88545971e206471a1a0be195fadc5bc8c9c77530293e65b5b30a507bd1aec9"
   }
 }
 <!-- LIMCODE_PROGRESS_METADATA_END -->
