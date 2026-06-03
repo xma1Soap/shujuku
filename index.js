@@ -73422,7 +73422,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 }
                 const total = state.staging.chunkCount;
                 const idx = state.staging.processedIndex;
-                if (idx != null && idx > 0 && idx < total) {
+                if (idx != null && idx >= 0 && idx < total) {
                     return `状态：已暂停，完成 ${idx}/${total}。`;
                 }
                 return `状态：已准备好 ${total} 个条目可供注入。`;
@@ -82841,6 +82841,8 @@ Expected function or array of functions, received type ${typeof value}.`
         const store = useImportFlowStore();
         const toast = useToastStore();
         let progressToastId = null;
+        let abortRequested = false;
+        let currentAbortController = null;
         function notify(kind, text, options = {}) {
             if (progressToastId) {
                 if (toast.update(progressToastId, kind, text, options)) {
@@ -82852,11 +82854,55 @@ Expected function or array of functions, received type ${typeof value}.`
             }
             toast[kind](text, options);
         }
+        function progressToastOptions() {
+            return {
+                durationMs: 0,
+                muteable: false,
+                dismissible: false,
+                action: abortRequested
+                    ? undefined
+                    : {
+                        label: '终止',
+                        variant: 'danger',
+                        dismissOnClick: false,
+                        onClick: requestAbort,
+                    },
+            };
+        }
         function notifyProgress(text) {
-            if (progressToastId && toast.update(progressToastId, 'info', text, { durationMs: 0, muteable: false })) {
+            if (progressToastId && toast.update(progressToastId, 'info', text, progressToastOptions())) {
                 return;
             }
-            progressToastId = toast.info(text, { durationMs: 0, muteable: false });
+            progressToastId = toast.info(text, progressToastOptions());
+        }
+        function requestAbort() {
+            if (abortRequested)
+                return;
+            abortRequested = true;
+            _set_wasStoppedByUser_ACU$1(true);
+            currentAbortController?.abort();
+            abortAllActiveRequests_ACU$1();
+            const text = '外部导入已请求终止，正在停止当前分块并保存断点...';
+            if (progressToastId) {
+                toast.update(progressToastId, 'warning', text, {
+                    durationMs: 0,
+                    muteable: false,
+                    dismissible: false,
+                });
+            }
+            else {
+                toast.warning(text, {
+                    durationMs: 0,
+                    muteable: false,
+                    dismissible: false,
+                });
+            }
+        }
+        async function saveAbortCheckpoint(status, index, total) {
+            status.currentIndex = index;
+            await importTempSet_ACU(STORAGE_KEY_IMPORTED_STATUS_ACU, JSON.stringify(status));
+            await store.refreshStaging();
+            notify('warning', `外部导入已终止，已保存断点：完成 ${index}/${total}。稍后可点击"继续写入"恢复。`, { muteable: false });
         }
         async function splitFile(file) {
             if (!file)
@@ -83013,6 +83059,9 @@ Expected function or array of functions, received type ${typeof value}.`
             }
             store.setBusy(true);
             progressToastId = null;
+            abortRequested = false;
+            currentAbortController = null;
+            _set_wasStoppedByUser_ACU$1(false);
             try {
                 const selectionSig = JSON.stringify(selectedSheetKeys);
                 const initResult = await initImportDatabase_ACU(target, selectedSheetKeys, allChunks, selectionSig);
@@ -83024,16 +83073,31 @@ Expected function or array of functions, received type ${typeof value}.`
                 const modeSuffix = initResult.modeSuffix;
                 const updateMode = 'manual_unified';
                 for (let i = status.currentIndex; i < allChunks.length; i++) {
+                    if (abortRequested) {
+                        await saveAbortCheckpoint(status, i, allChunks.length);
+                        return;
+                    }
                     const chunk = allChunks[i] || {};
                     const mockMessage = { is_user: false, mes: String(chunk.content || ''), name: '导入文本' };
                     let success = false;
                     let lastError = '';
                     const maxOuterRetries = 3;
                     for (let attempt = 1; attempt <= maxOuterRetries && !success; attempt++) {
+                        if (abortRequested) {
+                            await saveAbortCheckpoint(status, i, allChunks.length);
+                            return;
+                        }
+                        const abortController = new AbortController();
+                        currentAbortController = abortController;
                         notifyProgress(`正在处理分块 ${i + 1}/${allChunks.length}（尝试 ${attempt}/${maxOuterRetries}）...`);
-                        const result = await withImportPromptFilterForced(() => executeCardUpdateCore_ACU([mockMessage], -1, true, updateMode, true, selectedSheetKeys, null, new AbortController(), { currentBatch: i + 1, totalBatches: allChunks.length }, event => {
+                        const result = await withImportPromptFilterForced(() => executeCardUpdateCore_ACU([mockMessage], -1, true, updateMode, true, selectedSheetKeys, null, abortController, { currentBatch: i + 1, totalBatches: allChunks.length }, event => {
                             notifyProgress(progressLabel(event));
                         }));
+                        currentAbortController = null;
+                        if (abortRequested || result.aborted) {
+                            await saveAbortCheckpoint(status, i, allChunks.length);
+                            return;
+                        }
                         success = result.success;
                         lastError = result.error || (result.aborted ? '任务已终止。' : '');
                         if (!success && attempt < maxOuterRetries) {
@@ -83070,6 +83134,8 @@ Expected function or array of functions, received type ${typeof value}.`
                 notify('error', `外部导入失败：${e?.message || '未知错误'}`, { muteable: false });
             }
             finally {
+                currentAbortController = null;
+                _set_wasStoppedByUser_ACU$1(false);
                 await store.refreshStaging();
                 store.setBusy(false);
             }
@@ -83124,14 +83190,14 @@ Expected function or array of functions, received type ${typeof value}.`
                 if (store.hasTableSelection && store.selectedSheetKeys.length === 0)
                     return "warning";
                 if (store.staging.processedIndex != null &&
-                    store.staging.processedIndex > 0 &&
+                    store.staging.processedIndex >= 0 &&
                     store.staging.processedIndex < store.staging.chunkCount)
                     return "warning";
                 return "success";
             });
             const injectLabel = computed(() => {
                 if (store.staging.processedIndex != null &&
-                    store.staging.processedIndex > 0 &&
+                    store.staging.processedIndex >= 0 &&
                     store.staging.processedIndex < store.staging.chunkCount) {
                     return "继续写入";
                 }
