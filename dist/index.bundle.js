@@ -76308,7 +76308,7 @@ Expected function or array of functions, received type ${typeof value}.`
     							"onClick"
     						]),
     						createVNode($setup["AcuIconButton"], {
-    							icon: "fa-solid fa-file-export",
+    							icon: "fa-solid fa-upload",
     							title: "导出 JSON",
     							onClick: ($event) => _ctx.$emit("export", meta.name)
     						}, null, 8, ["onClick"]),
@@ -76710,7 +76710,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				}, {
     					default: withCtx(() => [..._cache[11] || (_cache[11] = [createBaseVNode(
     						"i",
-    						{ class: "fa-solid fa-file-import" },
+    						{ class: "fa-solid fa-download" },
     						null,
     						-1
     						/* CACHED */
@@ -76926,7 +76926,7 @@ Expected function or array of functions, received type ${typeof value}.`
     							"onClick"
     						]),
     						createVNode($setup["AcuIconButton"], {
-    							icon: "fa-solid fa-file-export",
+    							icon: "fa-solid fa-upload",
     							title: "导出 JSON",
     							disabled: $props.busy,
     							onClick: ($event) => _ctx.$emit("export", meta.name)
@@ -78188,7 +78188,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				}, {
     					default: withCtx(() => [..._cache[12] || (_cache[12] = [createBaseVNode(
     						"i",
-    						{ class: "fa-solid fa-file-import" },
+    						{ class: "fa-solid fa-download" },
     						null,
     						-1
     						/* CACHED */
@@ -80589,7 +80589,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				}, {
     					default: withCtx(() => [..._cache[8] || (_cache[8] = [createBaseVNode(
     						"i",
-    						{ class: "fa-solid fa-file-import" },
+    						{ class: "fa-solid fa-download" },
     						null,
     						-1
     						/* CACHED */
@@ -80606,7 +80606,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				}, {
     					default: withCtx(() => [..._cache[9] || (_cache[9] = [createBaseVNode(
     						"i",
-    						{ class: "fa-solid fa-file-export" },
+    						{ class: "fa-solid fa-upload" },
     						null,
     						-1
     						/* CACHED */
@@ -85329,7 +85329,13 @@ Expected function or array of functions, received type ${typeof value}.`
     					disabled: !!$setup.flow.busyAction.value,
     					onFile: $setup.flow.importCombinedSettings
     				}, {
-    					default: withCtx(() => [..._cache[9] || (_cache[9] = [createTextVNode(
+    					default: withCtx(() => [..._cache[9] || (_cache[9] = [createBaseVNode(
+    						"i",
+    						{ class: "fa-solid fa-download" },
+    						null,
+    						-1
+    						/* CACHED */
+    					), createTextVNode(
     						" 合并导入（模板+指令） ",
     						-1
     						/* CACHED */
@@ -85341,7 +85347,13 @@ Expected function or array of functions, received type ${typeof value}.`
     					disabled: !!$setup.flow.busyAction.value,
     					onClick: $setup.flow.exportCombinedSettings
     				}, {
-    					default: withCtx(() => [..._cache[10] || (_cache[10] = [createTextVNode(
+    					default: withCtx(() => [..._cache[10] || (_cache[10] = [createBaseVNode(
+    						"i",
+    						{ class: "fa-solid fa-upload" },
+    						null,
+    						-1
+    						/* CACHED */
+    					), createTextVNode(
     						" 合并导出（模板+指令） ",
     						-1
     						/* CACHED */
@@ -85353,7 +85365,13 @@ Expected function or array of functions, received type ${typeof value}.`
     					disabled: !!$setup.flow.busyAction.value,
     					onClick: $setup.flow.exportJsonData
     				}, {
-    					default: withCtx(() => [..._cache[11] || (_cache[11] = [createTextVNode(
+    					default: withCtx(() => [..._cache[11] || (_cache[11] = [createBaseVNode(
+    						"i",
+    						{ class: "fa-solid fa-upload" },
+    						null,
+    						-1
+    						/* CACHED */
+    					), createTextVNode(
     						" 特殊导出 ",
     						-1
     						/* CACHED */
@@ -85581,7 +85599,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						/* DYNAMIC_SLOTS */
     					)]), createBaseVNode("div", _hoisted_4$9, [
     						createVNode($setup["AcuIconButton"], {
-    							icon: "fa-solid fa-file-export",
+    							icon: "fa-solid fa-upload",
     							title: "导出 JSON",
     							onClick: ($event) => _ctx.$emit("export", preset.name)
     						}, null, 8, ["onClick"]),
@@ -86811,7 +86829,7 @@ Expected function or array of functions, received type ${typeof value}.`
     							}, {
     								default: withCtx(() => [..._cache[21] || (_cache[21] = [createBaseVNode(
     									"i",
-    									{ class: "fa-solid fa-file-import" },
+    									{ class: "fa-solid fa-download" },
     									null,
     									-1
     									/* CACHED */
@@ -87732,7 +87750,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						}, {
     							default: withCtx(() => [..._cache[12] || (_cache[12] = [createBaseVNode(
     								"i",
-    								{ class: "fa-solid fa-download" },
+    								{ class: "fa-solid fa-upload" },
     								null,
     								-1
     								/* CACHED */
@@ -92926,7 +92944,7 @@ Expected function or array of functions, received type ${typeof value}.`
     							class: "acu-v2-app__theme-tools",
     							onClick: _cache[0] || (_cache[0] = withModifiers(() => {}, ["stop"]))
     						}, [createVNode($setup["AcuIconButton"], {
-    							icon: "fa-solid fa-download",
+    							icon: "fa-solid fa-upload",
     							size: "sm",
     							title: "导出主题：" + t.name,
     							onClick: ($event) => $setup.exportTheme(t.id)
@@ -92948,7 +92966,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				}, {
     					default: withCtx(() => [..._cache[2] || (_cache[2] = [createBaseVNode(
     						"i",
-    						{ class: "fa-solid fa-file-import" },
+    						{ class: "fa-solid fa-download" },
     						null,
     						-1
     						/* CACHED */
