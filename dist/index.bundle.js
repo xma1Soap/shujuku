@@ -81146,24 +81146,77 @@ Expected function or array of functions, received type ${typeof value}.`
      * 这个 target 是写入侧（填好的表内容会写到这本书的条目里），
      * 与 Component B 的 source/enabledEntries（提示词附带条目）相互独立。
      */
+    const CLEANUP_SETTLE_DELAY_MS = 300;
+    function normalizeTarget(value) {
+        const trimmed = String(value || '').trim();
+        return trimmed || 'character';
+    }
+    async function waitForCleanupSettle() {
+        await new Promise(resolve => setTimeout(resolve, CLEANUP_SETTLE_DELAY_MS));
+    }
+    async function resolveLorebookName(targetSetting) {
+        if (targetSetting === 'character') {
+            return await getCurrentCharPrimaryLorebook_ACU();
+        }
+        return targetSetting || null;
+    }
     function useFormFillInjectionTarget() {
         const target = ref('character');
+        const switching = ref(false);
+        const toast = useToastStore();
         function refreshFromSettings() {
             const cfg = getCurrentWorldbookConfig_ACU();
-            const next = String(cfg?.injectionTarget || 'character');
-            target.value = next || 'character';
+            target.value = normalizeTarget(cfg?.injectionTarget);
         }
         function setTarget(value) {
             const cfg = getCurrentWorldbookConfig_ACU();
-            const trimmed = String(value || '').trim();
-            cfg.injectionTarget = trimmed || 'character';
+            cfg.injectionTarget = normalizeTarget(value);
             target.value = cfg.injectionTarget;
             saveSettings_ACU();
         }
+        async function switchTarget(value) {
+            const cfg = getCurrentWorldbookConfig_ACU();
+            const oldTargetSetting = normalizeTarget(cfg.injectionTarget);
+            const newTargetSetting = normalizeTarget(value);
+            if (oldTargetSetting === newTargetSetting)
+                return;
+            switching.value = true;
+            try {
+                const oldLorebookName = await resolveLorebookName(oldTargetSetting);
+                if (oldLorebookName) {
+                    toast.info(`正在从旧目标 [${oldLorebookName}] 中清除条目...`, { muteable: false });
+                    try {
+                        await deleteAllGeneratedEntries_ACU$1(oldLorebookName);
+                        await waitForCleanupSettle();
+                    }
+                    catch (e) {
+                        logError_ACU(`Failed to clean up old target ${oldLorebookName}:`, e);
+                    }
+                }
+                else {
+                    logWarn_ACU('Old lorebook name could not be determined, skipping cleanup.');
+                }
+                cfg.injectionTarget = newTargetSetting;
+                target.value = newTargetSetting;
+                saveSettings_ACU();
+                logDebug_ACU(`Injection target changed from "${oldTargetSetting}" to "${newTargetSetting}" for char ${currentChatFileIdentifier_ACU}.`);
+                if (currentJsonTableData_ACU) {
+                    toast.info('正在向新目标注入条目...', { muteable: false });
+                    await updateReadableLorebookEntry_ACU(true);
+                    toast.success('数据注入目标已成功切换！', { muteable: false });
+                }
+                else {
+                    toast.warning('数据注入目标已更新，但当前无数据可注入。', { muteable: false });
+                }
+            }
+            finally {
+                switching.value = false;
+            }
+        }
         /** WorldbookSelector 用的 modelValue：'character' 或 bookName。 */
         const selectorValue = computed(() => target.value || 'character');
-        function onSelectorChange(value) {
-            setTarget(value);
+        async function onSelectorChange(value) {
+            await switchTarget(value);
         }
         /** 文案：当前注入目标的人类可读名。 */
         async function describeTarget() {
@@ -81182,9 +81235,11 @@ Expected function or array of functions, received type ${typeof value}.`
         }
         return {
             target,
+            switching,
             selectorValue,
             refreshFromSettings,
             setTarget,
+            switchTarget,
             onSelectorChange,
             describeTarget,
         };
@@ -81553,9 +81608,9 @@ Expected function or array of functions, received type ${typeof value}.`
                 entriesSource.toggleManualBook(name, checked);
                 void refreshEntriesGroups();
             }
-            function onInjectionTargetChange(value) {
-                injectionTarget.onSelectorChange(value);
-                void refreshInjectionLabel();
+            async function onInjectionTargetChange(value) {
+                await injectionTarget.onSelectorChange(value);
+                await refreshInjectionLabel();
             }
             async function refreshAll() {
                 settings.refresh();
