@@ -70165,6 +70165,7 @@ Expected function or array of functions, received type ${typeof value}.`
     });
 
     const TOAST_LEAVE_MS = 160;
+    const DEFAULT_VISIBLE_TOAST_LIMIT = 4;
     var _sfc_main$_ = /*@__PURE__*/ defineComponent({
         __name: 'AcuToastViewport',
         setup(__props, { expose: __expose }) {
@@ -70182,6 +70183,13 @@ Expected function or array of functions, received type ${typeof value}.`
                 if (kind === "error")
                     return "fa-solid fa-circle-exclamation";
                 return "fa-solid fa-circle-info";
+            }
+            function cancelLeaveTimer(id) {
+                const timer = leaveTimers.get(id);
+                if (timer === undefined)
+                    return;
+                acuClearTimeout(timer);
+                leaveTimers.delete(id);
             }
             async function runAction(item) {
                 const action = item.action;
@@ -70215,11 +70223,11 @@ Expected function or array of functions, received type ${typeof value}.`
                 const nextById = new Map(items.map((item) => [item.id, item]));
                 const currentById = new Map(renderedItems.value.map((entry) => [entry.item.id, entry]));
                 const nextRendered = [];
+                const renderedLimit = Math.max(items.length, DEFAULT_VISIBLE_TOAST_LIMIT);
                 for (const item of items) {
                     const existing = currentById.get(item.id);
                     if (existing) {
-                        acuClearTimeout(leaveTimers.get(item.id));
-                        leaveTimers.delete(item.id);
+                        cancelLeaveTimer(item.id);
                         existing.item = item;
                         existing.isClosing = false;
                         nextRendered.push(existing);
@@ -70231,6 +70239,10 @@ Expected function or array of functions, received type ${typeof value}.`
                 for (const entry of renderedItems.value) {
                     if (nextById.has(entry.item.id))
                         continue;
+                    if (nextRendered.length >= renderedLimit) {
+                        cancelLeaveTimer(entry.item.id);
+                        continue;
+                    }
                     if (!entry.isClosing) {
                         entry.isClosing = true;
                         leaveTimers.set(entry.item.id, acuSetTimeout(() => {
@@ -70242,13 +70254,13 @@ Expected function or array of functions, received type ${typeof value}.`
                 }
                 renderedItems.value = nextRendered;
             }, { immediate: true, deep: true });
-            const __returned__ = { TOAST_LEAVE_MS, toast, portalTarget, renderedItems, leaveTimers, get observedClearVersion() { return observedClearVersion; }, set observedClearVersion(v) { observedClearVersion = v; }, iconForKind, runAction, AcuButton, AcuIconButton };
+            const __returned__ = { TOAST_LEAVE_MS, DEFAULT_VISIBLE_TOAST_LIMIT, toast, portalTarget, renderedItems, leaveTimers, get observedClearVersion() { return observedClearVersion; }, set observedClearVersion(v) { observedClearVersion = v; }, iconForKind, cancelLeaveTimer, runAction, AcuButton, AcuIconButton };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-toast-viewport {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  z-index: 9410;\r\n  box-sizing: border-box;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  min-height: 100%;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\r\n  pointer-events: none;\n}\n.acu-toast-viewport,\r\n.acu-toast-viewport * {\r\n  box-sizing: border-box;\n}\n.acu-toast-viewport__list {\r\n  position: absolute;\r\n  right: 18px;\r\n  bottom: 18px;\r\n  width: min(360px, calc(100% - 36px));\r\n  max-height: calc(100% - 36px);\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  margin: 0;\r\n  padding: 0;\r\n  overflow: hidden auto;\r\n  list-style: none;\n}\n.acu-v2-toast {\n  position: relative;\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: 18px minmax(0, 1fr) auto auto;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 10px;\r\n  overflow: hidden;\r\n  border: 1px solid color-mix(in srgb, var(--acu-border) 70%, transparent);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  box-shadow: none;\r\n  color: var(--acu-text-2);\n  pointer-events: auto;\n  animation: acu-toast-in 0.16s ease-out both;\n}\n.acu-v2-toast.is-closing {\n  pointer-events: none;\n  animation: acu-toast-out 0.16s ease-in both;\n}\n.acu-v2-toast__icon {\r\n  min-width: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1;\n}\n.acu-v2-toast--success .acu-v2-toast__icon {\r\n  color: var(--acu-success);\n}\n.acu-v2-toast--warning .acu-v2-toast__icon {\r\n  color: var(--acu-warning);\n}\n.acu-v2-toast--error .acu-v2-toast__icon {\r\n  color: var(--acu-danger);\n}\n.acu-v2-toast__text {\r\n  min-width: 0;\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-toast__action {\r\n  white-space: nowrap;\n}\n.acu-v2-toast__dismiss {\r\n  flex: 0 0 auto;\n}\n@keyframes acu-toast-in {\nfrom {\n    opacity: 0;\n    transform: translateY(6px);\n}\nto {\n    opacity: 1;\n    transform: translateY(0);\n}\n}\n@keyframes acu-toast-out {\nfrom {\n    opacity: 1;\n    transform: translateY(0);\n}\nto {\n    opacity: 0;\n    transform: translateY(6px);\n}\n}\n@media (max-width: 640px) {\n.acu-toast-viewport__list {\r\n    right: 12px;\r\n    bottom: calc(12px + env(safe-area-inset-bottom, 0px));\r\n    left: 12px;\r\n    width: auto;\r\n    max-height: calc(100% - 24px - env(safe-area-inset-bottom, 0px));\n}\n.acu-v2-toast {\r\n    grid-template-columns: 18px minmax(0, 1fr) auto;\n}\n.acu-v2-toast__action {\r\n    grid-column: 2 / 4;\r\n    justify-self: start;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuToastViewport.vue#style-0");
+    injectSfcStyle("\n.acu-toast-viewport {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  z-index: 9410;\r\n  box-sizing: border-box;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  min-height: 100%;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\r\n  pointer-events: none;\n}\n.acu-toast-viewport,\r\n.acu-toast-viewport * {\r\n  box-sizing: border-box;\n}\n.acu-toast-viewport__list {\r\n  position: absolute;\r\n  right: 18px;\r\n  bottom: 18px;\r\n  width: min(360px, calc(100% - 36px));\r\n  max-height: calc(100% - 36px);\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  margin: 0;\n  padding: 0;\n  overflow: hidden;\n  list-style: none;\n}\n.acu-v2-toast {\n  position: relative;\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: 18px minmax(0, 1fr) auto auto;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 10px;\r\n  overflow: hidden;\r\n  border: 1px solid color-mix(in srgb, var(--acu-border) 70%, transparent);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  box-shadow: none;\r\n  color: var(--acu-text-2);\n  pointer-events: auto;\n  animation: acu-toast-in 0.16s ease-out both;\n}\n.acu-v2-toast.is-closing {\n  pointer-events: none;\n  animation: acu-toast-out 0.16s ease-in both;\n}\n.acu-v2-toast__icon {\r\n  min-width: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1;\n}\n.acu-v2-toast--success .acu-v2-toast__icon {\r\n  color: var(--acu-success);\n}\n.acu-v2-toast--warning .acu-v2-toast__icon {\r\n  color: var(--acu-warning);\n}\n.acu-v2-toast--error .acu-v2-toast__icon {\r\n  color: var(--acu-danger);\n}\n.acu-v2-toast__text {\r\n  min-width: 0;\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-toast__action {\r\n  white-space: nowrap;\n}\n.acu-v2-toast__dismiss {\r\n  flex: 0 0 auto;\n}\n@keyframes acu-toast-in {\nfrom {\n    opacity: 0;\n    transform: translateY(6px);\n}\nto {\n    opacity: 1;\n    transform: translateY(0);\n}\n}\n@keyframes acu-toast-out {\nfrom {\n    opacity: 1;\n    transform: translateY(0);\n}\nto {\n    opacity: 0;\n    transform: translateY(6px);\n}\n}\n@media (max-width: 640px) {\n.acu-toast-viewport__list {\r\n    right: 12px;\r\n    bottom: calc(12px + env(safe-area-inset-bottom, 0px));\r\n    left: 12px;\r\n    width: auto;\r\n    max-height: calc(100% - 24px - env(safe-area-inset-bottom, 0px));\n}\n.acu-v2-toast {\r\n    grid-template-columns: 18px minmax(0, 1fr) auto;\n}\n.acu-v2-toast__action {\r\n    grid-column: 2 / 4;\r\n    justify-self: start;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuToastViewport.vue#style-0");
     var AcuToastViewport_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$W = {
