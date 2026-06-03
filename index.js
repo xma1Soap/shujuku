@@ -76,6 +76,9 @@
      * - 插件模式：返回 window（自身就是主窗口）
      */
     function getHostWindow() {
+        if (typeof window === 'undefined') {
+            return globalThis;
+        }
         if (isUserscriptMode()) {
             try {
                 return window.parent || window;
@@ -13761,7 +13764,7 @@ $CONTENT
                         }
                     }
                     logDebug_ACU(`ACU: 通过酒馆连接预设 (ID: ${profileId}, Name: ${targetProfileName}) 发送请求...`);
-                    responsePromise = sendConnectionManagerRequest_ACU(profileId, messages, effectiveApiConfig.max_tokens || 4096);
+                    responsePromise = sendConnectionManagerRequest_ACU(profileId, messages, effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096);
                     rawResult = await responsePromise;
                 }
                 catch (error) {
@@ -13849,7 +13852,7 @@ $CONTENT
                     }
                     const generateUrl = `/api/backends/chat-completions/generate`;
                     const headers = { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' };
-                    const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens: effectiveApiConfig.max_tokens, temperature: effectiveApiConfig.temperature, topP: effectiveApiConfig.top_p, stripModelPrefix: false }));
+                    const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }));
                     logDebug_ACU('ACU: 调用新的后端生成API:', generateUrl, 'Model:', effectiveApiConfig.model);
                     const response = await fetch(generateUrl, { method: 'POST', headers, body, signal: abortSignal });
                     if (!response.ok) {
@@ -14002,7 +14005,7 @@ $CONTENT
         const model = opts.stripModelPrefix !== false
             ? (effectiveApiConfig.model || '').replace(/^models\//, '')
             : (effectiveApiConfig.model || '');
-        const maxTokens = opts.maxTokens || effectiveApiConfig.max_tokens || effectiveApiConfig.maxTokens || 20000;
+        const maxTokens = opts.maxTokens ?? effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 20000;
         const temperature = opts.temperature ?? effectiveApiConfig.temperature ?? 1.0;
         const topP = opts.topP ?? effectiveApiConfig.top_p ?? effectiveApiConfig.topP ?? 0.95;
         // 基础 Authorization 头
@@ -14090,7 +14093,7 @@ $CONTENT
             if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
                 throw new Error('自定义API的URL或模型未配置。');
             }
-            const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { temperature: 0.7, topP: 0.95 });
+            const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig);
             const response = await fetch('/api/backends/chat-completions/generate', {
                 method: 'POST',
                 headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
@@ -14134,7 +14137,7 @@ $CONTENT
             if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
                 throw new Error('自定义API的URL或模型未配置。');
             }
-            const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { temperature: 0.7, topP: 0.95 });
+            const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig);
             const response = await fetch('/api/backends/chat-completions/generate', {
                 method: 'POST',
                 headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
@@ -14186,7 +14189,7 @@ $CONTENT
         // Duplicating API calling logic for safety and isolation
         if (settings_ACU.apiMode === 'tavern') {
             const profileId = settings_ACU.tavernProfile;
-            return await sendConnectionManagerRequest_ACU(profileId, messages, settings_ACU.apiConfig.max_tokens || 4096).then(r => r.result.choices[0].message.content);
+            return await sendConnectionManagerRequest_ACU(profileId, messages, settings_ACU.apiConfig.max_tokens ?? settings_ACU.apiConfig.maxTokens ?? 4096).then(r => r.result.choices[0].message.content);
         }
         else {
             // Custom API（流式传输）
@@ -14218,7 +14221,7 @@ $CONTENT
         const effectiveApiMode = apiPresetConfig.apiMode;
         const effectiveApiConfig = apiPresetConfig.apiConfig || {};
         const effectiveTavernProfile = apiPresetConfig.tavernProfile;
-        const maxTokens = effectiveApiConfig.max_tokens || effectiveApiConfig.maxTokens || 4096;
+        const maxTokens = effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096;
         logDebug_ACU(`[callAIWithPreset] 调用 AI，消息数=${messages.length}，预设=${presetName || '当前配置'}，模式=${effectiveApiMode}`);
         if (effectiveApiMode === 'tavern') {
             const profileId = effectiveTavernProfile || settings_ACU.tavernProfile;
@@ -14245,7 +14248,7 @@ $CONTENT
         if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
             throw new Error('自定义API的URL或模型未配置。');
         }
-        const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, temperature: effectiveApiConfig.temperature || 1.0, topP: effectiveApiConfig.top_p || 0.9, stripModelPrefix: false }));
+        const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false }));
         const res = await fetch('/api/backends/chat-completions/generate', {
             method: 'POST',
             headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
@@ -15971,18 +15974,18 @@ $CONTENT
             }
         }
         // Call all the individual entry updaters
-        await updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, isImport);
-        await updateSummaryTableEntries_ACU(summaryTable, isImport);
-        await updateOutlineTableEntry_ACU(outlineTable, isImport);
+        await updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, isImport, targetLorebookOverride);
+        await updateSummaryTableEntries_ACU(summaryTable, isImport, targetLorebookOverride);
+        await updateOutlineTableEntry_ACU(outlineTable, isImport, targetLorebookOverride);
         // [修复] 自定义导出/按行拆分条目是否需要注入，应以 mergedData 中是否存在真实单元格数据为准，
         // 不能再依赖 readableText 判空。
         // 否则当所有表格都开启“按行拆分”后，readableText 会为空，进而误判为“数据库为空”，
         // 导致本应创建的拆分世界书条目被整体跳过。
         if (hasNonEmptyCellData_ACU) {
-            await updateCustomTableExports_ACU(mergedData, isImport);
+            await updateCustomTableExports_ACU(mergedData, isImport, targetLorebookOverride);
         }
         else {
-            await updateCustomTableExports_ACU(null, isImport); // 仅清理旧自定义导出条目，不创建新条目
+            await updateCustomTableExports_ACU(null, isImport, targetLorebookOverride); // 仅清理旧自定义导出条目，不创建新条目
         }
         // [修复] 外部导入时优先使用 targetLorebookOverride 参数，避免临时修改 worldbookConfig 被兜底补齐逻辑覆盖
         const primaryLorebookName = targetLorebookOverride || await getInjectionTargetLorebook_ACU();
@@ -17094,10 +17097,10 @@ $CONTENT
             return [];
         return raw.split(/[,，]/).map(k => k.trim()).filter(Boolean);
     }
-    async function updateOutlineTableEntry_ACU(outlineTable, isImport = false) {
+    async function updateOutlineTableEntry_ACU(outlineTable, isImport = false, targetLorebookOverride = null) {
         if (!isWorldbookApiAvailable_ACU())
             return;
-        const primaryLorebookName = await getInjectionTargetLorebook_ACU();
+        const primaryLorebookName = targetLorebookOverride || await getInjectionTargetLorebook_ACU();
         if (!primaryLorebookName) {
             logWarn_ACU('Cannot update outline table entry: No injection target lorebook set.');
             return;
@@ -17213,10 +17216,10 @@ $CONTENT
             logError_ACU('Failed to update outline table lorebook entry:', error);
         }
     }
-    async function updateSummaryTableEntries_ACU(summaryTable, isImport = false) {
+    async function updateSummaryTableEntries_ACU(summaryTable, isImport = false, targetLorebookOverride = null) {
         if (!isWorldbookApiAvailable_ACU())
             return;
-        const primaryLorebookName = await getInjectionTargetLorebook_ACU();
+        const primaryLorebookName = targetLorebookOverride || await getInjectionTargetLorebook_ACU();
         if (!primaryLorebookName) {
             logWarn_ACU('Cannot update summary entries: No injection target lorebook set.');
             return;
@@ -17307,10 +17310,10 @@ $CONTENT
             logError_ACU('Failed to update summary lorebook entries:', error);
         }
     }
-    async function updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, isImport = false) {
+    async function updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, isImport = false, targetLorebookOverride = null) {
         if (!isWorldbookApiAvailable_ACU())
             return;
-        const primaryLorebookName = await getInjectionTargetLorebook_ACU();
+        const primaryLorebookName = targetLorebookOverride || await getInjectionTargetLorebook_ACU();
         if (!primaryLorebookName) {
             logWarn_ACU('Cannot update important persons entries: No injection target lorebook set.');
             return;
@@ -21667,10 +21670,10 @@ $CONTENT
     // [新增] 处理自定义表格导出逻辑
     // [修复] 当 mergedData 为空/null 时，仍需执行"清理旧自定义导出条目"逻辑，
     // 避免删除楼层回溯到空数据时旧条目残留在世界书中。
-    async function updateCustomTableExports_ACU(mergedData, isImport = false) {
+    async function updateCustomTableExports_ACU(mergedData, isImport = false, targetLorebookOverride = null) {
         if (!isWorldbookApiAvailable_ACU())
             return;
-        const primaryLorebookName = await getInjectionTargetLorebook_ACU();
+        const primaryLorebookName = targetLorebookOverride || await getInjectionTargetLorebook_ACU();
         if (!primaryLorebookName)
             return;
         const IMPORT_PREFIX = getImportBatchPrefix_ACU$1();
@@ -24567,6 +24570,7 @@ $CONTENT
     // 属于 service 层（业务编排），不是纯 data 层。
     // ═══════════════════════════════════════════════════════════════
     let settingsStorageReadyForSave_ACU = false;
+    const _set_settingsStorageReadyForSave_ACU = (val) => { settingsStorageReadyForSave_ACU = val; };
     let settingsReloadAfterIdbScheduled_ACU = false;
     function scheduleSettingsReloadAfterIdbReady_ACU(reason) {
         if (settingsReloadAfterIdbScheduled_ACU)
@@ -25453,7 +25457,7 @@ $CONTENT
                 }
                 const finalMessages = messagesToUse.map((m) => ({ role: m.role.toLowerCase(), content: m.content }));
                 if (settings_ACU.apiMode === 'tavern') {
-                    const result = await sendConnectionManagerRequest_ACU(settings_ACU.tavernProfile, finalMessages, settings_ACU.apiConfig.max_tokens || 4096);
+                    const result = await sendConnectionManagerRequest_ACU(settings_ACU.tavernProfile, finalMessages, settings_ACU.apiConfig.max_tokens ?? settings_ACU.apiConfig.maxTokens ?? 4096);
                     if (result && result.ok)
                         aiResponseText = result.result.choices[0].message.content;
                     else
@@ -25469,7 +25473,7 @@ $CONTENT
                         const res = await fetch(`/api/backends/chat-completions/generate`, {
                             method: 'POST',
                             headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-                            body: JSON.stringify(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { maxTokens: settings_ACU.apiConfig.max_tokens || 4096, temperature: settings_ACU.apiConfig.temperature, stripModelPrefix: false }))
+                            body: JSON.stringify(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false }))
                         });
                         if (!res.ok)
                             throw new Error(`API请求失败: ${res.status} ${await res.text()}`);
@@ -31763,7 +31767,6 @@ $CONTENT
         if (!Array.isArray(groups) || groups.length === 0) {
             return { success: true, failedGroups: [] };
         }
-        const chatHistory = getChatArray_ACU();
         const templateForLookup = parseTableTemplateJson_ACU({ stripSeedRows: true });
         const failedGroups = new Set();
         let firstError;
@@ -31780,82 +31783,106 @@ $CONTENT
                 const firstMessageIndexOfBatch = batchIndices[0];
                 const lastMessageIndexOfBatch = batchIndices[batchIndices.length - 1];
                 const finalSaveTargetIndex = lastMessageIndexOfBatch;
-                const baseResult = buildBatchMergeBase_ACU(batchNumber);
-                if (!baseResult.data) {
-                    failedGroups.add(group.key);
-                    firstError = firstError || baseResult.error || '无法构建合并基底，操作已终止。';
-                    continue;
-                }
-                const mergedBatchData = baseResult.data;
-                const batchSheetKeys = getSortedSheetKeys_ACU(mergedBatchData);
-                const batchIsolationKey = getCurrentIsolationKey_ACU();
-                loadBatchBaseData_ACU(chatHistory, firstMessageIndexOfBatch, batchIsolationKey, batchSheetKeys, mergedBatchData);
-                _set_currentJsonTableData_ACU(mergedBatchData);
-                let sliceStartIndex = firstMessageIndexOfBatch;
-                if (sliceStartIndex > 0 && chatHistory[sliceStartIndex - 1]?.is_user) {
-                    sliceStartIndex--;
-                }
-                const messagesForContext = chatHistory.slice(sliceStartIndex, lastMessageIndexOfBatch + 1);
-                const isAutoUpdateMode = mode && mode.startsWith('auto');
-                const lastAiMessageInBatch = chatHistory[lastMessageIndexOfBatch];
-                const lastAiMessageContent = lastAiMessageInBatch?.mes || lastAiMessageInBatch?.message || '';
-                const lastAiMessageLength = lastAiMessageContent.length;
-                const minReplyLength = settings_ACU.autoUpdateTokenThreshold || 0;
-                if (isAutoUpdateMode && lastAiMessageLength < minReplyLength) {
-                    continue;
-                }
                 const updateMode = resolveUpdateMode_ACU(mode);
-                const baseSnapshot = JSON.parse(JSON.stringify(mergedBatchData));
-                let effectiveRequestOptions = group.requestOptions || null;
-                if (!effectiveRequestOptions?.tableApiPreset && Array.isArray(group.sheetKeys) && group.sheetKeys.length > 0) {
-                    const firstTableName = templateForLookup?.[group.sheetKeys[0]]?.name || '';
-                    const resolvedPreset = resolveTableApiPresetOverride_ACU(firstTableName);
-                    if (resolvedPreset) {
-                        effectiveRequestOptions = { ...(effectiveRequestOptions || {}), tableApiPreset: resolvedPreset };
-                    }
-                }
-                const job = {
-                    groupKey: group.key,
-                    groupId: group.groupId,
+                const bucketKey = `${finalSaveTargetIndex}|${batchNumber}|${updateMode}|${options.isImportMode === true ? 1 : 0}`;
+                const plannedJob = {
+                    group,
                     batchNumber,
-                    targetSheetKeys: group.sheetKeys,
-                    messagesForContext,
+                    firstMessageIndexOfBatch,
+                    lastMessageIndexOfBatch,
                     saveTargetIndex: finalSaveTargetIndex,
                     updateMode,
-                    requestOptions: effectiveRequestOptions,
-                    baseSnapshot,
-                    isImportMode: options.isImportMode === true,
                 };
-                const bucketKey = `${finalSaveTargetIndex}|${batchNumber}|${updateMode}|${options.isImportMode === true ? 1 : 0}`;
                 const existingBucket = transactionBuckets.get(bucketKey);
                 if (existingBucket) {
-                    existingBucket.jobs.push(job);
+                    existingBucket.plannedJobs.push(plannedJob);
                 }
                 else {
                     transactionBuckets.set(bucketKey, {
                         saveTargetIndex: finalSaveTargetIndex,
                         batchNumber,
                         updateMode,
-                        baseSnapshot,
-                        jobs: [job],
+                        plannedJobs: [plannedJob],
                     });
                 }
             }
         }
         const orderedBuckets = [...transactionBuckets.values()].sort((a, b) => a.saveTargetIndex - b.saveTargetIndex || a.batchNumber - b.batchNumber);
-        for (const bucket of orderedBuckets) {
+        const emitBucketProgress = (bucketIndex, event) => {
+            options.onProgress?.({
+                ...event,
+                currentBatch: bucketIndex + 1,
+                totalBatches: orderedBuckets.length,
+            });
+        };
+        for (let bucketIndex = 0; bucketIndex < orderedBuckets.length; bucketIndex++) {
+            const bucket = orderedBuckets[bucketIndex];
             const maxBucketRetries = Math.max(1, Number(settings_ACU.tableMaxRetries) || 3);
             let retryUnifiedError = null;
             let bucketSucceeded = false;
             for (let bucketAttempt = 1; bucketAttempt <= maxBucketRetries; bucketAttempt++) {
+                const chatHistory = getChatArray_ACU();
+                const basePlan = bucket.plannedJobs[0];
+                const baseResult = buildBatchMergeBase_ACU(bucket.batchNumber);
+                if (!baseResult.data) {
+                    bucket.plannedJobs.forEach(job => failedGroups.add(job.group.key));
+                    firstError = firstError || baseResult.error || '无法构建合并基底，操作已终止。';
+                    break;
+                }
+                const mergedBatchData = baseResult.data;
+                const batchSheetKeys = getSortedSheetKeys_ACU(mergedBatchData);
+                const batchIsolationKey = getCurrentIsolationKey_ACU();
+                loadBatchBaseData_ACU(chatHistory, basePlan.firstMessageIndexOfBatch, batchIsolationKey, batchSheetKeys, mergedBatchData);
+                _set_currentJsonTableData_ACU(mergedBatchData);
+                const baseSnapshot = JSON.parse(JSON.stringify(mergedBatchData));
+                const jobs = [];
+                for (const plannedJob of bucket.plannedJobs) {
+                    const isAutoUpdateMode = mode && mode.startsWith('auto');
+                    const lastAiMessageInBatch = chatHistory[plannedJob.lastMessageIndexOfBatch];
+                    const lastAiMessageContent = lastAiMessageInBatch?.mes || lastAiMessageInBatch?.message || '';
+                    const lastAiMessageLength = lastAiMessageContent.length;
+                    const minReplyLength = settings_ACU.autoUpdateTokenThreshold || 0;
+                    if (isAutoUpdateMode && lastAiMessageLength < minReplyLength) {
+                        continue;
+                    }
+                    let sliceStartIndex = plannedJob.firstMessageIndexOfBatch;
+                    if (sliceStartIndex > 0 && chatHistory[sliceStartIndex - 1]?.is_user) {
+                        sliceStartIndex--;
+                    }
+                    const messagesForContext = chatHistory.slice(sliceStartIndex, plannedJob.lastMessageIndexOfBatch + 1);
+                    let effectiveRequestOptions = plannedJob.group.requestOptions || null;
+                    if (!effectiveRequestOptions?.tableApiPreset && Array.isArray(plannedJob.group.sheetKeys) && plannedJob.group.sheetKeys.length > 0) {
+                        const firstTableName = templateForLookup?.[plannedJob.group.sheetKeys[0]]?.name || '';
+                        const resolvedPreset = resolveTableApiPresetOverride_ACU(firstTableName);
+                        if (resolvedPreset) {
+                            effectiveRequestOptions = { ...(effectiveRequestOptions || {}), tableApiPreset: resolvedPreset };
+                        }
+                    }
+                    jobs.push({
+                        groupKey: plannedJob.group.key,
+                        groupId: plannedJob.group.groupId,
+                        batchNumber: plannedJob.batchNumber,
+                        targetSheetKeys: plannedJob.group.sheetKeys,
+                        messagesForContext,
+                        saveTargetIndex: plannedJob.saveTargetIndex,
+                        updateMode: plannedJob.updateMode,
+                        requestOptions: effectiveRequestOptions,
+                        baseSnapshot,
+                        isImportMode: options.isImportMode === true,
+                    });
+                }
+                if (jobs.length === 0) {
+                    bucketSucceeded = true;
+                    break;
+                }
                 const collectFeedback = retryUnifiedError ? { lastUnifiedError: retryUnifiedError } : undefined;
-                const settledResponses = await Promise.allSettled(bucket.jobs.map(job => collectGroupFillResponse_ACU(job, collectFeedback, options.abortController)));
+                const settledResponses = await Promise.allSettled(jobs.map(job => collectGroupFillResponse_ACU(job, collectFeedback, options.abortController, { onProgress: event => emitBucketProgress(bucketIndex, event) })));
                 const responses = [];
                 let collectFailed = false;
                 let collectError;
                 for (let i = 0; i < settledResponses.length; i++) {
                     const settledResponse = settledResponses[i];
-                    const job = bucket.jobs[i];
+                    const job = jobs[i];
                     if (settledResponse.status === 'rejected') {
                         collectFailed = true;
                         collectError = collectError || (settledResponse.reason instanceof Error ? settledResponse.reason.message : String(settledResponse.reason || 'AI响应收集失败'));
@@ -31869,11 +31896,11 @@ $CONTENT
                     responses.push(settledResponse.value);
                 }
                 if (collectFailed) {
-                    bucket.jobs.forEach(job => failedGroups.add(job.groupKey));
+                    jobs.forEach(job => failedGroups.add(job.groupKey));
                     firstError = firstError || collectError || 'AI响应收集失败';
                     break;
                 }
-                const applyResult = await applyUnifiedGroupFillResponses_ACU(responses, bucket.baseSnapshot, {
+                const applyResult = await applyUnifiedGroupFillResponses_ACU(responses, baseSnapshot, {
                     saveTargetIndex: bucket.saveTargetIndex,
                     updateMode: bucket.updateMode,
                     isImportMode: options.isImportMode === true,
@@ -31884,8 +31911,16 @@ $CONTENT
                 }
                 retryUnifiedError = applyResult.error || '统一提交失败。';
                 if (bucketAttempt >= maxBucketRetries) {
-                    bucket.jobs.forEach(job => failedGroups.add(job.groupKey));
+                    jobs.forEach(job => failedGroups.add(job.groupKey));
                     firstError = firstError || `统一提交在 ${maxBucketRetries} 次尝试后仍失败: ${retryUnifiedError}`;
+                }
+                else {
+                    emitBucketProgress(bucketIndex, {
+                        phase: 'retry',
+                        attempt: bucketAttempt,
+                        maxRetries: maxBucketRetries,
+                        message: retryUnifiedError.substring(0, 50),
+                    });
                 }
             }
             if (!bucketSucceeded && firstError && options.abortController?.signal.aborted) {
@@ -32327,7 +32362,9 @@ $CONTENT
                         requestOptions: effectiveRequestOptions,
                     };
                 });
-                const chunkResult = await processGroupedRuntimeChunk_ACU(groupedChunk, 'manual_independent');
+                const chunkResult = await processGroupedRuntimeChunk_ACU(groupedChunk, 'manual_independent', {
+                    onProgress: options.onProgress,
+                });
                 if (!chunkResult.success) {
                     chunkResult.failedGroups.forEach(key => {
                         failedGroups.push({ key, error: chunkResult.error || '手动更新失败或被终止。' });
@@ -34466,6 +34503,11 @@ $CONTENT
             return;
         loadingToast.find('.acu-toast-progress-message').text(message);
     }
+    function clearLoadingToast(loadingToast) {
+        if (loadingToast && toastr_API_ACU) {
+            toastr_API_ACU.clear(loadingToast);
+        }
+    }
     /**
      * 根据 service 层返回的进度事件更新 UI
      * presentation 层自己决定"怎么展示"
@@ -34570,6 +34612,7 @@ $CONTENT
      */
     async function handleManualUpdate_ACU() {
         logDebug_ACU('[更新流程] handleManualUpdate: 开始手动更新');
+        let manualProgressToast = null;
         try {
             if (shouldShowVectorMemoryManualUpdateWarning_ACU()) {
                 syncManualUpdateButtonAvailability_ACU();
@@ -34600,8 +34643,29 @@ $CONTENT
             }
             // 调用 service 层，传入 clearBeforeUpdate: true（用户已确认清空）
             _set_wasStoppedByUser_ACU$1(false);
+            notifyTableFillStart();
+            const stopButtonId = `acu-stop-manual-update-btn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const stopButtonHtml = renderStopButton_ACU(stopButtonId, '终止');
+            manualProgressToast = showToastr_ACU('info', `<div><span class="acu-toast-progress-message">手动填表开始。</span>${stopButtonHtml}</div>`, {
+                timeOut: 0,
+                extendedTimeOut: 0,
+                tapToDismiss: false,
+                acuToastCategory: ACU_TOAST_CATEGORY_ACU.MANUAL_TABLE,
+                onShown: function () {
+                    if (typeof bindTableFillStopButton_ACU === 'function') {
+                        bindTableFillStopButton_ACU(stopButtonId, () => {
+                            _set_wasStoppedByUser_ACU$1(true);
+                            abortAllActiveRequests_ACU$1();
+                            _set_isAutoUpdatingCard_ACU$1(false);
+                            updateStatusText('填表任务已终止，正在停止当前任务与后续批次...', false);
+                            updateLoadingToastMessage(manualProgressToast, '填表任务已终止，正在停止当前任务与后续批次...');
+                            showToastr_ACU('warning', '填表任务已由用户终止，当前任务与后续批次将立即停止。');
+                        });
+                    }
+                },
+            });
             const result = await orchestrateManualUpdate_ACU(targetKeys, 
-            // processBatch 回调
+            // processBatch 回调保留给兼容路径；当前手动填表主路径由 service grouped helper 执行。
             async (indices, batchMode, batchOptions) => {
                 return processUpdates_ACU(indices, batchMode, batchOptions);
             }, 
@@ -34610,7 +34674,12 @@ $CONTENT
                 await refreshMergedDataAndNotifyWithUI_ACU();
             }, 
             // [新增] 传入用户确认后的预清空选项
-            { clearBeforeUpdate: true });
+            {
+                clearBeforeUpdate: true,
+                onProgress: event => handleProgressEvent(event, false, manualProgressToast),
+            });
+            clearLoadingToast(manualProgressToast);
+            manualProgressToast = null;
             // UI：根据返回值显示 toast
             if (result.success) {
                 showToastr_ACU('success', '手动更新完成！');
@@ -34629,6 +34698,7 @@ $CONTENT
             }
         }
         finally {
+            clearLoadingToast(manualProgressToast);
             // UI：重置手动更新按钮
             if (typeof resetManualUpdateButton_ACU === 'function')
                 resetManualUpdateButton_ACU();
@@ -51232,14 +51302,15 @@ $CONTENT
                     const effectiveApiConfig = apiPresetConfig.apiConfig || {};
                     const effectiveTavernProfile = apiPresetConfig.tavernProfile;
                     logDebug_ACU(`[callAI] Calling AI with ${messages.length} messages, preset: ${presetName || '当前配置'}, mode: ${effectiveApiMode}`);
-                    const maxTokensRaw = options.max_tokens ?? options.maxTokens ?? effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096;
-                    const maxTokensNumber = Number(maxTokensRaw);
-                    const maxTokens = Number.isFinite(maxTokensNumber) && maxTokensNumber > 0
-                        ? Math.trunc(maxTokensNumber)
-                        : 4096;
+                    // options 层 override：调用方显式传入的 max_tokens（custom 路径专用，0 合法）
+                    // tavern 路径 max_tokens 与其他入口统一使用 ?? 链，0 为合法值
+                    const optionsMaxTokens = (options.max_tokens !== undefined || options.maxTokens !== undefined)
+                        ? Number(options.max_tokens ?? options.maxTokens)
+                        : undefined;
                     if (effectiveApiMode === 'tavern') {
                         const profileId = effectiveTavernProfile || settings_ACU.tavernProfile;
-                        const response = await sendConnectionManagerRequest_ACU(profileId, messages, maxTokens);
+                        const tavernMaxTokens = effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096;
+                        const response = await sendConnectionManagerRequest_ACU(profileId, messages, tavernMaxTokens);
                         if (response && response.result && response.result.choices && response.result.choices[0]) {
                             return response.result.choices[0].message.content;
                         }
@@ -51271,7 +51342,10 @@ $CONTENT
                                 return null;
                             }
                             const url = `/api/backends/chat-completions/generate`;
-                            const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, temperature: effectiveApiConfig.temperature || 1.0, topP: effectiveApiConfig.top_p, stripModelPrefix: false }));
+                            const customOverrides = { stripModelPrefix: false };
+                            if (optionsMaxTokens !== undefined)
+                                customOverrides.maxTokens = optionsMaxTokens;
+                            const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, customOverrides));
                             const headers = {
                                 ...getHostRequestHeaders_ACU(),
                                 'Content-Type': 'application/json'
@@ -70867,7 +70941,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-toast-viewport {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  z-index: 9410;\r\n  box-sizing: border-box;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  min-height: 100%;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\r\n  pointer-events: none;\n}\n.acu-toast-viewport,\r\n.acu-toast-viewport * {\r\n  box-sizing: border-box;\n}\n.acu-toast-viewport__list {\n  position: absolute;\n  top: calc(62px + var(--acu-safe-top, 0px));\n  right: calc(18px + var(--acu-safe-right, 0px));\n  bottom: auto;\n  width: min(360px, calc(100% - 36px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n  max-height: calc(100% - 80px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  margin: 0;\n  padding: 0;\n  overflow: visible;\n  list-style: none;\n}\n.acu-v2-toast {\n  --acu-toast-tone: var(--acu-accent);\n  position: relative;\n  min-width: 0;\n  display: grid;\n  grid-template-columns: 26px minmax(0, 1fr) auto auto;\n  align-items: center;\n  gap: 8px;\n  padding: 10px 12px;\n  overflow: hidden;\n  border: 1px solid color-mix(in srgb, var(--acu-toast-tone) 22%, var(--acu-border-2));\n  border-radius: var(--acu-radius-md);\n  background:\n    linear-gradient(\n      90deg,\n      color-mix(in srgb, var(--acu-toast-tone) 7%, transparent),\n      transparent 48%\n    ),\n    color-mix(in srgb, var(--acu-bg-1) 97%, var(--acu-text-1) 3%);\n  box-shadow:\n    0 18px 46px rgba(0, 0, 0, 0.18),\n    0 4px 16px rgba(0, 0, 0, 0.12),\n    inset 0 1px 0 color-mix(in srgb, var(--acu-text-1) 8%, transparent);\n  color: var(--acu-text-1);\n  pointer-events: auto;\n  animation: acu-toast-in 0.16s ease-out both;\n}\n.acu-v2-toast--success {\n  --acu-toast-tone: var(--acu-success);\n}\n.acu-v2-toast--warning {\n  --acu-toast-tone: var(--acu-warning);\n}\n.acu-v2-toast--error {\n  --acu-toast-tone: var(--acu-danger);\n}\n.acu-v2-toast.is-closing {\n  pointer-events: none;\n  animation: acu-toast-out 0.16s ease-in both;\n}\n.acu-v2-toast__icon {\n  --acu-icon-color: var(--acu-toast-tone);\n  min-width: 0;\n  width: 26px;\n  height: 26px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-toast-tone) 13%, transparent);\n  color: var(--acu-toast-tone);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1;\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-toast-tone) 18%, transparent);\n}\n.acu-v2-toast__text {\n  min-width: 0;\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.45;\n  overflow-wrap: anywhere;\n}\n.acu-v2-toast__action {\r\n  white-space: nowrap;\n}\n.acu-v2-toast__dismiss {\r\n  flex: 0 0 auto;\n}\n@keyframes acu-toast-in {\nfrom {\n    opacity: 0;\n    transform: translateY(-6px);\n}\nto {\n    opacity: 1;\n    transform: translateY(0);\n}\n}\n@keyframes acu-toast-out {\nfrom {\n    opacity: 1;\n    transform: translateY(0);\n}\nto {\n    opacity: 0;\n    transform: translateY(-6px);\n}\n}\n@media (max-width: 640px) {\n.acu-toast-viewport__list {\n    top: calc(58px + var(--acu-safe-top, 0px));\n    right: auto;\n    bottom: auto;\n    left: calc(50% + (var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)) / 2);\n    width: clamp(240px, 70vw, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n    max-height: calc(100% - 70px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n    transform: translateX(-50%);\n}\n.acu-v2-toast {\n    grid-template-columns: 22px minmax(0, 1fr) auto;\n    gap: 7px;\n    padding: 8px 9px;\n}\n.acu-v2-toast__icon {\n    width: 22px;\n    height: 22px;\n    font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-toast__text {\n    font-size: var(--acu-font-size-caption, 11px);\n    line-height: 1.4;\n}\n.acu-v2-toast__action {\n    grid-column: 2 / 4;\r\n    justify-self: start;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuToastViewport.vue#style-0");
+    injectSfcStyle("\n.acu-toast-viewport {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  z-index: 9410;\r\n  box-sizing: border-box;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  min-height: 100%;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\r\n  pointer-events: none;\n}\n.acu-toast-viewport,\r\n.acu-toast-viewport * {\r\n  box-sizing: border-box;\n}\n.acu-toast-viewport__list {\r\n  position: absolute;\r\n  top: calc(62px + var(--acu-safe-top, 0px));\r\n  right: calc(18px + var(--acu-safe-right, 0px));\r\n  bottom: auto;\r\n  width: min(360px, calc(100% - 36px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\r\n  max-height: calc(100% - 80px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  margin: 0;\r\n  padding: 0;\r\n  overflow: visible;\r\n  list-style: none;\n}\n.acu-v2-toast {\r\n  --acu-toast-tone: var(--acu-accent);\r\n  position: relative;\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: 26px minmax(0, 1fr) auto auto;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 10px 12px;\r\n  overflow: hidden;\r\n  border: 1px solid color-mix(in srgb, var(--acu-toast-tone) 22%, var(--acu-border-2));\r\n  border-radius: var(--acu-radius-md);\r\n  background:\r\n    linear-gradient(\r\n      90deg,\r\n      color-mix(in srgb, var(--acu-toast-tone) 7%, transparent),\r\n      transparent 48%\r\n    ),\r\n    color-mix(in srgb, var(--acu-bg-1) 97%, var(--acu-text-1) 3%);\r\n  box-shadow:\r\n    0 18px 46px rgba(0, 0, 0, 0.18),\r\n    0 4px 16px rgba(0, 0, 0, 0.12),\r\n    inset 0 1px 0 color-mix(in srgb, var(--acu-text-1) 8%, transparent);\r\n  color: var(--acu-text-1);\r\n  pointer-events: auto;\r\n  animation: acu-toast-in 0.16s ease-out both;\n}\n.acu-v2-toast--success {\r\n  --acu-toast-tone: var(--acu-success);\n}\n.acu-v2-toast--warning {\r\n  --acu-toast-tone: var(--acu-warning);\n}\n.acu-v2-toast--error {\r\n  --acu-toast-tone: var(--acu-danger);\n}\n.acu-v2-toast.is-closing {\r\n  pointer-events: none;\r\n  animation: acu-toast-out 0.16s ease-in both;\n}\n.acu-v2-toast__icon {\r\n  --acu-icon-color: var(--acu-toast-tone);\r\n  min-width: 0;\r\n  width: 26px;\r\n  height: 26px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-toast-tone) 13%, transparent);\r\n  color: var(--acu-toast-tone);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1;\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-toast-tone) 18%, transparent);\n}\n.acu-v2-toast__text {\r\n  min-width: 0;\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-toast__action {\r\n  white-space: nowrap;\n}\n.acu-v2-toast__dismiss {\r\n  flex: 0 0 auto;\n}\n@keyframes acu-toast-in {\nfrom {\r\n    opacity: 0;\r\n    transform: translateY(-6px);\n}\nto {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\n}\n@keyframes acu-toast-out {\nfrom {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\nto {\r\n    opacity: 0;\r\n    transform: translateY(-6px);\n}\n}\n@media (max-width: 640px) {\n.acu-toast-viewport__list {\r\n    top: calc(58px + var(--acu-safe-top, 0px));\r\n    right: auto;\r\n    bottom: auto;\r\n    left: calc(50% + (var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)) / 2);\r\n    width: clamp(240px, 70vw, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\r\n    max-height: calc(100% - 70px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\r\n    transform: translateX(-50%);\n}\n.acu-v2-toast {\r\n    grid-template-columns: 22px minmax(0, 1fr) auto;\r\n    gap: 7px;\r\n    padding: 8px 9px;\n}\n.acu-v2-toast__icon {\r\n    width: 22px;\r\n    height: 22px;\r\n    font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-toast__text {\r\n    font-size: var(--acu-font-size-caption, 11px);\r\n    line-height: 1.4;\n}\n.acu-v2-toast__action {\r\n    grid-column: 2 / 4;\r\n    justify-self: start;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuToastViewport.vue#style-0");
     var AcuToastViewport_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$X = {
@@ -80205,7 +80279,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 const restoreAutoUpdateSettings = applyManualSettingsForOrchestrator();
                 let result;
                 try {
-                    result = await orchestrateManualUpdate_ACU(selectedManualTableKeys.value, runProcessBatch, async () => { await reloadStorageProvider(); }, { clearBeforeUpdate });
+                    result = await orchestrateManualUpdate_ACU(selectedManualTableKeys.value, runProcessBatch, async () => { await reloadStorageProvider(); }, { clearBeforeUpdate, onProgress: handleProgress });
                 }
                 finally {
                     restoreAutoUpdateSettings();
