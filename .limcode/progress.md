@@ -1,6 +1,6 @@
 # 项目进度
 - Project: SP数据库
-- Updated At: 2026-06-03T05:49:17.363Z
+- Updated At: 2026-06-04T10:04:48.042Z
 - Status: active
 - Phase: implementation
 
@@ -17,24 +17,19 @@
 ## 关联文档
 
 <!-- LIMCODE_PROGRESS_ARTIFACTS_START -->
-- 计划：`.limcode/plans/修复剧情推进自定义API温度硬编码优化计划.md`
+- 计划：`.limcode/plans/修复SQL删除全表后seedRows回灌SQLite校验失败计划.md`
 - 审查：`.limcode/review/manual-update-toast.md`
 <!-- LIMCODE_PROGRESS_ARTIFACTS_END -->
 
 ## 当前 TODO 快照
 
 <!-- LIMCODE_PROGRESS_TODOS_START -->
-- [ ] 修复 src/service/ai/api-call.ts 中 buildCustomApiRequestBody_ACU 的 maxTokens 兜底链，将 || 改为 ??，保持 0 值不被误回退  `#T1`
-- [ ] 修复 callApiWithPlotPreset_ACU 与 callApi_ACU 两处 temperature: 0.7 覆盖，移除温度硬编码并让配置温度进入最终请求体  `#T2`
-- [ ] 修复 callAIWithPreset_ACU 中 max_tokens/maxTokens、temperature、top_p/topP 的 || 误回退与别名缺失问题  `#T3`
-- [ ] 修复 src/presentation/bootstrap/api-groups/worldbook-ai-api.ts 的 callAI 自定义 API 请求体温度 || 回退与 topP 别名缺失问题  `#T4`
-- [ ] 修复 src/service/ai/prompt-builder/prompt-api-call.ts 酒馆预设 max_tokens || 4096 回退问题，并评估自定义 API overrides 是否需要最小化调整  `#T5`
-- [ ] 修复 src/service/summary/merge-executor.ts 与 src/service/summary/merge-logic.ts 中 max_tokens || 4096 的同类误回退，覆盖 Tavern 与 custom 分支  `#T6`
-- [ ] 补充 tests/service/ai/api-call.test.ts，覆盖 buildCustomApiRequestBody_ACU、callApi_ACU、callApiWithPlotPreset_ACU、callAIWithPreset_ACU 的参数透传与 0 值边界  `#T7`
-- [ ] 补充或扩展 worldbook-ai-api 对应测试，验证 bootstrap callAI 的 temperature=0、topP/top_p 与 maxTokens 透传行为  `#T8`
-- [ ] 补充 tests/service/summary/merge-executor.test.ts 与 tests/service/summary/merge-logic.test.ts，验证 max_tokens=0 不被 4096 覆盖  `#T9`
-- [ ] 执行针对性测试：tests/service/ai/api-call.test.ts、summary merge 测试、worldbook-ai-api 相关测试，并执行 npm run typecheck  `#T10`
-- [ ] 实施后进行独立验收，复查 src 中 temperature:0.7 与关键 || 回退残留、请求体参数优先级、Tavern/useMainApi/custom 路径兼容性  `#T11`
+- [x] 定义 SQL 模式空表 seedRows 物化契约  `#seed-delete-contract`
+- [x] 确保补回的 seedRows 随后以 checkpoint/delta 安全方式写入本地聊天表格数据  `#seed-delete-json-persist`
+- [x] 确认删除全表后 seedRows 仅参与 prompt 展示、不进入 SQLite/本地 JSON 的断裂点  `#seed-delete-recon`
+- [x] 在 SQL 变更执行/提交链路中为空表补 seedRows 到 SQLite 运行库，并同步 currentJsonTableData_ACU  `#seed-delete-sqlite-reseed`
+- [x] 补齐 SQL 删除全表后 UPDATE/校验失败回归测试  `#seed-delete-tests`
+- [x] 运行定向测试、类型检查或构建验证，记录风险与回滚方式  `#seed-delete-verify`
 <!-- LIMCODE_PROGRESS_TODOS_END -->
 
 ## 项目里程碑
@@ -52,9 +47,6 @@
 ## 最近更新
 
 <!-- LIMCODE_PROGRESS_LOG_START -->
-- 2026-06-02T17:08:36.847Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md
-- 2026-06-02T17:33:54.941Z | milestone_recorded | spv3.9.8 | spv3.9.8 发布完成：release commit 324c319 推送至 main，annotated tag 51bd12f 推送并指向 324c319；6 文件 244/244 测试通过，build exit 0，独立验收通过。
-- 2026-06-02T17:33:54.941Z | updated | release-pipeline | 发布链路闭合：目标测试通过 → npm run build → 精确 git add 12 文件（dist/index.bundle.js 用 git add -f）→ git commit → git push origin main → git tag -a spv3.9.8 → git push origin spv3.9.8 → 远端与 tag object 校验。
 - 2026-06-02T17:37:39.349Z | updated | spv3.9.8-cache-archive | spv3.9.8 发布收口：.analysis-cache.md 已归档到 .analysis-archive/2026-06-03_0136_spv3.9.8-发布完成归档.md，并从根目录删除。
 - 2026-06-02T17:45:31.718Z | artifact_changed | plan | 同步计划文档：.limcode/plans/修复运行时base缺少稳定row_id退化checkpoint计划.md
 - 2026-06-02T18:08:09.268Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/修复运行时base缺少稳定row_id退化checkpoint计划.md
@@ -72,6 +64,9 @@
 - 2026-06-03T05:45:42.918Z | artifact_changed | review | 同步审查里程碑：M1
 - 2026-06-03T05:45:53.973Z | artifact_changed | review | 同步审查结论：.limcode/review/json-sanitization-issue-review.md
 - 2026-06-03T05:49:17.363Z | artifact_changed | review | 同步审查文档：.limcode/review/manual-update-toast.md
+- 2026-06-04T09:28:12.869Z | artifact_changed | plan | 同步计划文档：.limcode/plans/修复SQL删除全表后seedRows回灌SQLite校验失败计划.md
+- 2026-06-04T09:34:18.674Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/修复SQL删除全表后seedRows回灌SQLite校验失败计划.md
+- 2026-06-04T10:04:48.042Z | artifact_changed | plan | 同步计划 TODO 快照：.limcode/plans/修复SQL删除全表后seedRows回灌SQLite校验失败计划.md
 <!-- LIMCODE_PROGRESS_LOG_END -->
 
 <!-- LIMCODE_PROGRESS_METADATA_START -->
@@ -81,7 +76,7 @@
   "projectId": "sp数据库",
   "projectName": "SP数据库",
   "createdAt": "2026-05-29T14:19:16.082Z",
-  "updatedAt": "2026-06-03T05:49:17.363Z",
+  "updatedAt": "2026-06-04T10:04:48.042Z",
   "status": "active",
   "phase": "implementation",
   "currentFocus": "spv3.9.8.1 已发布，等待 housekeeping / tsconfig / 下版本号决策",
@@ -89,87 +84,44 @@
   "currentBlocker": "无技术阻塞。",
   "nextAction": "Downgrade the initial parsing failure log level from `ERROR` to `WARN` or `DEBUG` in `parseTableEditCommandLine_ACU` to prevent false alarms.",
   "activeArtifacts": {
-    "plan": ".limcode/plans/修复剧情推进自定义API温度硬编码优化计划.md",
+    "plan": ".limcode/plans/修复SQL删除全表后seedRows回灌SQLite校验失败计划.md",
     "review": ".limcode/review/manual-update-toast.md"
   },
   "todos": [
     {
-      "id": "T1",
-      "content": "修复 src/service/ai/api-call.ts 中 buildCustomApiRequestBody_ACU 的 maxTokens 兜底链，将 || 改为 ??，保持 0 值不被误回退",
-      "status": "pending"
+      "id": "seed-delete-contract",
+      "content": "定义 SQL 模式空表 seedRows 物化契约",
+      "status": "completed"
     },
     {
-      "id": "T2",
-      "content": "修复 callApiWithPlotPreset_ACU 与 callApi_ACU 两处 temperature: 0.7 覆盖，移除温度硬编码并让配置温度进入最终请求体",
-      "status": "pending"
+      "id": "seed-delete-json-persist",
+      "content": "确保补回的 seedRows 随后以 checkpoint/delta 安全方式写入本地聊天表格数据",
+      "status": "completed"
     },
     {
-      "id": "T3",
-      "content": "修复 callAIWithPreset_ACU 中 max_tokens/maxTokens、temperature、top_p/topP 的 || 误回退与别名缺失问题",
-      "status": "pending"
+      "id": "seed-delete-recon",
+      "content": "确认删除全表后 seedRows 仅参与 prompt 展示、不进入 SQLite/本地 JSON 的断裂点",
+      "status": "completed"
     },
     {
-      "id": "T4",
-      "content": "修复 src/presentation/bootstrap/api-groups/worldbook-ai-api.ts 的 callAI 自定义 API 请求体温度 || 回退与 topP 别名缺失问题",
-      "status": "pending"
+      "id": "seed-delete-sqlite-reseed",
+      "content": "在 SQL 变更执行/提交链路中为空表补 seedRows 到 SQLite 运行库，并同步 currentJsonTableData_ACU",
+      "status": "completed"
     },
     {
-      "id": "T5",
-      "content": "修复 src/service/ai/prompt-builder/prompt-api-call.ts 酒馆预设 max_tokens || 4096 回退问题，并评估自定义 API overrides 是否需要最小化调整",
-      "status": "pending"
+      "id": "seed-delete-tests",
+      "content": "补齐 SQL 删除全表后 UPDATE/校验失败回归测试",
+      "status": "completed"
     },
     {
-      "id": "T6",
-      "content": "修复 src/service/summary/merge-executor.ts 与 src/service/summary/merge-logic.ts 中 max_tokens || 4096 的同类误回退，覆盖 Tavern 与 custom 分支",
-      "status": "pending"
-    },
-    {
-      "id": "T7",
-      "content": "补充 tests/service/ai/api-call.test.ts，覆盖 buildCustomApiRequestBody_ACU、callApi_ACU、callApiWithPlotPreset_ACU、callAIWithPreset_ACU 的参数透传与 0 值边界",
-      "status": "pending"
-    },
-    {
-      "id": "T8",
-      "content": "补充或扩展 worldbook-ai-api 对应测试，验证 bootstrap callAI 的 temperature=0、topP/top_p 与 maxTokens 透传行为",
-      "status": "pending"
-    },
-    {
-      "id": "T9",
-      "content": "补充 tests/service/summary/merge-executor.test.ts 与 tests/service/summary/merge-logic.test.ts，验证 max_tokens=0 不被 4096 覆盖",
-      "status": "pending"
-    },
-    {
-      "id": "T10",
-      "content": "执行针对性测试：tests/service/ai/api-call.test.ts、summary merge 测试、worldbook-ai-api 相关测试，并执行 npm run typecheck",
-      "status": "pending"
-    },
-    {
-      "id": "T11",
-      "content": "实施后进行独立验收，复查 src 中 temperature:0.7 与关键 || 回退残留、请求体参数优先级、Tavern/useMainApi/custom 路径兼容性",
-      "status": "pending"
+      "id": "seed-delete-verify",
+      "content": "运行定向测试、类型检查或构建验证，记录风险与回滚方式",
+      "status": "completed"
     }
   ],
   "milestones": [],
   "risks": [],
   "log": [
-    {
-      "at": "2026-06-02T17:08:36.847Z",
-      "type": "artifact_changed",
-      "refId": "plan",
-      "message": "同步计划 TODO 快照：.limcode/plans/修复填表增量base缺少稳定row_id退化checkpoint计划.md"
-    },
-    {
-      "at": "2026-06-02T17:33:54.941Z",
-      "type": "milestone_recorded",
-      "refId": "spv3.9.8",
-      "message": "spv3.9.8 发布完成：release commit 324c319 推送至 main，annotated tag 51bd12f 推送并指向 324c319；6 文件 244/244 测试通过，build exit 0，独立验收通过。"
-    },
-    {
-      "at": "2026-06-02T17:33:54.941Z",
-      "type": "updated",
-      "refId": "release-pipeline",
-      "message": "发布链路闭合：目标测试通过 → npm run build → 精确 git add 12 文件（dist/index.bundle.js 用 git add -f）→ git commit → git push origin main → git tag -a spv3.9.8 → git push origin spv3.9.8 → 远端与 tag object 校验。"
-    },
     {
       "at": "2026-06-02T17:37:39.349Z",
       "type": "updated",
@@ -270,21 +222,39 @@
       "type": "artifact_changed",
       "refId": "review",
       "message": "同步审查文档：.limcode/review/manual-update-toast.md"
+    },
+    {
+      "at": "2026-06-04T09:28:12.869Z",
+      "type": "artifact_changed",
+      "refId": "plan",
+      "message": "同步计划文档：.limcode/plans/修复SQL删除全表后seedRows回灌SQLite校验失败计划.md"
+    },
+    {
+      "at": "2026-06-04T09:34:18.674Z",
+      "type": "artifact_changed",
+      "refId": "plan",
+      "message": "同步计划 TODO 快照：.limcode/plans/修复SQL删除全表后seedRows回灌SQLite校验失败计划.md"
+    },
+    {
+      "at": "2026-06-04T10:04:48.042Z",
+      "type": "artifact_changed",
+      "refId": "plan",
+      "message": "同步计划 TODO 快照：.limcode/plans/修复SQL删除全表后seedRows回灌SQLite校验失败计划.md"
     }
   ],
   "stats": {
     "milestonesTotal": 0,
     "milestonesCompleted": 0,
-    "todosTotal": 11,
-    "todosCompleted": 0,
+    "todosTotal": 6,
+    "todosCompleted": 6,
     "todosInProgress": 0,
     "todosCancelled": 0,
     "activeRisks": 0
   },
   "render": {
     "rendererVersion": 1,
-    "generatedAt": "2026-06-03T05:49:17.363Z",
-    "bodyHash": "sha256:5d88545971e206471a1a0be195fadc5bc8c9c77530293e65b5b30a507bd1aec9"
+    "generatedAt": "2026-06-04T10:04:48.042Z",
+    "bodyHash": "sha256:ee9ef7920e37ccc299fca764d41d7eaff4bf2b6a10eaf26ee183527485703c49"
   }
 }
 <!-- LIMCODE_PROGRESS_METADATA_END -->
