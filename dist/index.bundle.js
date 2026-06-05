@@ -54486,28 +54486,37 @@ $CONTENT
      * "console marker 正常但页面无内容"。
      *
      * 解析规则：
-     * 1. window.parent 存在且 !== window，且能访问 parent.document → host
-     * 2. 否则（顶层窗口或跨域不可访问）→ 当前 window/document
-     * 3. 全程 try/catch；跨域抛错时降级到当前文档并打印可检索 warning
+     * 1. 从当前 window 沿 parent 链向上探测所有可访问 document
+     * 2. 选择最外层可访问 document
+     * 3. 否则（顶层窗口或跨域不可访问）→ 当前 window/document
+     * 4. 全程 try/catch；跨域抛错时降级到当前文档并打印可检索 warning
      */
     const PARENT_PROBE_MARKER = '[ACU-V2] host-document parent probe';
     let cachedHost = null;
-    function probeParent() {
-        try {
-            if (typeof window === 'undefined')
-                return null;
-            const parent = window.parent;
-            if (!parent || parent === window)
-                return null;
-            const parentDoc = parent.document;
-            if (!parentDoc || !parentDoc.body)
-                return null;
-            return { window: parent, document: parentDoc, source: 'parent-document' };
-        }
-        catch (err) {
-            logWarn_ACU(`${PARENT_PROBE_MARKER}: parent inaccessible (likely cross-origin), falling back. ${err?.message ?? err}`);
+    function probeOutermostAccessibleHost() {
+        if (typeof window === 'undefined')
             return null;
+        let current = window;
+        let outermost = null;
+        while (current) {
+            try {
+                const doc = current.document;
+                if (!doc || !doc.body)
+                    break;
+                outermost = { window: current, document: doc };
+                const parent = current.parent;
+                if (!parent || parent === current)
+                    break;
+                current = parent;
+            }
+            catch (err) {
+                logWarn_ACU(`${PARENT_PROBE_MARKER}: parent inaccessible (likely cross-origin), falling back. ${err?.message ?? err}`);
+                break;
+            }
         }
+        if (!outermost || outermost.window === window)
+            return null;
+        return { window: outermost.window, document: outermost.document, source: 'parent-document' };
     }
     /**
      * 解析并缓存 host window/document。后续重复调用直接返回缓存。
@@ -54519,7 +54528,7 @@ $CONTENT
     function resolveAcuHost() {
         if (cachedHost)
             return cachedHost;
-        const fromParent = probeParent();
+        const fromParent = probeOutermostAccessibleHost();
         if (fromParent) {
             cachedHost = fromParent;
             return cachedHost;
@@ -54548,7 +54557,7 @@ $CONTENT
     }
 
     /**
-    * @vue/shared v3.5.35
+    * @vue/shared v3.5.33
     * (c) 2018-present Yuxi (Evan) You and Vue contributors
     * @license MIT
     **/
@@ -55083,7 +55092,7 @@ $CONTENT
     }
 
     /**
-    * @vue/reactivity v3.5.35
+    * @vue/reactivity v3.5.33
     * (c) 2018-present Yuxi (Evan) You and Vue contributors
     * @license MIT
     **/
@@ -55114,18 +55123,12 @@ $CONTENT
          */
         this.cleanups = [];
         this._isPaused = false;
-        this._warnOnRun = true;
         this.__v_skip = true;
+        this.parent = activeEffectScope;
         if (!detached && activeEffectScope) {
-          if (activeEffectScope.active) {
-            this.parent = activeEffectScope;
-            this.index = (activeEffectScope.scopes || (activeEffectScope.scopes = [])).push(
-              this
-            ) - 1;
-          } else {
-            this._active = false;
-            this._warnOnRun = false;
-          }
+          this.index = (activeEffectScope.scopes || (activeEffectScope.scopes = [])).push(
+            this
+          ) - 1;
         }
       }
       get active() {
@@ -55173,7 +55176,7 @@ $CONTENT
           } finally {
             activeEffectScope = currentEffectScope;
           }
-        } else if (!!("production" !== "production") && this._warnOnRun) {
+        } else if (!!("production" !== "production")) {
           warn$2(`cannot run an inactive effect scope.`);
         }
       }
@@ -55297,12 +55300,8 @@ $CONTENT
          */
         this.cleanup = void 0;
         this.scheduler = void 0;
-        if (activeEffectScope) {
-          if (activeEffectScope.active) {
-            activeEffectScope.effects.push(this);
-          } else {
-            this.flags &= -2;
-          }
+        if (activeEffectScope && activeEffectScope.active) {
+          activeEffectScope.effects.push(this);
         }
       }
       pause() {
@@ -56467,6 +56466,9 @@ $CONTENT
           return 0 /* INVALID */;
       }
     }
+    function getTargetType(value) {
+      return value["__v_skip"] || !Object.isExtensible(value) ? 0 /* INVALID */ : targetTypeMap(toRawType(value));
+    }
     // @__NO_SIDE_EFFECTS__
     function reactive(target) {
       if (/* @__PURE__ */ isReadonly(target)) {
@@ -56524,16 +56526,13 @@ $CONTENT
       if (target["__v_raw"] && !(isReadonly2 && target["__v_isReactive"])) {
         return target;
       }
-      if (target["__v_skip"] || !Object.isExtensible(target)) {
+      const targetType = getTargetType(target);
+      if (targetType === 0 /* INVALID */) {
         return target;
       }
       const existingProxy = proxyMap.get(target);
       if (existingProxy) {
         return existingProxy;
-      }
-      const targetType = targetTypeMap(toRawType(target));
-      if (targetType === 0 /* INVALID */) {
-        return target;
       }
       const proxy = new Proxy(
         target,
@@ -57092,7 +57091,7 @@ $CONTENT
     }
 
     /**
-    * @vue/runtime-core v3.5.35
+    * @vue/runtime-core v3.5.33
     * (c) 2018-present Yuxi (Evan) You and Vue contributors
     * @license MIT
     **/
@@ -58250,18 +58249,19 @@ $CONTENT
           target,
           props
         } = vnode;
-        const shouldRemove = doRemove || !isTeleportDisabled(props);
+        let shouldRemove = doRemove || !isTeleportDisabled(props);
         const pendingMount = pendingMounts.get(vnode);
         if (pendingMount) {
           pendingMount.flags |= 8;
           pendingMounts.delete(vnode);
+          shouldRemove = false;
         }
         if (target) {
           hostRemove(targetStart);
           hostRemove(targetAnchor);
         }
         doRemove && hostRemove(anchor);
-        if (!pendingMount && shapeFlag & 16) {
+        if (shapeFlag & 16) {
           for (let i = 0; i < children.length; i++) {
             const child = children[i];
             unmount(
@@ -59230,16 +59230,20 @@ $CONTENT
               slotScopeIds,
               optimized
             );
-            if (next && !isMismatchAllowed(el, 1 /* CHILDREN */)) {
-              (!!("production" !== "production") || false) && warn$1(
-                `Hydration children mismatch on`,
-                el,
-                `
-Server rendered element contains more child nodes than client vdom.`
-              );
-              logMismatchError();
-            }
+            let hasWarned = false;
             while (next) {
+              if (!isMismatchAllowed(el, 1 /* CHILDREN */)) {
+                if ((!!("production" !== "production") || false) && !hasWarned) {
+                  warn$1(
+                    `Hydration children mismatch on`,
+                    el,
+                    `
+Server rendered element contains more child nodes than client vdom.`
+                  );
+                  hasWarned = true;
+                }
+                logMismatchError();
+              }
               const cur = next;
               next = next.nextSibling;
               remove(cur);
@@ -59313,7 +59317,7 @@ Server rendered element contains more child nodes than client vdom.`
         optimized = optimized || !!parentVNode.dynamicChildren;
         const children = parentVNode.children;
         const l = children.length;
-        let hasCheckedMismatch = false;
+        let hasWarned = false;
         for (let i = 0; i < l; i++) {
           const vnode = optimized ? children[i] : children[i] = normalizeVNode(children[i]);
           const isText = vnode.type === Text;
@@ -59341,17 +59345,17 @@ Server rendered element contains more child nodes than client vdom.`
           } else if (isText && !vnode.children) {
             insert(vnode.el = createText(""), container);
           } else {
-            if (!hasCheckedMismatch) {
-              hasCheckedMismatch = true;
-              if (!isMismatchAllowed(container, 1 /* CHILDREN */)) {
-                (!!("production" !== "production") || false) && warn$1(
+            if (!isMismatchAllowed(container, 1 /* CHILDREN */)) {
+              if ((!!("production" !== "production") || false) && !hasWarned) {
+                warn$1(
                   `Hydration children mismatch on`,
                   container,
                   `
 Server rendered element contains fewer child nodes than client vdom.`
                 );
-                logMismatchError();
+                hasWarned = true;
               }
+              logMismatchError();
             }
             patch(
               null,
@@ -62291,7 +62295,7 @@ If you want to remount the same app, move your app creation logic into a factory
       const receivedType = toRawType(value);
       const expectedValue = styleValue(value, expectedType);
       const receivedValue = styleValue(value, receivedType);
-      if (expectedTypes.length === 1 && isExplicable(expectedType) && isCoercible(expectedType, receivedType)) {
+      if (expectedTypes.length === 1 && isExplicable(expectedType) && !isBoolean(expectedType, receivedType)) {
         message += ` with value ${expectedValue}`;
       }
       message += `, got ${receivedType} `;
@@ -62301,9 +62305,7 @@ If you want to remount the same app, move your app creation logic into a factory
       return message;
     }
     function styleValue(value, type) {
-      if (isSymbol(value)) {
-        return value.toString();
-      } else if (type === "String") {
+      if (type === "String") {
         return `"${value}"`;
       } else if (type === "Number") {
         return `${Number(value)}`;
@@ -62315,11 +62317,8 @@ If you want to remount the same app, move your app creation logic into a factory
       const explicitTypes = ["string", "number", "boolean"];
       return explicitTypes.some((elem) => type.toLowerCase() === elem);
     }
-    function isCoercible(...args) {
-      return args.every((elem) => {
-        const value = elem.toLowerCase();
-        return value !== "boolean" && value !== "symbol";
-      });
+    function isBoolean(...args) {
+      return args.some((elem) => elem.toLowerCase() === "boolean");
     }
 
     const isInternalKey = (key) => key === "_" || key === "_ctx" || key === "$stable";
@@ -63675,13 +63674,9 @@ For more details, see https://link.vuejs.org/feature-flags.`
         const needTransition2 = moveType !== 2 && shapeFlag & 1 && transition;
         if (needTransition2) {
           if (moveType === 0) {
-            if (transition.persisted && !el[leaveCbKey]) {
-              hostInsert(el, container, anchor);
-            } else {
-              transition.beforeEnter(el);
-              hostInsert(el, container, anchor);
-              queuePostRenderEffect(() => transition.enter(el), parentSuspense);
-            }
+            transition.beforeEnter(el);
+            hostInsert(el, container, anchor);
+            queuePostRenderEffect(() => transition.enter(el), parentSuspense);
           } else {
             const { leave, delayLeave, afterLeave } = transition;
             const remove2 = () => {
@@ -63692,21 +63687,16 @@ For more details, see https://link.vuejs.org/feature-flags.`
               }
             };
             const performLeave = () => {
-              const wasLeaving = el._isLeaving || !!el[leaveCbKey];
               if (el._isLeaving) {
                 el[leaveCbKey](
                   true
                   /* cancelled */
                 );
               }
-              if (transition.persisted && !wasLeaving) {
+              leave(el, () => {
                 remove2();
-              } else {
-                leave(el, () => {
-                  remove2();
-                  afterLeave && afterLeave();
-                });
-              }
+                afterLeave && afterLeave();
+              });
             };
             if (delayLeave) {
               delayLeave(el, remove2, performLeave);
@@ -64386,14 +64376,13 @@ For more details, see https://link.vuejs.org/feature-flags.`
             suspense.isHydrating = false;
           } else if (!resume) {
             delayEnter = activeBranch && pendingBranch.transition && pendingBranch.transition.mode === "out-in";
-            let hasUpdatedAnchor = false;
             if (delayEnter) {
               activeBranch.transition.afterLeave = () => {
                 if (pendingId === suspense.pendingId) {
                   move(
                     pendingBranch,
                     container2,
-                    anchor === initialAnchor && !hasUpdatedAnchor ? next(activeBranch) : anchor,
+                    anchor === initialAnchor ? next(activeBranch) : anchor,
                     0
                   );
                   queuePostFlushCb(effects);
@@ -64406,7 +64395,6 @@ For more details, see https://link.vuejs.org/feature-flags.`
             if (activeBranch && !suspense.isFallbackMountPending) {
               if (parentNode(activeBranch.el) === container2) {
                 anchor = next(activeBranch);
-                hasUpdatedAnchor = true;
               }
               unmount(activeBranch, parentComponent2, suspense, true);
               if (!delayEnter && isInFallback && vnode2.ssFallback) {
@@ -65727,7 +65715,7 @@ Component that was made reactive: `,
       return true;
     }
 
-    const version = "3.5.35";
+    const version = "3.5.33";
     const warn = !!("production" !== "production") ? warn$1 : NOOP;
     const ErrorTypeStrings = ErrorTypeStrings$1 ;
     const devtools = !!("production" !== "production") || true ? devtools$1 : void 0;
@@ -65750,7 +65738,7 @@ Component that was made reactive: `,
     const DeprecationTypes = null;
 
     /**
-    * @vue/runtime-dom v3.5.35
+    * @vue/runtime-dom v3.5.33
     * (c) 2018-present Yuxi (Evan) You and Vue contributors
     * @license MIT
     **/
@@ -66490,37 +66478,12 @@ Component that was made reactive: `,
         } else if (e._vts <= invoker.attached) {
           return;
         }
-        const value = invoker.value;
-        if (isArray(value)) {
-          const originalStop = e.stopImmediatePropagation;
-          e.stopImmediatePropagation = () => {
-            originalStop.call(e);
-            e._stopped = true;
-          };
-          const handlers = value.slice();
-          const args = [e];
-          for (let i = 0; i < handlers.length; i++) {
-            if (e._stopped) {
-              break;
-            }
-            const handler = handlers[i];
-            if (handler) {
-              callWithAsyncErrorHandling(
-                handler,
-                instance,
-                5,
-                args
-              );
-            }
-          }
-        } else {
-          callWithAsyncErrorHandling(
-            value,
-            instance,
-            5,
-            [e]
-          );
-        }
+        callWithAsyncErrorHandling(
+          patchStopImmediatePropagation(e, invoker.value),
+          instance,
+          5,
+          [e]
+        );
       };
       invoker.value = initialValue;
       invoker.attached = getNow();
@@ -66535,6 +66498,20 @@ Component that was made reactive: `,
 Expected function or array of functions, received type ${typeof value}.`
       );
       return NOOP;
+    }
+    function patchStopImmediatePropagation(e, value) {
+      if (isArray(value)) {
+        const originalStop = e.stopImmediatePropagation;
+        e.stopImmediatePropagation = () => {
+          originalStop.call(e);
+          e._stopped = true;
+        };
+        return value.map(
+          (fn) => (e2) => !e2._stopped && fn && fn(e2)
+        );
+      } else {
+        return value;
+      }
     }
 
     const isNativeOn = (key) => key.charCodeAt(0) === 111 && key.charCodeAt(1) === 110 && // lowercase letter
@@ -67757,7 +67734,7 @@ Expected function or array of functions, received type ${typeof value}.`
     } ;
 
     /**
-    * vue v3.5.35
+    * vue v3.5.33
     * (c) 2018-present Yuxi (Evan) You and Vue contributors
     * @license MIT
     **/
@@ -91753,6 +91730,11 @@ Expected function or array of functions, received type ${typeof value}.`
             const isMobileNavClosing = ref(false);
             const workspaceRef = ref(null);
             const paginationRef = ref(null);
+            const mobileNavDrawerStyle = {
+                width: "360px",
+                maxWidth: "calc(100% - 24px)",
+                flex: "0 0 360px",
+            };
             let mobileNavCloseTimer;
             let paginationResizeObserver;
             const save = useVisualizerSave({
@@ -92334,13 +92316,13 @@ Expected function or array of functions, received type ${typeof value}.`
                     currentDataPage.value = 1;
                 clearDataCellEditing();
             });
-            const __returned__ = { visualizer, dialogStore, data, config, emit, isMobileNavRendered, isMobileNavClosing, workspaceRef, paginationRef, VISUALIZER_MOBILE_NAV_LEAVE_MS, VISUALIZER_DATA_PAGE_SIZE, get mobileNavCloseTimer() { return mobileNavCloseTimer; }, set mobileNavCloseTimer(v) { mobileNavCloseTimer = v; }, get paginationResizeObserver() { return paginationResizeObserver; }, set paginationResizeObserver(v) { paginationResizeObserver = v; }, save, modes, setWorkspaceMode, isSheetEditingMode, currentSheetName, templatePresetLabel, isMobileNavOpen, openMobileNav, closeMobileNav, clearMobileNavCloseTimer, selectNavSheet, selectTableManagementNav, returnToCurrentSheet, moveSheet, headers, VISUALIZER_SHORT_FIELD_CHAR_LIMIT, activeDataCell, activeFieldActions, activeDataTextareaRef, editingColumnLayoutSnapshot, currentDataPage, dataPageJumpValue, paginationWidth, rowCount, dataPageSize, dataPageCount, isDataPaginated, dataPaginationSiblingWindow, dataPaginationItems, dataPageStartIndex, dataPageEndIndex, dataRangeText, visibleDataRows, scrollWorkspaceToTop, preserveWorkspaceScrollPosition, setDataPage, updateDataPageJumpValue, commitDataPageJumpValue, isShortDataField, getColumnIsShort, getEffectiveColumnIsShort, buildFieldLayoutRows, asTextarea, setActiveDataTextareaRef, isDataCellEditing, setActiveFieldActions, isFieldActionsActive, clearFieldActions, handleSurfacePointerDown, startDataCellEditing, stopDataCellEditing, clearDataCellEditing, rows, footerStatus, saveDisabled, requestAddSheet, requestDeleteSheet, deleteRow, addRow, refreshSpecialIndexColumnDraft, requestAddColumn, requestDeleteColumn, openInputDialog, openConfirmDialog, updatePaginationWidth, observePaginationWidth, openCloseDirtyDialog, AcuBadge, AcuButton, AcuIconButton, AcuInfoBanner, AcuInput, AcuPanel, AcuSegmentedControl, AcuTextarea, VisualizerAssistantPanel, VisualizerConfigPanels, VisualizerGlobalInjectionPanels, VisualizerNavigation, VisualizerTableManagementPanel };
+            const __returned__ = { visualizer, dialogStore, data, config, emit, isMobileNavRendered, isMobileNavClosing, workspaceRef, paginationRef, VISUALIZER_MOBILE_NAV_LEAVE_MS, VISUALIZER_DATA_PAGE_SIZE, mobileNavDrawerStyle, get mobileNavCloseTimer() { return mobileNavCloseTimer; }, set mobileNavCloseTimer(v) { mobileNavCloseTimer = v; }, get paginationResizeObserver() { return paginationResizeObserver; }, set paginationResizeObserver(v) { paginationResizeObserver = v; }, save, modes, setWorkspaceMode, isSheetEditingMode, currentSheetName, templatePresetLabel, isMobileNavOpen, openMobileNav, closeMobileNav, clearMobileNavCloseTimer, selectNavSheet, selectTableManagementNav, returnToCurrentSheet, moveSheet, headers, VISUALIZER_SHORT_FIELD_CHAR_LIMIT, activeDataCell, activeFieldActions, activeDataTextareaRef, editingColumnLayoutSnapshot, currentDataPage, dataPageJumpValue, paginationWidth, rowCount, dataPageSize, dataPageCount, isDataPaginated, dataPaginationSiblingWindow, dataPaginationItems, dataPageStartIndex, dataPageEndIndex, dataRangeText, visibleDataRows, scrollWorkspaceToTop, preserveWorkspaceScrollPosition, setDataPage, updateDataPageJumpValue, commitDataPageJumpValue, isShortDataField, getColumnIsShort, getEffectiveColumnIsShort, buildFieldLayoutRows, asTextarea, setActiveDataTextareaRef, isDataCellEditing, setActiveFieldActions, isFieldActionsActive, clearFieldActions, handleSurfacePointerDown, startDataCellEditing, stopDataCellEditing, clearDataCellEditing, rows, footerStatus, saveDisabled, requestAddSheet, requestDeleteSheet, deleteRow, addRow, refreshSpecialIndexColumnDraft, requestAddColumn, requestDeleteColumn, openInputDialog, openConfirmDialog, updatePaginationWidth, observePaginationWidth, openCloseDirtyDialog, AcuBadge, AcuButton, AcuIconButton, AcuInfoBanner, AcuInput, AcuPanel, AcuSegmentedControl, AcuTextarea, VisualizerAssistantPanel, VisualizerConfigPanels, VisualizerGlobalInjectionPanels, VisualizerNavigation, VisualizerTableManagementPanel };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-visualizer-surface {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: grid;\r\n  grid-template-columns: 260px minmax(0, 1fr);\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__sidebar {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 1px solid var(--acu-border-2);\r\n  background: var(--acu-sidebar-bg);\n}\n.acu-visualizer-surface__main {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  min-height: 50px;\r\n  padding: 8px 12px 8px 16px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar-context {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  gap: 10px;\n}\n.acu-visualizer-surface__mobile-menu {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-visualizer-surface__mobile-menu:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__context-items {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  justify-content: flex-start;\r\n  gap: 16px;\n}\n.acu-visualizer-surface__context-item {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 2px;\n}\n.acu-visualizer-surface__context-item:first-child {\r\n  flex: 0 1 auto;\r\n  max-width: min(560px, 42vw);\n}\n.acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item {\r\n  flex: 0 0 auto;\r\n  max-width: min(260px, 20vw);\n}\n.acu-visualizer-surface__context-item span {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__context-item strong {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.25;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__context-item:first-child strong {\r\n  overflow: visible;\r\n  text-overflow: clip;\r\n  white-space: normal;\r\n  word-break: break-word;\n}\n.acu-visualizer-surface__context-badge {\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__conflict {\r\n  flex: 0 0 auto;\r\n  margin: 12px 16px 0;\n}\n.acu-visualizer-surface__conflict-actions {\r\n  display: inline-flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px;\r\n  margin-left: 8px;\n}\n.acu-visualizer-surface__data-toolbar,\r\n.acu-visualizer-surface__data-toolbar-actions,\r\n.acu-visualizer-surface__database-toolbar,\r\n.acu-visualizer-surface__pagination,\r\n.acu-visualizer-surface__pagination-pages,\r\n.acu-visualizer-surface__card-header {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__workspace {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  overflow: auto;\r\n  padding: 16px;\n}\n.acu-visualizer-surface__loading {\r\n  min-height: 140px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 8px;\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__mode-tabs {\r\n  flex: 0 0 auto;\r\n  width: min(360px, 42vw);\n}\n.acu-visualizer-surface__close {\r\n  width: 30px;\r\n  height: 30px;\r\n  flex: 0 0 auto;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-visualizer-surface__close:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__data-toolbar {\r\n  flex: 0 0 auto;\r\n  justify-content: space-between;\r\n  padding: 4px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__data-toolbar-actions {\r\n  flex: 0 0 auto;\r\n  justify-content: flex-end;\n}\n.acu-visualizer-surface__pagination {\r\n  flex: 0 0 auto;\r\n  justify-content: center;\r\n  gap: 14px;\r\n  padding: 6px 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-visualizer-surface__pagination-pages {\r\n  min-width: 0;\r\n  flex-wrap: wrap;\r\n  justify-content: center;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__page-button {\r\n  width: 34px;\r\n  min-width: 34px;\r\n  height: 34px;\r\n  padding: 0;\r\n  border: 1px solid var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 500;\n}\n.acu-visualizer-surface__page-button:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__page-button--active,\r\n.acu-visualizer-surface__page-button--active:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\n}\n.acu-visualizer-surface__page-button:disabled:not(\r\n    .acu-visualizer-surface__page-button--active\r\n  ) {\r\n  border-color: var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-2);\r\n  opacity: 1;\r\n  cursor: default;\n}\n.acu-visualizer-surface__page-jump {\r\n  flex: 0 0 64px;\r\n  width: 64px;\n}\n.acu-visualizer-surface__page-jump :deep(.acu-input) {\r\n  min-height: 34px;\r\n  border: 1px solid var(--acu-border) !important;\r\n  background: var(--acu-bg-0) !important;\r\n  text-align: center;\r\n  font-size: var(--acu-font-size-body-lg, 13px) !important;\r\n  font-variant-numeric: tabular-nums;\n}\n.acu-visualizer-surface__data-range {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__database-toolbar {\r\n  flex: 0 0 auto;\r\n  padding: 0 0 4px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar h2 {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__database-toolbar p {\r\n  margin: 5px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-readable, 1.55);\n}\n.acu-visualizer-surface__empty {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-visualizer-surface__card-grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));\r\n  gap: 12px;\n}\n.acu-visualizer-surface__data-card {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  height: 100%;\r\n  padding: 16px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\n}\n.acu-visualizer-surface__card-header strong {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-visualizer-surface__card-header span {\r\n  min-width: 0;\r\n  margin-right: auto;\r\n  overflow: hidden;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__card-header :deep(.acu-icon-btn) {\r\n  background: transparent;\n}\n.acu-visualizer-surface__card-header\r\n  :deep(.acu-icon-btn--default:hover:not(:disabled)) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\n}\n.acu-visualizer-surface__card-header :deep(.acu-icon-btn--accent) {\r\n  background: var(--acu-accent-glow);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__card-header\r\n  :deep(.acu-icon-btn--danger:hover:not(:disabled)) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-visualizer-surface__fields {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__field-row {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 8px;\r\n  align-items: stretch;\n}\n.acu-visualizer-surface__field-row.is-wide {\r\n  grid-template-columns: minmax(0, 1fr);\n}\n.acu-visualizer-surface__field {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\r\n  padding: 2px;\r\n  border: 1px solid transparent;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  transition:\r\n    background 0.15s ease,\r\n    border-color 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field :deep(.acu-textarea) {\r\n  flex: 1 1 auto;\r\n  min-height: 34px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\n}\n.acu-visualizer-surface__field-preview {\r\n  width: 100%;\r\n  min-height: 34px;\r\n  box-sizing: border-box;\r\n  padding: 8px 10px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-1);\r\n  cursor: text;\r\n  display: block;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\r\n  transition:\r\n    background 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field-preview:hover,\r\n.acu-visualizer-surface__field-preview:focus-visible {\r\n  outline: none;\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    var(--acu-bg-2);\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field-preview.is-empty {\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__field-label {\r\n  min-width: 0;\r\n  min-height: 24px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 6px;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 600;\n}\n.acu-visualizer-surface__field-label > span:first-child {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__field-locks {\r\n  flex: 0 0 auto;\r\n  min-width: 51px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  gap: 3px;\r\n  opacity: 0.44;\r\n  transition: opacity 0.15s ease;\n}\n.acu-visualizer-surface__field:hover .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field:focus-within\r\n  .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field.is-actions-active\r\n  .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field.is-locked .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field.is-special-index\r\n  .acu-visualizer-surface__field-locks {\r\n  opacity: 1;\n}\n.acu-visualizer-surface__field-locks :deep(.acu-icon-btn) {\r\n  --acu-icon-btn-size: 24px;\r\n  --acu-icon-btn-font-size: 11px;\r\n  width: 24px;\r\n  height: 24px;\r\n  background: transparent !important;\n}\n.acu-visualizer-surface__field-locks\r\n  :deep(.acu-icon-btn--default:hover:not(:disabled)) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__field-locks :deep(.acu-icon-btn--accent) {\r\n  color: var(--acu-accent);\r\n  background: var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field.is-locked {\r\n  border-color: var(--acu-border);\r\n  background: color-mix(in srgb, var(--acu-warning) 8%, transparent);\n}\n.acu-visualizer-surface__field.is-actions-active:not(.is-locked) {\r\n  background: color-mix(in srgb, var(--acu-accent) 6%, transparent);\n}\n.acu-visualizer-surface__footer {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  padding: 12px 16px;\r\n  border-top: 1px solid var(--acu-border-2);\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__footer-actions {\r\n  display: flex;\r\n  gap: 8px;\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__footer-actions :deep(.acu-btn) {\r\n  min-width: 132px;\n}\n.acu-visualizer-surface__mobile-nav-layer {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9350;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: visualizer-mobile-nav-layer-in 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing {\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-layer-out 0.15s ease-in both;\n}\n.acu-visualizer-surface__mobile-nav {\r\n  width: 280px;\r\n  max-width: calc(100vw - 72px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\r\n  height: 100%;\r\n  max-height: 100%;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 280px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 0;\r\n  background: var(--acu-sidebar-bg);\r\n  box-shadow: var(--acu-shadow);\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-drawer-in 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing\r\n  .acu-visualizer-surface__mobile-nav {\r\n  animation: visualizer-mobile-nav-drawer-out 0.15s ease-in both;\n}\n@supports (width: min(280px, calc(100vw - 72px))) {\n.acu-visualizer-surface__mobile-nav {\r\n    width: min(280px, calc(100vw - 72px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\r\n    flex: 0 0 min(280px, calc(100vw - 72px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n}\n}\n@supports (width: 100dvw) {\n.acu-visualizer-surface__mobile-nav {\r\n    max-width: calc(100dvw - 72px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n}\n}\n@supports (height: 100dvh) {\n.acu-visualizer-surface__mobile-nav {\r\n    height: 100%;\r\n    max-height: 100%;\n}\n}\n@keyframes visualizer-mobile-nav-layer-in {\nfrom {\r\n    opacity: 0;\n}\nto {\r\n    opacity: 1;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-in {\nfrom {\r\n    transform: translateX(-100%);\n}\nto {\r\n    transform: translateX(0);\n}\n}\n@keyframes visualizer-mobile-nav-layer-out {\nfrom {\r\n    opacity: 1;\n}\nto {\r\n    opacity: 0;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-out {\nfrom {\r\n    transform: translateX(0);\n}\nto {\r\n    transform: translateX(-100%);\n}\n}\n@media (max-width: 1024px) {\n.acu-visualizer-surface {\r\n    grid-template-columns: 220px minmax(0, 1fr);\n}\n.acu-visualizer-surface__card-grid {\r\n    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));\n}\n.acu-visualizer-surface__topbar {\r\n    flex-wrap: wrap;\n}\n.acu-visualizer-surface__mode-tabs {\r\n    order: 3;\r\n    width: min(420px, 100%);\n}\n}\n@media (max-width: 767px) {\n.acu-visualizer-surface {\r\n    grid-template-columns: 1fr;\r\n    grid-template-rows: minmax(0, 1fr);\n}\n.acu-visualizer-surface__sidebar {\r\n    display: none;\n}\n.acu-visualizer-surface__topbar {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 1fr) auto;\r\n    gap: 8px;\r\n    min-height: 0;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__topbar-context {\r\n    grid-column: 1;\r\n    display: grid;\r\n    grid-template-columns: auto minmax(0, 1fr) auto;\r\n    align-items: center;\r\n    gap: 8px;\r\n    min-width: 0;\n}\n.acu-visualizer-surface__mobile-menu {\r\n    display: inline-flex;\n}\n.acu-visualizer-surface__context-items {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 8px;\n}\n.acu-visualizer-surface__context-item:first-child,\r\n  .acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item {\r\n    max-width: none;\n}\n.acu-visualizer-surface__mobile-nav-layer {\r\n    display: flex;\n}\n.acu-visualizer-surface__close {\r\n    grid-column: 2;\r\n    grid-row: 1;\r\n    align-self: center;\n}\n.acu-visualizer-surface__mode-tabs {\r\n    grid-column: 1 / -1;\r\n    width: 100%;\n}\n.acu-visualizer-surface__workspace {\r\n    padding: 10px;\n}\n.acu-visualizer-surface__data-toolbar,\r\n  .acu-visualizer-surface__database-toolbar {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__data-toolbar :deep(.acu-btn),\r\n  .acu-visualizer-surface__database-toolbar :deep(.acu-btn) {\r\n    width: 100%;\n}\n.acu-visualizer-surface__data-toolbar-actions {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__pagination {\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 6px;\r\n    padding: 2px 0 6px;\n}\n.acu-visualizer-surface__pagination-pages {\r\n    flex: 0 1 auto;\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 5px;\n}\n.acu-visualizer-surface__page-button {\r\n    width: 36px;\r\n    min-width: 36px;\r\n    height: 34px;\r\n    flex: 0 0 36px;\n}\n.acu-visualizer-surface__page-jump {\r\n    flex: 0 0 54px;\r\n    width: 54px;\n}\n.acu-visualizer-surface__footer {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\r\n    align-items: center;\r\n    gap: 8px;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__footer > span {\r\n    min-width: 0;\r\n    overflow: hidden;\r\n    text-overflow: ellipsis;\r\n    white-space: nowrap;\n}\n.acu-visualizer-surface__footer-actions {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 6px;\n}\n.acu-visualizer-surface__footer-actions :deep(.acu-btn) {\r\n    min-width: 0;\r\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-visualizer-surface__card-grid {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__fields {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__mode-tabs {\r\n    width: 100%;\n}\n.acu-visualizer-surface__conflict-actions {\r\n    display: flex;\r\n    margin: 8px 0 0;\n}\n.acu-visualizer-surface__footer {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__footer > span {\r\n    display: none;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue#style-0");
+    injectSfcStyle("\n.acu-visualizer-surface {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: grid;\r\n  grid-template-columns: 260px minmax(0, 1fr);\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__sidebar {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 1px solid var(--acu-border-2);\r\n  background: var(--acu-sidebar-bg);\n}\n.acu-visualizer-surface__main {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  min-height: 50px;\r\n  padding: 8px 12px 8px 16px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar-context {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  gap: 10px;\n}\n.acu-visualizer-surface__mobile-menu {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-visualizer-surface__mobile-menu:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__context-items {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  justify-content: flex-start;\r\n  gap: 16px;\n}\n.acu-visualizer-surface__context-item {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 2px;\n}\n.acu-visualizer-surface__context-item:first-child {\r\n  flex: 0 1 auto;\r\n  max-width: min(560px, 42vw);\n}\n.acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item {\r\n  flex: 0 0 auto;\r\n  max-width: min(260px, 20vw);\n}\n.acu-visualizer-surface__context-item span {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__context-item strong {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.25;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__context-item:first-child strong {\r\n  overflow: visible;\r\n  text-overflow: clip;\r\n  white-space: normal;\r\n  word-break: break-word;\n}\n.acu-visualizer-surface__context-badge {\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__conflict {\r\n  flex: 0 0 auto;\r\n  margin: 12px 16px 0;\n}\n.acu-visualizer-surface__conflict-actions {\r\n  display: inline-flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px;\r\n  margin-left: 8px;\n}\n.acu-visualizer-surface__data-toolbar,\r\n.acu-visualizer-surface__data-toolbar-actions,\r\n.acu-visualizer-surface__database-toolbar,\r\n.acu-visualizer-surface__pagination,\r\n.acu-visualizer-surface__pagination-pages,\r\n.acu-visualizer-surface__card-header {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__workspace {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  overflow: auto;\r\n  padding: 16px;\n}\n.acu-visualizer-surface__loading {\r\n  min-height: 140px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 8px;\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__mode-tabs {\r\n  flex: 0 0 auto;\r\n  width: min(360px, 42vw);\n}\n.acu-visualizer-surface__close {\r\n  width: 30px;\r\n  height: 30px;\r\n  flex: 0 0 auto;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-visualizer-surface__close:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__data-toolbar {\r\n  flex: 0 0 auto;\r\n  justify-content: space-between;\r\n  padding: 4px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__data-toolbar-actions {\r\n  flex: 0 0 auto;\r\n  justify-content: flex-end;\n}\n.acu-visualizer-surface__pagination {\r\n  flex: 0 0 auto;\r\n  justify-content: center;\r\n  gap: 14px;\r\n  padding: 6px 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-visualizer-surface__pagination-pages {\r\n  min-width: 0;\r\n  flex-wrap: wrap;\r\n  justify-content: center;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__page-button {\r\n  width: 34px;\r\n  min-width: 34px;\r\n  height: 34px;\r\n  padding: 0;\r\n  border: 1px solid var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 500;\n}\n.acu-visualizer-surface__page-button:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__page-button--active,\r\n.acu-visualizer-surface__page-button--active:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\n}\n.acu-visualizer-surface__page-button:disabled:not(\r\n    .acu-visualizer-surface__page-button--active\r\n  ) {\r\n  border-color: var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-2);\r\n  opacity: 1;\r\n  cursor: default;\n}\n.acu-visualizer-surface__page-jump {\r\n  flex: 0 0 64px;\r\n  width: 64px;\n}\n.acu-visualizer-surface__page-jump :deep(.acu-input) {\r\n  min-height: 34px;\r\n  border: 1px solid var(--acu-border) !important;\r\n  background: var(--acu-bg-0) !important;\r\n  text-align: center;\r\n  font-size: var(--acu-font-size-body-lg, 13px) !important;\r\n  font-variant-numeric: tabular-nums;\n}\n.acu-visualizer-surface__data-range {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__database-toolbar {\r\n  flex: 0 0 auto;\r\n  padding: 0 0 4px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar h2 {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__database-toolbar p {\r\n  margin: 5px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-readable, 1.55);\n}\n.acu-visualizer-surface__empty {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-visualizer-surface__card-grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));\r\n  gap: 12px;\n}\n.acu-visualizer-surface__data-card {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  height: 100%;\r\n  padding: 16px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\n}\n.acu-visualizer-surface__card-header strong {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-visualizer-surface__card-header span {\r\n  min-width: 0;\r\n  margin-right: auto;\r\n  overflow: hidden;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__card-header :deep(.acu-icon-btn) {\r\n  background: transparent;\n}\n.acu-visualizer-surface__card-header\r\n  :deep(.acu-icon-btn--default:hover:not(:disabled)) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\n}\n.acu-visualizer-surface__card-header :deep(.acu-icon-btn--accent) {\r\n  background: var(--acu-accent-glow);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__card-header\r\n  :deep(.acu-icon-btn--danger:hover:not(:disabled)) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-visualizer-surface__fields {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__field-row {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 8px;\r\n  align-items: stretch;\n}\n.acu-visualizer-surface__field-row.is-wide {\r\n  grid-template-columns: minmax(0, 1fr);\n}\n.acu-visualizer-surface__field {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\r\n  padding: 2px;\r\n  border: 1px solid transparent;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  transition:\r\n    background 0.15s ease,\r\n    border-color 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field :deep(.acu-textarea) {\r\n  flex: 1 1 auto;\r\n  min-height: 34px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\n}\n.acu-visualizer-surface__field-preview {\r\n  width: 100%;\r\n  min-height: 34px;\r\n  box-sizing: border-box;\r\n  padding: 8px 10px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-1);\r\n  cursor: text;\r\n  display: block;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\r\n  transition:\r\n    background 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field-preview:hover,\r\n.acu-visualizer-surface__field-preview:focus-visible {\r\n  outline: none;\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    var(--acu-bg-2);\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field-preview.is-empty {\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__field-label {\r\n  min-width: 0;\r\n  min-height: 24px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 6px;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 600;\n}\n.acu-visualizer-surface__field-label > span:first-child {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__field-locks {\r\n  flex: 0 0 auto;\r\n  min-width: 51px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  gap: 3px;\r\n  opacity: 0.44;\r\n  transition: opacity 0.15s ease;\n}\n.acu-visualizer-surface__field:hover .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field:focus-within\r\n  .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field.is-actions-active\r\n  .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field.is-locked .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field.is-special-index\r\n  .acu-visualizer-surface__field-locks {\r\n  opacity: 1;\n}\n.acu-visualizer-surface__field-locks :deep(.acu-icon-btn) {\r\n  --acu-icon-btn-size: 24px;\r\n  --acu-icon-btn-font-size: 11px;\r\n  width: 24px;\r\n  height: 24px;\r\n  background: transparent !important;\n}\n.acu-visualizer-surface__field-locks\r\n  :deep(.acu-icon-btn--default:hover:not(:disabled)) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__field-locks :deep(.acu-icon-btn--accent) {\r\n  color: var(--acu-accent);\r\n  background: var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field.is-locked {\r\n  border-color: var(--acu-border);\r\n  background: color-mix(in srgb, var(--acu-warning) 8%, transparent);\n}\n.acu-visualizer-surface__field.is-actions-active:not(.is-locked) {\r\n  background: color-mix(in srgb, var(--acu-accent) 6%, transparent);\n}\n.acu-visualizer-surface__footer {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  padding: 12px 16px;\r\n  border-top: 1px solid var(--acu-border-2);\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__footer-actions {\r\n  display: flex;\r\n  gap: 8px;\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__footer-actions :deep(.acu-btn) {\r\n  min-width: 132px;\n}\n.acu-visualizer-surface__mobile-nav-layer {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9350;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: visualizer-mobile-nav-layer-in 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing {\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-layer-out 0.15s ease-in both;\n}\n.acu-visualizer-surface__mobile-nav {\n  width: 360px;\n  max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n  height: 100%;\n  max-height: 100%;\n  min-width: 0;\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 360px;\n  display: flex;\r\n  flex-direction: column;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 0;\r\n  background: var(--acu-sidebar-bg);\r\n  box-shadow: var(--acu-shadow);\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-drawer-in 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing\r\n  .acu-visualizer-surface__mobile-nav {\r\n  animation: visualizer-mobile-nav-drawer-out 0.15s ease-in both;\n}\n@supports (width: min(360px, calc(100% - 24px))) {\n.acu-visualizer-surface__mobile-nav {\n    width: min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n    flex: 0 0 min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n}\n}\n@supports (width: 100dvw) {\n.acu-visualizer-surface__mobile-nav {\n    max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n}\n}\n@supports (height: 100dvh) {\n.acu-visualizer-surface__mobile-nav {\r\n    height: 100%;\r\n    max-height: 100%;\n}\n}\n@keyframes visualizer-mobile-nav-layer-in {\nfrom {\r\n    opacity: 0;\n}\nto {\r\n    opacity: 1;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-in {\nfrom {\r\n    transform: translateX(-100%);\n}\nto {\r\n    transform: translateX(0);\n}\n}\n@keyframes visualizer-mobile-nav-layer-out {\nfrom {\r\n    opacity: 1;\n}\nto {\r\n    opacity: 0;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-out {\nfrom {\r\n    transform: translateX(0);\n}\nto {\r\n    transform: translateX(-100%);\n}\n}\n@media (max-width: 1024px) {\n.acu-visualizer-surface {\r\n    grid-template-columns: 220px minmax(0, 1fr);\n}\n.acu-visualizer-surface__card-grid {\r\n    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));\n}\n.acu-visualizer-surface__topbar {\r\n    flex-wrap: wrap;\n}\n.acu-visualizer-surface__mode-tabs {\r\n    order: 3;\r\n    width: min(420px, 100%);\n}\n}\n@media (max-width: 767px) {\n.acu-visualizer-surface {\r\n    grid-template-columns: 1fr;\r\n    grid-template-rows: minmax(0, 1fr);\n}\n.acu-visualizer-surface__sidebar {\r\n    display: none;\n}\n.acu-visualizer-surface__topbar {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 1fr) auto;\r\n    gap: 8px;\r\n    min-height: 0;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__topbar-context {\r\n    grid-column: 1;\r\n    display: grid;\r\n    grid-template-columns: auto minmax(0, 1fr) auto;\r\n    align-items: center;\r\n    gap: 8px;\r\n    min-width: 0;\n}\n.acu-visualizer-surface__mobile-menu {\r\n    display: inline-flex;\n}\n.acu-visualizer-surface__context-items {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 8px;\n}\n.acu-visualizer-surface__context-item:first-child,\r\n  .acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item {\r\n    max-width: none;\n}\n.acu-visualizer-surface__mobile-nav-layer {\r\n    display: flex;\n}\n.acu-visualizer-surface__close {\r\n    grid-column: 2;\r\n    grid-row: 1;\r\n    align-self: center;\n}\n.acu-visualizer-surface__mode-tabs {\r\n    grid-column: 1 / -1;\r\n    width: 100%;\n}\n.acu-visualizer-surface__workspace {\r\n    padding: 10px;\n}\n.acu-visualizer-surface__data-toolbar,\r\n  .acu-visualizer-surface__database-toolbar {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__data-toolbar :deep(.acu-btn),\r\n  .acu-visualizer-surface__database-toolbar :deep(.acu-btn) {\r\n    width: 100%;\n}\n.acu-visualizer-surface__data-toolbar-actions {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__pagination {\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 6px;\r\n    padding: 2px 0 6px;\n}\n.acu-visualizer-surface__pagination-pages {\r\n    flex: 0 1 auto;\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 5px;\n}\n.acu-visualizer-surface__page-button {\r\n    width: 36px;\r\n    min-width: 36px;\r\n    height: 34px;\r\n    flex: 0 0 36px;\n}\n.acu-visualizer-surface__page-jump {\r\n    flex: 0 0 54px;\r\n    width: 54px;\n}\n.acu-visualizer-surface__footer {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\r\n    align-items: center;\r\n    gap: 8px;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__footer > span {\r\n    min-width: 0;\r\n    overflow: hidden;\r\n    text-overflow: ellipsis;\r\n    white-space: nowrap;\n}\n.acu-visualizer-surface__footer-actions {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 6px;\n}\n.acu-visualizer-surface__footer-actions :deep(.acu-btn) {\r\n    min-width: 0;\r\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-visualizer-surface__card-grid {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__fields {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__mode-tabs {\r\n    width: 100%;\n}\n.acu-visualizer-surface__conflict-actions {\r\n    display: flex;\r\n    margin: 8px 0 0;\n}\n.acu-visualizer-surface__footer {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__footer > span {\r\n    display: none;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue#style-0");
     var VisualizerSurface_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$1 = {
@@ -92912,9 +92894,11 @@ Expected function or array of functions, received type ${typeof value}.`
     				},
     				[createBaseVNode("aside", {
     					class: "acu-visualizer-surface__mobile-nav",
+    					style: $setup.mobileNavDrawerStyle,
     					role: "dialog",
     					"aria-modal": "true",
     					"aria-label": "数据库导航",
+    					"data-acu-mobile-nav-width": "360px",
     					onClick: _cache[1] || (_cache[1] = withModifiers(() => {}, ["stop"]))
     				}, [createVNode($setup["VisualizerNavigation"], {
     					"sheet-items": $setup.visualizer.sheetItems,
@@ -92962,6 +92946,11 @@ Expected function or array of functions, received type ${typeof value}.`
             const isThemeMenuOpen = ref(false);
             const isThemeMenuRendered = ref(false);
             const isThemeMenuClosing = ref(false);
+            const mobileNavDrawerStyle = {
+                width: "360px",
+                maxWidth: "calc(100% - 24px)",
+                flex: "0 0 360px",
+            };
             let themeMenuCloseTimer;
             let mobileNavCloseTimer;
             const shellTitle = computed(() => visualizer.isActive ? "数据库编辑器" : router.activePage?.title || "SP·数据库 III");
@@ -93137,13 +93126,13 @@ Expected function or array of functions, received type ${typeof value}.`
                 acuClearTimeout(mobileNavCloseTimer);
                 mobileNavCloseTimer = undefined;
             }
-            const __returned__ = { emit, rootShell, router, dialogStore, themeStore, toastStore, uiMode, visualizer, isMobileNavOpen, isMobileNavRendered, isMobileNavClosing, isThemeMenuOpen, isThemeMenuRendered, isThemeMenuClosing, THEME_MENU_LEAVE_MS, MOBILE_NAV_LEAVE_MS, get themeMenuCloseTimer() { return themeMenuCloseTimer; }, set themeMenuCloseTimer(v) { themeMenuCloseTimer = v; }, get mobileNavCloseTimer() { return mobileNavCloseTimer; }, set mobileNavCloseTimer(v) { mobileNavCloseTimer = v; }, shellTitle, toggleThemeMenu, selectTheme, readFileText, importThemeFile, exportTheme, deleteTheme, sanitizeFilename, downloadJson, onDocPointer, devOptions, openMobileNav, closeMobileNav, closeApp, openThemeMenu, closeThemeMenu, clearThemeMenuCloseTimer, clearMobileNavCloseTimer, AcuDialogHost, AcuFileButton, AcuIconButton, AcuToastViewport, MainArea, Sidebar, get isCustomThemeId() { return isCustomThemeId; }, VisualizerSurface };
+            const __returned__ = { emit, rootShell, router, dialogStore, themeStore, toastStore, uiMode, visualizer, isMobileNavOpen, isMobileNavRendered, isMobileNavClosing, isThemeMenuOpen, isThemeMenuRendered, isThemeMenuClosing, THEME_MENU_LEAVE_MS, MOBILE_NAV_LEAVE_MS, mobileNavDrawerStyle, get themeMenuCloseTimer() { return themeMenuCloseTimer; }, set themeMenuCloseTimer(v) { themeMenuCloseTimer = v; }, get mobileNavCloseTimer() { return mobileNavCloseTimer; }, set mobileNavCloseTimer(v) { mobileNavCloseTimer = v; }, shellTitle, toggleThemeMenu, selectTheme, readFileText, importThemeFile, exportTheme, deleteTheme, sanitizeFilename, downloadJson, onDocPointer, devOptions, openMobileNav, closeMobileNav, closeApp, openThemeMenu, closeThemeMenu, clearThemeMenuCloseTimer, clearMobileNavCloseTimer, AcuDialogHost, AcuFileButton, AcuIconButton, AcuToastViewport, MainArea, Sidebar, get isCustomThemeId() { return isCustomThemeId; }, VisualizerSurface };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n:global(#acu-app-v2) {\r\n  --acu-safe-top: max(env(safe-area-inset-top, 0px), var(--acu-native-safe-top, 0px));\r\n  --acu-safe-right: max(env(safe-area-inset-right, 0px), var(--acu-native-safe-right, 0px));\r\n  --acu-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--acu-native-safe-bottom, 0px));\r\n  --acu-safe-left: max(env(safe-area-inset-left, 0px), var(--acu-native-safe-left, 0px));\r\n  --acu-font-size-micro: 10px;\r\n  --acu-font-size-caption: 11px;\r\n  --acu-font-size-body: 12px;\r\n  --acu-font-size-body-lg: 13px;\r\n  --acu-font-size-section-title: 12px;\r\n  --acu-font-size-list-title: 13px;\r\n  --acu-font-size-panel-title: 15px;\r\n  --acu-font-size-page-title: 22px;\r\n  --acu-line-height-caption: 1.5;\r\n  --acu-line-height-body: 1.45;\r\n  --acu-line-height-readable: 1.55;\r\n  box-sizing: border-box;\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\n}\n:global(#acu-app-v2),\r\n:global(#acu-app-v2 *) {\r\n  box-sizing: border-box;\n}\n:global(#acu-app-v2 button) {\r\n  appearance: none;\r\n  -webkit-appearance: none;\r\n  -webkit-tap-highlight-color: transparent;\n}\n:global(#acu-app-v2 button:focus:not(:focus-visible)) {\r\n  outline: none;\r\n  box-shadow: none;\n}\n.acu-v2-app {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\n}\n.acu-v2-app__shell {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  z-index: 9000;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: var(--acu-safe-top) var(--acu-safe-right) var(--acu-safe-bottom) var(--acu-safe-left);\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\n}\n.acu-v2-app__header {\r\n  position: relative;\r\n  z-index: 40;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  min-height: 50px;\r\n  padding: 8px 12px 8px 20px;\r\n  background: var(--acu-bg-0);\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  flex: 0 0 auto;\n}\n.acu-v2-app__header-left {\r\n  display: flex;\r\n  align-items: center;\r\n  min-width: 0;\r\n  gap: 8px;\r\n  flex: 1 1 auto;\n}\n.acu-v2-app__menu {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  font-size: 14px;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-v2-app__menu:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__page-title {\r\n  min-width: 0;\r\n  margin: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\r\n  letter-spacing: 0;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-app__close {\r\n  width: 30px;\r\n  height: 30px;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  cursor: pointer;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__close:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__body {\r\n  flex: 1 1 auto;\r\n  display: flex;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: hidden;\n}\n.acu-v2-app__content {\r\n  flex: 1 1 auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: hidden;\n}\n.acu-v2-app__mobile-nav-layer {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9300;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  padding: var(--acu-safe-top) var(--acu-safe-right) var(--acu-safe-bottom) var(--acu-safe-left);\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: mobile-nav-layer-in 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing {\r\n  pointer-events: auto;\r\n  animation: mobile-nav-layer-out 0.15s ease-in both;\n}\n.acu-v2-app__mobile-nav {\r\n  width: 280px;\r\n  max-width: calc(100vw - 72px - var(--acu-safe-left) - var(--acu-safe-right));\r\n  height: 100%;\r\n  max-height: 100%;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 280px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  background: var(--acu-sidebar-bg);\r\n  border-right: 0;\r\n  box-shadow: var(--acu-shadow);\r\n  overflow: hidden;\r\n  pointer-events: auto;\r\n  animation: mobile-nav-drawer-in 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing .acu-v2-app__mobile-nav {\r\n  animation: mobile-nav-drawer-out 0.15s ease-in both;\n}\n@supports (width: min(280px, calc(100vw - 72px))) {\n.acu-v2-app__mobile-nav {\r\n    width: min(280px, calc(100vw - 72px - var(--acu-safe-left) - var(--acu-safe-right)));\r\n    flex: 0 0 min(280px, calc(100vw - 72px - var(--acu-safe-left) - var(--acu-safe-right)));\n}\n}\n@supports (width: 100dvw) {\n.acu-v2-app__mobile-nav {\r\n    max-width: calc(100dvw - 72px - var(--acu-safe-left) - var(--acu-safe-right));\n}\n}\n@supports (height: 100dvh) {\n.acu-v2-app__mobile-nav {\r\n    height: 100%;\r\n    max-height: 100%;\n}\n}\r\n\r\n/* ── Theme switcher ── */\n.acu-v2-app__header-right {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 4px;\r\n  flex: 0 0 auto;\n}\n.acu-v2-app__theme-switcher {\r\n  position: relative;\n}\n.acu-v2-app__theme-btn {\r\n  width: 30px;\r\n  height: 30px;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: 14px;\r\n  cursor: pointer;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__theme-btn:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-menu {\r\n  position: absolute;\r\n  top: calc(100% + 6px);\r\n  right: 0;\r\n  z-index: 10;\r\n  list-style: none;\r\n  margin: 0;\r\n  padding: 4px;\r\n  width: min(280px, calc(100vw - 24px));\r\n  min-width: 240px;\r\n  background: var(--acu-bg-1);\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  box-shadow: var(--acu-shadow);\r\n  animation: theme-menu-in 0.12s ease-out both;\n}\n.acu-v2-app__theme-menu.is-closing {\r\n  pointer-events: none;\r\n  animation: theme-menu-out 0.12s ease-in both;\n}\n.acu-v2-app__theme-option {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 8px;\r\n  padding: 7px 10px;\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  color: var(--acu-text-2);\r\n  border-radius: var(--acu-radius-sm);\r\n  cursor: pointer;\r\n  user-select: none;\n}\n.acu-v2-app__theme-option:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active {\r\n  color: var(--acu-on-accent);\r\n  background: var(--acu-accent);\r\n  font-weight: 600;\n}\n.acu-v2-app__theme-option-main {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  min-width: 0;\r\n  flex: 1 1 auto;\n}\n.acu-v2-app__theme-name {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-app__theme-tag {\r\n  flex: 0 0 auto;\r\n  padding: 1px 5px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-accent) 12%, transparent);\r\n  color: var(--acu-accent);\r\n  font-size: var(--acu-font-size-micro, 10px);\r\n  font-weight: 600;\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tag {\r\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 4px;\r\n  flex: 0 0 auto;\r\n  opacity: 0.72;\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn) {\r\n  background: transparent;\r\n  color: inherit;\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn:hover:not(:disabled)) {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools :deep(.acu-icon-btn:hover:not(:disabled)) {\r\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn--danger:hover:not(:disabled)) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\r\n  color: var(--acu-danger);\n}\n.acu-v2-app__theme-option:hover .acu-v2-app__theme-tools,\r\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools {\r\n  opacity: 1;\n}\n.acu-v2-app__theme-swatch {\r\n  display: block;\r\n  width: 18px;\r\n  height: 18px;\r\n  border-radius: 999px;\r\n  flex: 0 0 18px;\r\n  background: linear-gradient(\r\n    135deg,\r\n    var(--acu-theme-swatch-bg) 0 56%,\r\n    var(--acu-theme-swatch-accent) 56% 100%\r\n  );\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-border-2) 72%, transparent);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-swatch {\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-on-accent) 62%, transparent);\n}\n.acu-v2-app__theme-menu-footer {\r\n  display: flex;\r\n  justify-content: stretch;\r\n  margin-top: 4px;\r\n  padding: 7px 6px 4px;\r\n  border-top: 1px solid var(--acu-border);\n}\n.acu-v2-app__theme-menu-footer :deep(.acu-file-button),\r\n.acu-v2-app__theme-menu-footer :deep(.acu-btn) {\r\n  width: 100%;\n}\n@keyframes theme-menu-in {\nfrom {\r\n    opacity: 0;\r\n    transform: translateY(-4px);\n}\nto {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\n}\n@keyframes theme-menu-out {\nfrom {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\nto {\r\n    opacity: 0;\r\n    transform: translateY(-4px);\n}\n}\n@keyframes mobile-nav-layer-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes mobile-nav-drawer-in {\nfrom { transform: translateX(-100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes mobile-nav-layer-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes mobile-nav-drawer-out {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(-100%);\n}\n}\n@media (max-width: 720px) {\n.acu-v2-app__header {\r\n    min-height: 48px;\r\n    padding: 8px 10px;\n}\n.acu-v2-app__header-left {\r\n    gap: 6px;\n}\n.acu-v2-app__menu {\r\n    display: inline-flex;\n}\n.acu-v2-app__page-title {\r\n    font-size: 18px;\n}\n.acu-v2-app__desktop-sidebar {\r\n    display: none;\n}\n.acu-v2-app__mobile-nav-layer {\r\n    display: flex;\n}\n}\r\n", "src/presentation-v2/App.vue#style-0");
+    injectSfcStyle("\n:global(#acu-app-v2) {\r\n  --acu-safe-top: max(env(safe-area-inset-top, 0px), var(--acu-native-safe-top, 0px));\r\n  --acu-safe-right: max(env(safe-area-inset-right, 0px), var(--acu-native-safe-right, 0px));\r\n  --acu-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--acu-native-safe-bottom, 0px));\r\n  --acu-safe-left: max(env(safe-area-inset-left, 0px), var(--acu-native-safe-left, 0px));\r\n  --acu-font-size-micro: 10px;\r\n  --acu-font-size-caption: 11px;\r\n  --acu-font-size-body: 12px;\r\n  --acu-font-size-body-lg: 13px;\r\n  --acu-font-size-section-title: 12px;\r\n  --acu-font-size-list-title: 13px;\r\n  --acu-font-size-panel-title: 15px;\r\n  --acu-font-size-page-title: 22px;\r\n  --acu-line-height-caption: 1.5;\r\n  --acu-line-height-body: 1.45;\r\n  --acu-line-height-readable: 1.55;\r\n  box-sizing: border-box;\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\n}\n:global(#acu-app-v2),\r\n:global(#acu-app-v2 *) {\r\n  box-sizing: border-box;\n}\n:global(#acu-app-v2 button) {\r\n  appearance: none;\r\n  -webkit-appearance: none;\r\n  -webkit-tap-highlight-color: transparent;\n}\n:global(#acu-app-v2 button:focus:not(:focus-visible)) {\r\n  outline: none;\r\n  box-shadow: none;\n}\n.acu-v2-app {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\n}\n.acu-v2-app__shell {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  z-index: 9000;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: var(--acu-safe-top) var(--acu-safe-right) var(--acu-safe-bottom) var(--acu-safe-left);\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\n}\n.acu-v2-app__header {\r\n  position: relative;\r\n  z-index: 40;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  min-height: 50px;\r\n  padding: 8px 12px 8px 20px;\r\n  background: var(--acu-bg-0);\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  flex: 0 0 auto;\n}\n.acu-v2-app__header-left {\r\n  display: flex;\r\n  align-items: center;\r\n  min-width: 0;\r\n  gap: 8px;\r\n  flex: 1 1 auto;\n}\n.acu-v2-app__menu {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  font-size: 14px;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-v2-app__menu:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__page-title {\r\n  min-width: 0;\r\n  margin: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\r\n  letter-spacing: 0;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-app__close {\r\n  width: 30px;\r\n  height: 30px;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  cursor: pointer;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__close:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__body {\r\n  flex: 1 1 auto;\r\n  display: flex;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: hidden;\n}\n.acu-v2-app__content {\r\n  flex: 1 1 auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: hidden;\n}\n.acu-v2-app__mobile-nav-layer {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9300;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  padding: var(--acu-safe-top) var(--acu-safe-right) var(--acu-safe-bottom) var(--acu-safe-left);\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: mobile-nav-layer-in 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing {\r\n  pointer-events: auto;\r\n  animation: mobile-nav-layer-out 0.15s ease-in both;\n}\n.acu-v2-app__mobile-nav {\n  width: 360px;\n  max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n  height: 100%;\n  max-height: 100%;\n  min-width: 0;\n  min-height: 0;\n  align-self: stretch;\n  flex: 0 1 360px;\n  display: flex;\r\n  flex-direction: column;\r\n  background: var(--acu-sidebar-bg);\r\n  border-right: 0;\r\n  box-shadow: var(--acu-shadow);\r\n  overflow: hidden;\r\n  pointer-events: auto;\r\n  animation: mobile-nav-drawer-in 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing .acu-v2-app__mobile-nav {\r\n  animation: mobile-nav-drawer-out 0.15s ease-in both;\n}\n@supports (width: min(360px, calc(100% - 24px))) {\n.acu-v2-app__mobile-nav {\n    width: min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n    flex: 0 0 min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n}\n}\n@supports (width: 100dvw) {\n.acu-v2-app__mobile-nav {\n    max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n}\n}\n@supports (height: 100dvh) {\n.acu-v2-app__mobile-nav {\r\n    height: 100%;\r\n    max-height: 100%;\n}\n}\r\n\r\n/* ── Theme switcher ── */\n.acu-v2-app__header-right {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 4px;\r\n  flex: 0 0 auto;\n}\n.acu-v2-app__theme-switcher {\r\n  position: relative;\n}\n.acu-v2-app__theme-btn {\r\n  width: 30px;\r\n  height: 30px;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: 14px;\r\n  cursor: pointer;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__theme-btn:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-menu {\r\n  position: absolute;\r\n  top: calc(100% + 6px);\r\n  right: 0;\r\n  z-index: 10;\r\n  list-style: none;\r\n  margin: 0;\r\n  padding: 4px;\r\n  width: min(280px, calc(100vw - 24px));\r\n  min-width: 240px;\r\n  background: var(--acu-bg-1);\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  box-shadow: var(--acu-shadow);\r\n  animation: theme-menu-in 0.12s ease-out both;\n}\n.acu-v2-app__theme-menu.is-closing {\r\n  pointer-events: none;\r\n  animation: theme-menu-out 0.12s ease-in both;\n}\n.acu-v2-app__theme-option {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 8px;\r\n  padding: 7px 10px;\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  color: var(--acu-text-2);\r\n  border-radius: var(--acu-radius-sm);\r\n  cursor: pointer;\r\n  user-select: none;\n}\n.acu-v2-app__theme-option:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active {\r\n  color: var(--acu-on-accent);\r\n  background: var(--acu-accent);\r\n  font-weight: 600;\n}\n.acu-v2-app__theme-option-main {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  min-width: 0;\r\n  flex: 1 1 auto;\n}\n.acu-v2-app__theme-name {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-app__theme-tag {\r\n  flex: 0 0 auto;\r\n  padding: 1px 5px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-accent) 12%, transparent);\r\n  color: var(--acu-accent);\r\n  font-size: var(--acu-font-size-micro, 10px);\r\n  font-weight: 600;\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tag {\r\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 4px;\r\n  flex: 0 0 auto;\r\n  opacity: 0.72;\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn) {\r\n  background: transparent;\r\n  color: inherit;\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn:hover:not(:disabled)) {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools :deep(.acu-icon-btn:hover:not(:disabled)) {\r\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn--danger:hover:not(:disabled)) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\r\n  color: var(--acu-danger);\n}\n.acu-v2-app__theme-option:hover .acu-v2-app__theme-tools,\r\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools {\r\n  opacity: 1;\n}\n.acu-v2-app__theme-swatch {\r\n  display: block;\r\n  width: 18px;\r\n  height: 18px;\r\n  border-radius: 999px;\r\n  flex: 0 0 18px;\r\n  background: linear-gradient(\r\n    135deg,\r\n    var(--acu-theme-swatch-bg) 0 56%,\r\n    var(--acu-theme-swatch-accent) 56% 100%\r\n  );\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-border-2) 72%, transparent);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-swatch {\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-on-accent) 62%, transparent);\n}\n.acu-v2-app__theme-menu-footer {\r\n  display: flex;\r\n  justify-content: stretch;\r\n  margin-top: 4px;\r\n  padding: 7px 6px 4px;\r\n  border-top: 1px solid var(--acu-border);\n}\n.acu-v2-app__theme-menu-footer :deep(.acu-file-button),\r\n.acu-v2-app__theme-menu-footer :deep(.acu-btn) {\r\n  width: 100%;\n}\n@keyframes theme-menu-in {\nfrom {\r\n    opacity: 0;\r\n    transform: translateY(-4px);\n}\nto {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\n}\n@keyframes theme-menu-out {\nfrom {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\nto {\r\n    opacity: 0;\r\n    transform: translateY(-4px);\n}\n}\n@keyframes mobile-nav-layer-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes mobile-nav-drawer-in {\nfrom { transform: translateX(-100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes mobile-nav-layer-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes mobile-nav-drawer-out {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(-100%);\n}\n}\n@media (max-width: 720px) {\n.acu-v2-app__header {\r\n    min-height: 48px;\r\n    padding: 8px 10px;\n}\n.acu-v2-app__header-left {\r\n    gap: 6px;\n}\n.acu-v2-app__menu {\r\n    display: inline-flex;\n}\n.acu-v2-app__page-title {\r\n    font-size: 18px;\n}\n.acu-v2-app__desktop-sidebar {\r\n    display: none;\n}\n.acu-v2-app__mobile-nav-layer {\r\n    display: flex;\n}\n}\r\n", "src/presentation-v2/App.vue#style-0");
     var App_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1 = { class: "acu-v2-app" };
@@ -93290,9 +93279,11 @@ Expected function or array of functions, received type ${typeof value}.`
     				},
     				[createBaseVNode("aside", {
     					class: "acu-v2-app__mobile-nav",
+    					style: $setup.mobileNavDrawerStyle,
     					role: "dialog",
     					"aria-modal": "true",
     					"aria-label": "一级页导航",
+    					"data-acu-mobile-nav-width": "360px",
     					onClick: _cache[1] || (_cache[1] = withModifiers(() => {}, ["stop"]))
     				}, [createVNode($setup["Sidebar"], {
     					variant: "drawer",
@@ -93484,7 +93475,12 @@ ${lines.join('\n')}
         if (state)
             return state;
         const doc = getAcuHostDocument();
+        const hostWindow = getAcuHostWindow();
         const source = getAcuHostSource();
+        const hostWidth = Math.round(hostWindow.visualViewport?.width ||
+            hostWindow.innerWidth ||
+            doc.documentElement?.clientWidth ||
+            0);
         setSfcStyleHost({ document: doc });
         let root = doc.getElementById(ROOT_ID);
         if (!root) {
@@ -93492,6 +93488,11 @@ ${lines.join('\n')}
             root.id = ROOT_ID;
             root.style.display = 'none';
             doc.body.appendChild(root);
+        }
+        root.setAttribute('data-acu-host-source', source);
+        root.setAttribute('data-acu-host-width', String(hostWidth));
+        if (hostWidth > 0 && hostWidth <= 240) {
+            logDebug_ACU(`[ACU-V2] narrow host detected: source=${source}, width=${hostWidth}px`);
         }
         const pinia = createPinia();
         root.textContent = '';
@@ -93507,7 +93508,7 @@ ${lines.join('\n')}
         applyTheme(themeStore.activeTheme);
         themeStore.$subscribe(() => applyTheme(themeStore.activeTheme));
         state = { vueApp, pinia, root };
-        logDebug_ACU(`[ACU-V2] app mounted into ${source} (id=#${ROOT_ID})`);
+        logDebug_ACU(`[ACU-V2] app mounted into ${source} (id=#${ROOT_ID}, width=${hostWidth}px)`);
         return state;
     }
     /** 打开新 UI：首次调用执行 mount，后续只切 display + 标记 isOpen。 */
