@@ -83884,7 +83884,13 @@ Expected function or array of functions, received type ${typeof value}.`
      * - 立即构建（buildNow）：编排 loadOrCreate + saveIndependent + archiveSummaryVectorIndexNow。
      * - Vue 组件只读写本 composable 暴露的 ref / form / 方法。
      */
-    const DEFAULT_RECENT_FIXED_INJECT_COUNT = 50;
+    function getDefaultVectorMemoryConfigForV2() {
+        return defaultVectorMemoryConfig_ACU;
+    }
+    function getDefaultRecentFixedInjectCount() {
+        const value = Number(getDefaultVectorMemoryConfigForV2().recentFixedInjectCount);
+        return Number.isFinite(value) && value > 0 ? Math.floor(value) : 50;
+    }
     function updateGlobalVectorMemoryConfigFields_ACU(patch) {
         const config = getCurrentVectorMemoryConfig_ACU();
         Object.assign(config, patch);
@@ -83939,24 +83945,25 @@ Expected function or array of functions, received type ${typeof value}.`
         superseded: 'neutral',
     };
     function createEmptyForm() {
+        const defaults = getDefaultVectorMemoryConfigForV2();
         return {
-            embeddingEndpoint: '',
-            embeddingModel: '',
-            embeddingApiKey: '',
-            rerankEndpoint: '',
-            rerankModel: '',
-            rerankApiKey: '',
-            summaryIndexKeywordMinRows: 100,
-            topK: 10,
-            minScore: 0.4,
-            recallCandidateLimit: 1000,
-            recentFixedInjectCount: 50,
-            vectorNamespace: 'chat',
-            summaryChunkSentenceCount: 2,
-            summaryIndexArchiveMaxConcurrency: 30,
-            keywordApiPreset: '',
-            keywordContextPairCount: 1,
-            keywordGenerationMaxAttempts: 3,
+            embeddingEndpoint: defaults.embeddingEndpoint || '',
+            embeddingModel: defaults.embeddingModel || '',
+            embeddingApiKey: defaults.embeddingApiKey || '',
+            rerankEndpoint: defaults.rerankEndpoint || '',
+            rerankModel: defaults.rerankModel || '',
+            rerankApiKey: defaults.rerankApiKey || '',
+            summaryIndexKeywordMinRows: defaults.summaryIndexKeywordMinRows,
+            topK: defaults.topK,
+            minScore: defaults.minScore,
+            recallCandidateLimit: defaults.recallCandidateLimit,
+            recentFixedInjectCount: defaults.recentFixedInjectCount,
+            vectorNamespace: defaults.vectorNamespace || 'chat',
+            summaryChunkSentenceCount: defaults.summaryChunkSentenceCount,
+            summaryIndexArchiveMaxConcurrency: defaults.summaryIndexArchiveMaxConcurrency ?? 30,
+            keywordApiPreset: defaults.keywordApiPreset || '',
+            keywordContextPairCount: defaults.keywordContextPairCount,
+            keywordGenerationMaxAttempts: defaults.keywordGenerationMaxAttempts,
         };
     }
     function cloneSegments(segments) {
@@ -84064,11 +84071,12 @@ Expected function or array of functions, received type ${typeof value}.`
             if (key === 'recentFixedInjectCount') {
                 const value = Number(raw);
                 if (!Number.isFinite(value) || value <= 0) {
+                    const fallback = getDefaultRecentFixedInjectCount();
                     form.recentFixedInjectCount = Number.isFinite(value) ? Math.floor(value) : 0;
-                    toast.warning('固定写入必须是正整数，已重置为默认值 50。');
-                    form.recentFixedInjectCount = DEFAULT_RECENT_FIXED_INJECT_COUNT;
+                    toast.warning(`固定写入必须是正整数，已重置为默认值 ${fallback}。`);
+                    form.recentFixedInjectCount = fallback;
                     updateGlobalVectorMemoryConfigFields_ACU({
-                        recentFixedInjectCount: DEFAULT_RECENT_FIXED_INJECT_COUNT,
+                        recentFixedInjectCount: fallback,
                     });
                     saveSettings_ACU();
                     runValidation();
@@ -89359,9 +89367,7 @@ Expected function or array of functions, received type ${typeof value}.`
             });
         }
         function getGlobalPlacement(key) {
-            const fallback = key === 'wrapperPlacement'
-                ? { position: 'before_character_definition', depth: 2, order: 99980 }
-                : { position: 'before_character_definition', depth: 2, order: 99981 };
+            const fallback = buildDefaultGlobalInjectionConfig_ACU()[key];
             return clonePlacement(globalConfig.value?.[key], fallback);
         }
         function updateGlobalPlacement(key, field, value) {
