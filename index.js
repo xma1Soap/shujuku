@@ -5220,7 +5220,7 @@ $CONTENT
      * @param options 可选配置（modifiedKeys/updateGroupKeys/baseState）
      */
     function writeTableCheckpointToMessage_ACU(msg, isolationKey, independentData, options) {
-        if (!msg)
+        if (!msg || options?.legacyConfirmed !== true)
             return;
         const tagData = initIsolatedTagSlot_ACU(msg, isolationKey);
         tagData.independentData = independentData;
@@ -5240,8 +5240,8 @@ $CONTENT
      * @param modifiedKeys 修改键列表
      * @param updateGroupKeys 更新组键列表
      */
-    function writeLegacyCompatData_ACU(msg, independentData, modifiedKeys, updateGroupKeys) {
-        if (!msg)
+    function writeLegacyCompatData_ACU(msg, independentData, modifiedKeys, updateGroupKeys, options) {
+        if (!msg || options?.legacyConfirmed !== true)
             return;
         msg.TavernDB_ACU_IndependentData = independentData;
         msg.TavernDB_ACU_ModifiedKeys = modifiedKeys;
@@ -5254,8 +5254,8 @@ $CONTENT
      * @param standardData 标准表数据（可选，null 则不写入）
      * @param summaryData 摘要表数据（可选，null 则不写入）
      */
-    function writeLegacyStandardAndSummary_ACU(msg, standardData, summaryData) {
-        if (!msg)
+    function writeLegacyStandardAndSummary_ACU(msg, standardData, summaryData, options) {
+        if (!msg || options?.legacyConfirmed !== true)
             return;
         if (standardData && hasAnySheetKey(standardData)) {
             msg.TavernDB_ACU_Data = standardData;
@@ -5833,1464 +5833,96 @@ $CONTENT
             || !tagData._acu_storage_mode;
     }
 
-    const tableUpdateApplyLocks_ACU = new Map();
-    function buildTableUpdateApplyScopeKey_ACU(parts) {
-        const chatKey = String(parts.chatKey || 'current-chat').trim() || 'current-chat';
-        const isolationKey = String(parts.isolationKey || 'default').trim() || 'default';
-        const targetKey = Number.isInteger(parts.targetMessageIndex)
-            ? String(parts.targetMessageIndex)
-            : 'latest-ai';
-        return [chatKey, isolationKey, targetKey].join('::');
+    function isObjectRecord_ACU(value) {
+        return !!value && typeof value === 'object' && !Array.isArray(value);
     }
-    async function runTableUpdateApplyWithScopeLock_ACU(scopeKey, task) {
-        const active = tableUpdateApplyLocks_ACU.get(scopeKey);
-        if (active) {
-            await active.catch((error) => {
-                logWarn_ACU('[表格并发写入] 前序同scope任务失败，继续执行后续任务:', error);
-            });
-            return runTableUpdateApplyWithScopeLock_ACU(scopeKey, task);
-        }
-        let releaseLock;
-        const current = new Promise((resolve) => {
-            releaseLock = resolve;
-        });
-        tableUpdateApplyLocks_ACU.set(scopeKey, current);
-        try {
-            return await task();
-        }
-        finally {
-            releaseLock();
-            if (tableUpdateApplyLocks_ACU.get(scopeKey) === current) {
-                tableUpdateApplyLocks_ACU.delete(scopeKey);
-            }
-        }
+    function hasOwnKey_ACU(value, key) {
+        return Object.prototype.hasOwnProperty.call(value, key);
     }
-
-    // ═══════════════════════════════════════════════════════════════
-    // service/table/table-service.ts — 表格数据操作 service 层
-    // 从 data/repositories/table-repo.ts 迁入（消除 data 层越权）
-    // ═══════════════════════════════════════════════════════════════
-    async function persistTablesToChatMessage_ACU(options = {}) {
-        return persistTablesToChatMessageWithLockOption_ACU(options, true);
+    function hasAnySheetKey_ACU(value) {
+        return isObjectRecord_ACU(value) && Object.keys(value).some(k => k.startsWith('sheet_'));
     }
-    async function persistTablesToChatMessageWithLockOption_ACU(options = {}, useScopeLock) {
-        const { targetMessageIndex = -1, targetSheetKeys = null, updateGroupKeys = null, trackingSheetKeys = targetSheetKeys, tableData: explicitTableData, trackAsUpdate = true, } = options;
-        /**
-         * 保存独立表格数据到聊天记录。
-         * 返回 { saved: boolean, messageIndex?: number, error?: string }
-         * 注意：不再内部调用 refreshMergedDataAndNotify，调用方按需自行刷新。
-         */
-        const _skipPostRefresh = false;
-        const effectiveTableData = explicitTableData !== undefined ? explicitTableData : currentJsonTableData_ACU;
-        if (!effectiveTableData) {
-            logError_ACU('Save aborted: currentJsonTableData_ACU is null.');
-            return { saved: false, error: 'currentJsonTableData is null' };
-        }
-        const currentIsolationKey = getCurrentIsolationKey_ACU();
-        const scopeKey = buildTableUpdateApplyScopeKey_ACU({
-            chatKey: currentChatFileIdentifier_ACU,
-            isolationKey: currentIsolationKey,
-            targetMessageIndex,
-        });
-        const persistCore = async () => {
-            const chat = getChatArray_ACU();
-            if (!chat || chat.length === 0) {
-                logError_ACU('Save failed: Chat history is empty.');
-                return { saved: false, error: 'chat history is empty' };
-            }
-            let targetMessage = null;
-            let finalIndex = -1;
-            if (targetMessageIndex !== -1 && chat[targetMessageIndex] && !chat[targetMessageIndex].is_user) {
-                targetMessage = chat[targetMessageIndex];
-                finalIndex = targetMessageIndex;
-            }
-            else {
-                for (let i = chat.length - 1; i >= 0; i--) {
-                    if (!chat[i].is_user) {
-                        targetMessage = chat[i];
-                        finalIndex = i;
-                        break;
-                    }
-                }
-            }
-            if (!targetMessage) {
-                logWarn_ACU('Save failed: No AI message found.');
-                return { saved: false, error: 'no AI message found' };
-            }
-            // 查找上一个 AI 楼层的 tagData 作为 delta 的 base
-            let prevTagData = null;
-            for (let i = finalIndex - 1; i >= 0; i--) {
-                if (!chat[i].is_user) {
-                    const td = readIsolatedTagData_ACU(chat[i], currentIsolationKey);
-                    if (td && td.independentData && Object.keys(td.independentData).some(k => k.startsWith('sheet_'))) {
-                        prevTagData = td;
-                    }
-                    break;
-                }
-            }
-            try {
-                const existingGuide = getChatSheetGuideDataForIsolationKey_ACU(currentIsolationKey);
-                if (!existingGuide || !Object.keys(existingGuide).some(k => k.startsWith('sheet_'))) {
-                    const templateObjForSeed = parseTableTemplateJson_ACU({ stripSeedRows: false });
-                    const guideData = buildChatSheetGuideDataFromData_ACU(effectiveTableData, {
-                        preserveSeedRowsFromGuideData: null,
-                        seedRowsFromTemplateObj: templateObjForSeed,
-                    });
-                    if (guideData && Object.keys(guideData).some(k => k.startsWith('sheet_'))) {
-                        setChatSheetGuideDataForIsolationKey_ACU(currentIsolationKey, guideData, { reason: 'first_fill' });
-                        logDebug_ACU(`[SheetGuide] Created chat sheet guide for tag [${currentIsolationKey || '无标签'}] (tables=${Object.keys(guideData).filter(k => k.startsWith('sheet_')).length}).`);
-                    }
-                }
-            }
-            catch (e) {
-                logWarn_ACU('[SheetGuide] Failed to create sheet guide on first fill:', e);
-            }
-            const isolatedData = cloneIsolatedData_ACU(targetMessage);
-            if (!isolatedData[currentIsolationKey]) {
-                isolatedData[currentIsolationKey] = {
-                    independentData: {},
-                    modifiedKeys: [],
-                    updateGroupKeys: [],
-                };
-            }
-            const currentTagData = isolatedData[currentIsolationKey];
-            let independentData = {};
-            if (isDeltaTagData_ACU(currentTagData) && currentTagData.incrementalData) {
-                independentData = prevTagData?.independentData
-                    ? JSON.parse(JSON.stringify(prevTagData.independentData))
-                    : JSON.parse(JSON.stringify(currentTagData.independentData || {}));
-                const existingCheckpointData = JSON.parse(JSON.stringify(currentTagData.independentData || {}));
-                for (const [sheetKey, delta] of Object.entries(currentTagData.incrementalData)) {
-                    const baseSheet = independentData[sheetKey] || existingCheckpointData[sheetKey];
-                    if (!baseSheet) {
-                        logWarn_ACU(`[表格增量] 楼层 #${finalIndex} 既有 delta 表 ${sheetKey} 缺少 base，回退保留当前楼层已存快照`);
-                        if (existingCheckpointData[sheetKey]) {
-                            independentData[sheetKey] = existingCheckpointData[sheetKey];
-                        }
-                        continue;
-                    }
-                    const normalizedBaseSheet = JSON.parse(JSON.stringify(baseSheet));
-                    if (Array.isArray(normalizedBaseSheet.content)) {
-                        normalizedBaseSheet.content = ensureStableRowIdsForSheetContent_ACU(normalizedBaseSheet.content);
-                    }
-                    independentData[sheetKey] = applyTableDelta_ACU(normalizedBaseSheet, delta, sheetKey);
-                }
-            }
-            else {
-                independentData = JSON.parse(JSON.stringify(currentTagData.independentData || {}));
-            }
-            let keysToSave = Array.isArray(targetSheetKeys)
-                ? targetSheetKeys.filter((sheetKey) => typeof sheetKey === 'string' && sheetKey.length > 0)
-                : getSortedSheetKeys_ACU(effectiveTableData);
-            keysToSave = [...new Set(keysToSave.filter(sheetKey => Boolean(effectiveTableData[sheetKey])))];
-            const trackingCandidateKeys = [
-                ...keysToSave,
-                ...(Array.isArray(trackingSheetKeys)
-                    ? trackingSheetKeys.filter((sheetKey) => typeof sheetKey === 'string' && sheetKey.length > 0)
-                    : []),
-            ];
-            const trackingKeySet = new Set(trackingCandidateKeys.filter(sheetKey => Boolean(effectiveTableData[sheetKey])));
-            const actuallyModifiedKeys = [...trackingKeySet];
-            const metadataOnlyUpdateGroupKeys = Array.isArray(updateGroupKeys)
-                ? [...new Set(updateGroupKeys.filter(sheetKey => trackingKeySet.has(sheetKey) && Boolean(effectiveTableData[sheetKey])))]
-                : [];
-            if (keysToSave.length === 0 && trackAsUpdate && actuallyModifiedKeys.length > 0) {
-                const existingModifiedKeys = currentTagData.modifiedKeys || [];
-                currentTagData.modifiedKeys = [...new Set([...existingModifiedKeys, ...actuallyModifiedKeys])];
-                if (metadataOnlyUpdateGroupKeys.length > 0) {
-                    const existingGroupKeys = currentTagData.updateGroupKeys || [];
-                    currentTagData.updateGroupKeys = [...new Set([...existingGroupKeys, ...metadataOnlyUpdateGroupKeys])];
-                }
-                writeIsolatedTagData_ACU(targetMessage, currentIsolationKey, currentTagData);
-                writeMessageIdentity_ACU(targetMessage, {
-                    enabled: settings_ACU.dataIsolationEnabled,
-                    code: settings_ACU.dataIsolationCode,
-                });
-                await saveChatToHost_ACU();
-                return { saved: true, messageIndex: finalIndex };
-            }
-            keysToSave.forEach(sheetKey => {
-                const table = effectiveTableData[sheetKey];
-                if (table) {
-                    const normalizedTable = JSON.parse(JSON.stringify(table));
-                    if (Array.isArray(normalizedTable.content)) {
-                        normalizedTable.content = ensureStableRowIdsForSheetContent_ACU(normalizedTable.content);
-                    }
-                    independentData[sheetKey] = sanitizeSheetForStorage_ACU(normalizedTable);
-                }
-            });
-            currentTagData.independentData = independentData;
-            // ── 增量/checkpoint 模式判定 ──
-            let persistedChangedKeySet = new Set();
-            if (prevTagData && prevTagData.independentData) {
-                // 尝试对目标楼层已合并后的表构建 delta。
-                // 同一楼层可能由多个更新组分批写入，必须保留此前组已写入的 incrementalData。
-                const incrementalData = {};
-                let anyDegraded = false;
-                for (const sheetKey of Object.keys(independentData).filter(k => k.startsWith('sheet_'))) {
-                    const nextSheet = independentData[sheetKey];
-                    if (!nextSheet)
-                        continue;
-                    const normalizedBaseSheet = JSON.parse(JSON.stringify(prevTagData.independentData[sheetKey] || null));
-                    if (normalizedBaseSheet && Array.isArray(normalizedBaseSheet.content)) {
-                        normalizedBaseSheet.content = ensureStableRowIdsForSheetContent_ACU(normalizedBaseSheet.content);
-                    }
-                    const result = buildTableDelta_ACU(normalizedBaseSheet, nextSheet, sheetKey);
-                    if (result.degraded) {
-                        anyDegraded = true;
-                        logDebug_ACU(`[表格增量] ${sheetKey} 退化: ${result.degradeReason}，本楼层将使用 checkpoint 模式`);
-                        break;
-                    }
-                    if (result.delta && (result.delta.rowDeltas.length > 0 || result.delta.metaChanged)) {
-                        incrementalData[sheetKey] = result.delta;
-                    }
-                }
-                if (!anyDegraded) {
-                    // delta 模式：写入增量数据，independentData 清空以节省存储空间
-                    currentTagData.incrementalData = incrementalData;
-                    currentTagData.independentData = {};
-                    currentTagData._acu_storage_mode = 'delta';
-                    currentTagData._acu_storage_version = 1;
-                    persistedChangedKeySet = new Set(Object.keys(incrementalData));
-                    logDebug_ACU(`[表格增量] 楼层 #${finalIndex} 使用 delta 模式，${Object.keys(incrementalData).length} 张表有变更`);
-                }
-                else {
-                    // checkpoint 模式：退化，写完整快照
-                    delete currentTagData.incrementalData;
-                    currentTagData._acu_storage_mode = 'checkpoint';
-                    currentTagData._acu_storage_version = 1;
-                    persistedChangedKeySet = new Set(actuallyModifiedKeys.filter(sheetKey => Boolean(independentData[sheetKey])));
-                    logDebug_ACU(`[表格Checkpoint] 楼层 #${finalIndex} 使用 checkpoint 模式`);
-                }
-            }
-            else {
-                // 无上一楼层 base → checkpoint 模式（首楼层或首次出现该标签）
-                delete currentTagData.incrementalData;
-                currentTagData._acu_storage_mode = 'checkpoint';
-                currentTagData._acu_storage_version = 1;
-                persistedChangedKeySet = new Set(actuallyModifiedKeys.filter(sheetKey => Boolean(independentData[sheetKey])));
-                logDebug_ACU(`[表格Checkpoint] 楼层 #${finalIndex} 无 base，使用 checkpoint 模式`);
-            }
-            const trackingModifiedKeys = actuallyModifiedKeys;
-            const trackingUpdateGroupKeys = metadataOnlyUpdateGroupKeys;
-            if (trackAsUpdate && trackingModifiedKeys.length > 0) {
-                const existingModifiedKeys = currentTagData.modifiedKeys || [];
-                currentTagData.modifiedKeys = [...new Set([...existingModifiedKeys, ...trackingModifiedKeys])];
-                logDebug_ACU(`[Tracking] Recorded modified keys for tag [${currentIsolationKey || '无标签'}] at index ${finalIndex}: ${currentTagData.modifiedKeys.join(', ')}`);
-            }
-            if (trackAsUpdate && trackingUpdateGroupKeys.length > 0 && trackingModifiedKeys.length > 0) {
-                const existingGroupKeys = currentTagData.updateGroupKeys || [];
-                currentTagData.updateGroupKeys = [...new Set([...existingGroupKeys, ...trackingUpdateGroupKeys])];
-                logDebug_ACU(`[Merge Update Success] Group keys for tag [${currentIsolationKey || '无标签'}] recorded at index ${finalIndex}: ${currentTagData.updateGroupKeys.join(', ')}`);
-            }
-            else if (trackAsUpdate && updateGroupKeys && updateGroupKeys.length > 0 && actuallyModifiedKeys.length === 0) {
-                logDebug_ACU(`[Merge Update Failed] No tables were modified for tag [${currentIsolationKey || '无标签'}]. Group keys NOT recorded: ${updateGroupKeys.join(', ')}`);
-            }
-            else if (trackAsUpdate && updateGroupKeys && updateGroupKeys.length > 0 && trackingUpdateGroupKeys.length === 0) {
-                logDebug_ACU(`[Merge Update Skipped] No tracked group keys intersected for tag [${currentIsolationKey || '无标签'}]. Group keys NOT recorded: ${updateGroupKeys.join(', ')}`);
-            }
-            writeIsolatedTagData_ACU(targetMessage, currentIsolationKey, currentTagData);
-            writeMessageIdentity_ACU(targetMessage, {
-                enabled: settings_ACU.dataIsolationEnabled,
-                code: settings_ACU.dataIsolationCode,
-            });
-            logDebug_ACU(`Saved ${keysToSave.length} tables for tag [${currentIsolationKey || '无标签'}] to message at index ${finalIndex}. Actually modified: ${actuallyModifiedKeys.length} tables.`);
-            await saveChatToHost_ACU();
-            return { saved: true, messageIndex: finalIndex };
-        };
-        if (!useScopeLock) {
-            return persistCore();
-        }
-        return runTableUpdateApplyWithScopeLock_ACU(scopeKey, persistCore);
+    function hasNonEmptyStringArray_ACU(value) {
+        return Array.isArray(value) && value.some(item => typeof item === 'string' && item.startsWith('sheet_'));
     }
-    /**
-     * 保存独立表格数据到聊天记录。
-     * 返回 { saved: boolean, messageIndex?: number, error?: string }
-     * 注意：不再内部调用 refreshMergedDataAndNotify，调用方按需自行刷新。
-     */
-    async function saveIndependentTableToChatHistory_ACU(targetMessageIndex = -1, targetSheetKeys = null, updateGroupKeys = null, _skipPostRefresh = false, trackingSheetKeys = targetSheetKeys) {
-        return persistTablesToChatMessage_ACU({
-            targetMessageIndex,
-            targetSheetKeys,
-            updateGroupKeys,
-            trackingSheetKeys,
-            trackAsUpdate: true,
-        });
-    }
-    /**
-     * 在调用方已经持有 table update scope 锁时保存独立表格数据。
-     * 仅供同 scope 的 parse/apply/save 连续临界区使用；外部普通调用必须继续使用
-     * saveIndependentTableToChatHistory_ACU，避免绕过目标楼层串行保护。
-     */
-    async function saveIndependentTableToChatHistoryWithinScopeLock_ACU(targetMessageIndex = -1, targetSheetKeys = null, updateGroupKeys = null, _skipPostRefresh = false, trackingSheetKeys = targetSheetKeys) {
-        return persistTablesToChatMessageWithLockOption_ACU({
-            targetMessageIndex,
-            targetSheetKeys,
-            updateGroupKeys,
-            trackingSheetKeys,
-            trackAsUpdate: true,
-        }, false);
-    }
-    /**
-     * 检查当前聊天是否为首次初始化（无任何已有表格数据）。
-     */
-    async function checkIfFirstTimeInit_ACU() {
-        const chat = getChatArray_ACU();
-        if (!chat || chat.length === 0)
-            return true;
-        const currentIsolationKey = getCurrentIsolationKey_ACU();
-        for (let i = chat.length - 1; i >= 0; i--) {
-            const message = chat[i];
-            if (message.is_user)
-                continue;
-            const tagData = readIsolatedTagData_ACU(message, currentIsolationKey);
-            if (tagData?.independentData && Object.keys(tagData.independentData).some(k => k.startsWith('sheet_'))) {
-                return false;
-            }
-            const isolationConfig = { enabled: settings_ACU.dataIsolationEnabled, code: settings_ACU.dataIsolationCode };
-            if (isLegacyMatchForIsolation_ACU(message, isolationConfig)) {
-                const legacyIndep = readLegacyIndependentData_ACU(message);
-                if (legacyIndep && Object.keys(legacyIndep).some(k => k.startsWith('sheet_'))) {
-                    return false;
-                }
-            }
-        }
-        return true;
-    }
-    /**
-     * 从模板初始化数据库到内存（不写聊天记录）。
-     * 返回 { initialized: boolean, error?: string }
-     */
-    async function initializeJsonTableInChatHistory_ACU() {
-        logDebug_ACU('No database found in chat history. Initializing a new one from template.');
-        try {
-            _set_currentJsonTableData_ACU(parseTableTemplateJson_ACU({ stripSeedRows: true }));
-            logDebug_ACU('Successfully initialized database in memory.');
-        }
-        catch (error) {
-            logError_ACU('Failed to parse template and initialize database in memory:', error);
-            _set_currentJsonTableData_ACU(null);
-            return { initialized: false, error: '从模板解析数据库失败，请检查模板格式。' };
-        }
-        if (!currentJsonTableData_ACU) {
-            return { initialized: false, error: '从模板解析数据库失败，请检查模板格式。' };
-        }
-        logDebug_ACU('Database initialized in memory. It will be saved to chat history on the first update.');
-        try {
-            const guideData = await ensureChatSheetGuideSeeded_ACU({ reason: 'init_chat_seedrows' });
-            if (guideData) {
-                attachSeedRowsToCurrentDataFromGuide_ACU(guideData);
-            }
-        }
-        catch (e) {
-            logWarn_ACU('[SheetGuide] Failed to ensure sheet guide during initialization:', e);
-        }
-        try {
-            await deleteAllGeneratedEntries_ACU$1();
-            logDebug_ACU('Deleted all generated lorebook entries during initialization.');
-        }
-        catch (deleteError) {
-            logWarn_ACU('Failed to delete generated lorebook entries during initialization:', deleteError);
-        }
-        return { initialized: true };
-    }
-    /**
-     * 从聊天记录加载或创建表格数据到内存。
-     * 返回 { loaded: boolean, source: 'merged'|'initialized'|'empty', error?: string }
-     * 注意：不再内部调用 refreshMergedDataAndNotify，调用方按需自行刷新。
-     */
-    async function loadOrCreateJsonTableFromChatHistory_ACU() {
-        _set_currentJsonTableData_ACU(null);
-        logDebug_ACU('Attempting to load database from chat history...');
-        const chat = getChatArray_ACU();
-        applyTemplateScopeForCurrentChat_ACU();
-        if (!chat || chat.length === 0) {
-            logDebug_ACU('Chat history is empty. Initializing new database.');
-            const initResult = await initializeJsonTableInChatHistory_ACU();
-            return { loaded: initResult.initialized, source: 'initialized', error: initResult.error };
-        }
-        const mergedData = await mergeAllIndependentTables_ACU();
-        if (mergedData) {
-            _set_currentJsonTableData_ACU(mergedData);
-            logDebug_ACU('Database content successfully merged (tag-aware) and loaded into memory.');
-            return { loaded: true, source: 'merged' };
-        }
-        logDebug_ACU('No database found for current tag in chat history. Initializing a new one.');
-        const initResult = await initializeJsonTableInChatHistory_ACU();
-        return { loaded: initResult.initialized, source: 'initialized', error: initResult.error };
-    }
-
-    /**
-     * service/ai/prompt-builder/json-sanitizer.ts
-     * AI 响应 JSON 清洗管线 + 松散对象解析
-     * 从 prompt-builder.ts 的 parseAndApplyTableEdits_ACU 内部提取的纯函数集合
-     */
-    /** 将全角/中文引号统一为标准双引号 */
-    function normalizeQuotesLayer_ACU(jsonStr) {
-        if (typeof jsonStr !== 'string' || !jsonStr)
-            return jsonStr;
-        return jsonStr.replace(/[""「」『』＂]/g, '"');
-    }
-    function getNextNonWhitespaceMeta_ACU(text, startIndex) {
-        for (let i = startIndex; i < text.length; i++) {
-            if (!/\s/.test(text[i]))
-                return { char: text[i], index: i };
-        }
-        return { char: '', index: -1 };
-    }
-    function isLikelyJsonValueStart_ACU(char) {
-        return !!char && (char === '"' ||
-            char === '{' ||
-            char === '[' ||
-            char === '-' ||
-            /\d/.test(char) ||
-            char === 't' ||
-            char === 'f' ||
-            char === 'n');
-    }
-    function isLikelyStringCloser_ACU(text, quoteIndex, stringKind, containerType) {
-        const nextMeta = getNextNonWhitespaceMeta_ACU(text, quoteIndex + 1);
-        const nextChar = nextMeta.char;
-        if (!nextChar)
-            return stringKind !== 'key';
-        if (stringKind === 'key')
-            return nextChar === ':';
-        if (nextChar === '}' || nextChar === ']')
-            return true;
-        if (nextChar !== ',')
+    function isV2TagData_ACU(tagData) {
+        if (!isObjectRecord_ACU(tagData))
             return false;
-        const afterComma = getNextNonWhitespaceMeta_ACU(text, nextMeta.index + 1).char;
-        if (!afterComma)
-            return true;
-        if (containerType === 'object')
-            return afterComma === '"' || afterComma === '}';
-        if (containerType === 'array')
-            return afterComma === ']' || isLikelyJsonValueStart_ACU(afterComma);
-        return isLikelyJsonValueStart_ACU(afterComma) || afterComma === '}' || afterComma === ']';
+        const frame = tagData.storageFrame;
+        return isObjectRecord_ACU(frame)
+            && frame.version === 2
+            && Array.isArray(frame.logEntries);
     }
-    function escapeUnescapedQuotesLayer_ACU(jsonStr) {
-        if (typeof jsonStr !== 'string') {
-            return { success: false, result: jsonStr, error: 'Input is not a string' };
-        }
-        let result = '';
-        let inString = false;
-        let escapeNext = false;
-        let currentStringKind = null;
-        const containerStack = [];
-        const getTopContainer = () => containerStack.length ? containerStack[containerStack.length - 1] : null;
-        const markParentValueCompleted = () => {
-            const parent = getTopContainer();
-            if (!parent)
-                return;
-            if (parent.type === 'object' || parent.type === 'array') {
-                parent.expecting = 'commaOrEnd';
-            }
-        };
-        for (let i = 0; i < jsonStr.length; i++) {
-            const char = jsonStr[i];
-            if (escapeNext) {
-                result += char;
-                escapeNext = false;
-                continue;
-            }
-            if (inString) {
-                if (char === '\\') {
-                    result += char;
-                    escapeNext = true;
-                    continue;
-                }
-                if (char === '"') {
-                    const top = getTopContainer();
-                    const containerType = top?.type || null;
-                    if (isLikelyStringCloser_ACU(jsonStr, i, currentStringKind, containerType)) {
-                        result += char;
-                        inString = false;
-                        if (currentStringKind === 'key' && top && top.type === 'object') {
-                            top.expecting = 'colon';
-                        }
-                        else {
-                            markParentValueCompleted();
-                        }
-                        currentStringKind = null;
-                    }
-                    else {
-                        result += '\\"';
-                    }
-                    continue;
-                }
-                result += char;
-                continue;
-            }
-            if (char === '"') {
-                result += char;
-                inString = true;
-                const top = getTopContainer();
-                currentStringKind = top && top.type === 'object' && (top.expecting === 'key' || top.expecting === 'keyOrEnd')
-                    ? 'key'
-                    : 'value';
-                continue;
-            }
-            if (char === '{') {
-                result += char;
-                containerStack.push({ type: 'object', expecting: 'keyOrEnd' });
-                continue;
-            }
-            if (char === '[') {
-                result += char;
-                containerStack.push({ type: 'array', expecting: 'valueOrEnd' });
-                continue;
-            }
-            if (char === ':') {
-                result += char;
-                const top = getTopContainer();
-                if (top && top.type === 'object')
-                    top.expecting = 'value';
-                continue;
-            }
-            if (char === ',') {
-                result += char;
-                const top = getTopContainer();
-                if (top && top.type === 'object')
-                    top.expecting = 'key';
-                if (top && top.type === 'array')
-                    top.expecting = 'value';
-                continue;
-            }
-            if (char === '}' || char === ']') {
-                result += char;
-                containerStack.pop();
-                markParentValueCompleted();
-                continue;
-            }
-            result += char;
-        }
-        return { success: true, result, error: null };
-    }
-    function sanitizeControlCharsLayer_ACU(jsonStr) {
-        if (typeof jsonStr !== 'string' || !jsonStr)
-            return jsonStr;
-        let result = '';
-        let inString = false;
-        let escapeNext = false;
-        for (let i = 0; i < jsonStr.length; i++) {
-            const char = jsonStr[i];
-            if (escapeNext) {
-                result += char;
-                escapeNext = false;
-                continue;
-            }
-            if (char === '\\') {
-                result += char;
-                if (inString)
-                    escapeNext = true;
-                continue;
-            }
-            if (char === '"') {
-                result += char;
-                inString = !inString;
-                continue;
-            }
-            if (inString && char === '\n') {
-                result += '\\n';
-                continue;
-            }
-            if (inString && char === '\r') {
-                result += '\\r';
-                continue;
-            }
-            if (inString && char === '\t') {
-                result += '\\t';
-                continue;
-            }
-            if (inString && char === '\0') {
-                result += '\\u0000';
-                continue;
-            }
-            result += char;
-        }
-        return result;
-    }
-    function removeTrailingCommasLayer_ACU(jsonStr) {
-        if (typeof jsonStr !== 'string' || !jsonStr)
-            return jsonStr;
-        let result = '';
-        let inString = false;
-        let escapeNext = false;
-        for (let i = 0; i < jsonStr.length; i++) {
-            const char = jsonStr[i];
-            if (escapeNext) {
-                result += char;
-                escapeNext = false;
-                continue;
-            }
-            if (char === '\\') {
-                result += char;
-                if (inString)
-                    escapeNext = true;
-                continue;
-            }
-            if (char === '"') {
-                result += char;
-                inString = !inString;
-                continue;
-            }
-            if (!inString && char === ',') {
-                const nextChar = getNextNonWhitespaceMeta_ACU(jsonStr, i + 1).char;
-                if (nextChar === '}' || nextChar === ']')
-                    continue;
-            }
-            result += char;
-        }
-        return result;
-    }
-    function fixNumericKeysLayer_ACU(jsonStr) {
-        if (typeof jsonStr !== 'string' || !jsonStr)
-            return jsonStr;
-        return jsonStr.replace(/([{,]\s*)(-?\d+)(\s*:)/g, '$1"$2"$3');
-    }
-    function sanitizeJsonPipeline_ACU(jsonStr) {
-        if (typeof jsonStr !== 'string') {
-            return { success: false, result: jsonStr, layersApplied: [], error: 'Input is not a string' };
-        }
-        const layersApplied = [];
-        let current = jsonStr;
-        logDebug_ACU(`[JSON清洗] sanitizeJsonPipeline: 输入长度=${jsonStr.length}`);
-        const normalizedQuotes = normalizeQuotesLayer_ACU(current);
-        if (normalizedQuotes !== current)
-            layersApplied.push('normalizeQuotes');
-        current = normalizedQuotes;
-        const escapedQuotes = escapeUnescapedQuotesLayer_ACU(current);
-        if (!escapedQuotes.success) {
-            return { success: false, result: current, layersApplied, error: escapedQuotes.error };
-        }
-        if (escapedQuotes.result !== current)
-            layersApplied.push('escapeUnescapedQuotes');
-        current = escapedQuotes.result;
-        const sanitizedControlChars = sanitizeControlCharsLayer_ACU(current);
-        if (sanitizedControlChars !== current)
-            layersApplied.push('sanitizeControlChars');
-        current = sanitizedControlChars;
-        const withoutTrailingCommas = removeTrailingCommasLayer_ACU(current);
-        if (withoutTrailingCommas !== current)
-            layersApplied.push('removeTrailingCommas');
-        current = withoutTrailingCommas;
-        const fixedNumericKeys = fixNumericKeysLayer_ACU(current);
-        if (fixedNumericKeys !== current)
-            layersApplied.push('fixNumericKeys');
-        current = fixedNumericKeys;
-        return { success: true, result: current, layersApplied, error: null };
-    }
-    // ═══ 松散对象解析 ═══
-    function splitTopLevelSegments_ACU(text, delimiterChar = ',') {
-        if (typeof text !== 'string' || !text)
-            return [];
-        const segments = [];
-        let current = '';
-        let inString = false;
-        let escapeNext = false;
-        let braceDepth = 0;
-        let bracketDepth = 0;
-        let parenDepth = 0;
-        for (let i = 0; i < text.length; i++) {
-            const char = text[i];
-            if (escapeNext) {
-                current += char;
-                escapeNext = false;
-                continue;
-            }
-            if (char === '\\') {
-                current += char;
-                if (inString)
-                    escapeNext = true;
-                continue;
-            }
-            if (char === '"') {
-                current += char;
-                inString = !inString;
-                continue;
-            }
-            if (!inString) {
-                if (char === '{')
-                    braceDepth++;
-                else if (char === '}')
-                    braceDepth = Math.max(0, braceDepth - 1);
-                else if (char === '[')
-                    bracketDepth++;
-                else if (char === ']')
-                    bracketDepth = Math.max(0, bracketDepth - 1);
-                else if (char === '(')
-                    parenDepth++;
-                else if (char === ')')
-                    parenDepth = Math.max(0, parenDepth - 1);
-                else if (char === delimiterChar && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0) {
-                    if (current.trim())
-                        segments.push(current.trim());
-                    current = '';
-                    continue;
-                }
-            }
-            current += char;
-        }
-        if (current.trim())
-            segments.push(current.trim());
-        return segments;
-    }
-    function findTopLevelDelimiterIndex_ACU(text, delimiterChar = ':') {
-        if (typeof text !== 'string' || !text)
-            return -1;
-        let inString = false;
-        let escapeNext = false;
-        let braceDepth = 0;
-        let bracketDepth = 0;
-        let parenDepth = 0;
-        for (let i = 0; i < text.length; i++) {
-            const char = text[i];
-            if (escapeNext) {
-                escapeNext = false;
-                continue;
-            }
-            if (char === '\\') {
-                if (inString)
-                    escapeNext = true;
-                continue;
-            }
-            if (char === '"') {
-                inString = !inString;
-                continue;
-            }
-            if (!inString) {
-                if (char === '{')
-                    braceDepth++;
-                else if (char === '}')
-                    braceDepth = Math.max(0, braceDepth - 1);
-                else if (char === '[')
-                    bracketDepth++;
-                else if (char === ']')
-                    bracketDepth = Math.max(0, bracketDepth - 1);
-                else if (char === '(')
-                    parenDepth++;
-                else if (char === ')')
-                    parenDepth = Math.max(0, parenDepth - 1);
-                else if (char === delimiterChar && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0)
-                    return i;
-            }
-        }
-        return -1;
-    }
-    function tryParseLooseJsonValue_ACU(rawValue) {
-        if (typeof rawValue !== 'string')
-            return { success: true, value: rawValue, error: null };
-        const trimmed = rawValue.trim();
-        if (!trimmed)
-            return { success: false, value: null, error: 'Empty value' };
-        const normalizedValue = (trimmed.startsWith("'") && trimmed.endsWith("'"))
-            ? `"${trimmed.slice(1, -1)
-            .replace(/\\/g, '\\\\')
-            .replace(/"/g, '\\"')
-            .replace(/\r/g, '\\r')
-            .replace(/\n/g, '\\n')
-            .replace(/\t/g, '\\t')}"`
-            : trimmed;
-        const wrappedValue = `[${normalizedValue}]`;
-        try {
-            return { success: true, value: JSON.parse(wrappedValue)[0], error: null };
-        }
-        catch (directError) {
-            const sanitizedWrapped = sanitizeJsonPipeline_ACU(wrappedValue);
-            if (sanitizedWrapped.success) {
-                try {
-                    return { success: true, value: JSON.parse(sanitizedWrapped.result)[0], error: null };
-                }
-                catch (sanitizedError) { }
-            }
-            return { success: false, value: null, error: directError?.message || 'Failed to parse loose value' };
-        }
-    }
-    function parseLooseObjectKey_ACU(rawKey) {
-        const trimmed = typeof rawKey === 'string' ? rawKey.trim() : '';
-        if (!trimmed)
-            return null;
-        if (/^-?\d+$/.test(trimmed))
-            return trimmed;
-        const parsedKey = tryParseLooseJsonValue_ACU(trimmed);
-        if (parsedKey.success && (typeof parsedKey.value === 'string' || typeof parsedKey.value === 'number')) {
-            return String(parsedKey.value);
-        }
-        return trimmed.replace(/^["']|["']$/g, '');
-    }
-    function coerceLooseRowObject_ACU(jsonStr) {
-        if (typeof jsonStr !== 'string') {
-            return { success: false, result: null, recoveredKeys: [], error: 'Input is not a string' };
-        }
-        const trimmed = jsonStr.trim();
-        if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
-            return { success: false, result: null, recoveredKeys: [], error: 'Input is not an object literal' };
-        }
-        const body = trimmed.slice(1, -1).trim();
-        if (!body)
-            return { success: true, result: {}, recoveredKeys: [], error: null };
-        const segments = splitTopLevelSegments_ACU(body, ',').filter(Boolean);
-        logDebug_ACU(`[JSON清洗] coerceLooseRowObject: ${segments.length} 个段落`);
-        if (!segments.length) {
-            return { success: false, result: null, recoveredKeys: [], error: 'No top-level segments detected' };
-        }
-        const result = {};
-        let nextAutoKey = 0;
-        for (const segment of segments) {
-            const colonIndex = findTopLevelDelimiterIndex_ACU(segment, ':');
-            if (colonIndex !== -1) {
-                const parsedKey = parseLooseObjectKey_ACU(segment.slice(0, colonIndex));
-                const parsedValue = tryParseLooseJsonValue_ACU(segment.slice(colonIndex + 1));
-                if (!parsedKey || !parsedValue.success) {
-                    return {
-                        success: false,
-                        result: null,
-                        recoveredKeys: Object.keys(result),
-                        error: `Failed to parse keyed segment: ${segment}`,
-                    };
-                }
-                result[parsedKey] = parsedValue.value;
-                const numericKey = Number.parseInt(parsedKey, 10);
-                if (!Number.isNaN(numericKey) && String(numericKey) === parsedKey) {
-                    nextAutoKey = Math.max(nextAutoKey, numericKey + 1);
-                }
-                continue;
-            }
-            const parsedValue = tryParseLooseJsonValue_ACU(segment);
-            if (!parsedValue.success) {
-                return {
-                    success: false,
-                    result: null,
-                    recoveredKeys: Object.keys(result),
-                    error: `Failed to parse value-only segment: ${segment}`,
-                };
-            }
-            while (Object.prototype.hasOwnProperty.call(result, String(nextAutoKey))) {
-                nextAutoKey++;
-            }
-            result[String(nextAutoKey)] = parsedValue.value;
-            nextAutoKey++;
-        }
-        const recoveredKeys = Object.keys(result).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
-        if (!recoveredKeys.length) {
-            return { success: false, result: null, recoveredKeys: [], error: 'No recoverable columns found' };
-        }
-        return { success: true, result, recoveredKeys, error: null };
-    }
-
-    /**
-     * service/ai/prompt-builder/table-edit-parser.ts
-     * AI 响应表格编辑解析 — <tableEdit> 块提取 + 指令解析 + 编辑应用
-     * 从 prompt-builder.ts 拆出（L502-L1519）
-     * JSON 清洗管线已提取到 json-sanitizer.ts
-     */
-    function normalizeAiResponseForTableEditParsing_ACU(text) {
-        if (typeof text !== 'string')
-            return '';
-        let cleaned = text.trim();
-        cleaned = cleaned.replace(/'\s*\+\s*'/g, '');
-        if (cleaned.startsWith("'") && cleaned.endsWith("'"))
-            cleaned = cleaned.slice(1, -1);
-        cleaned = cleaned.replace(/\\n/g, '\n');
-        cleaned = cleaned.replace(/\\\\"/g, '\\"');
-        cleaned = cleaned.replace(/：/g, ':');
-        return cleaned;
-    }
-    function extractTableEditInner_ACU(text, options = {}) {
-        const { allowNoTableEditTags = true, useLastPairOnly = (settings_ACU?.tableEditLastPairOnly !== false) } = options;
-        const cleaned = normalizeAiResponseForTableEditParsing_ACU(text);
-        if (!cleaned)
-            return null;
-        if (useLastPairOnly) {
-            const fullRe = /<tableEdit>([\s\S]*?)<\/tableEdit>/ig;
-            let lastMatch = null;
-            let m;
-            while ((m = fullRe.exec(cleaned)) !== null) {
-                lastMatch = m;
-            }
-            if (lastMatch && typeof lastMatch[1] === 'string') {
-                return { inner: lastMatch[1], cleaned, mode: 'full_last' };
-            }
-        }
-        else {
-            const fullMatch = cleaned.match(/<tableEdit>([\s\S]*?)<\/tableEdit>/i);
-            if (fullMatch && typeof fullMatch[1] === 'string') {
-                return { inner: fullMatch[1], cleaned, mode: 'full' };
-            }
-        }
-        const lowerCleaned = cleaned.toLowerCase();
-        const openTag = '<tableedit>';
-        const closeTag = '</tableedit>';
-        const hasOpen = lowerCleaned.includes(openTag);
-        const hasClose = lowerCleaned.includes(closeTag);
-        const hasAnyTag = hasOpen || hasClose;
-        const commentRe = /<!--([\s\S]*?)-->/g;
-        const commentBlocks = [];
-        let m;
-        while ((m = commentRe.exec(cleaned)) !== null) {
-            commentBlocks.push({
-                start: m.index,
-                end: commentRe.lastIndex,
-                raw: m[0],
-                content: m[1] || ''
-            });
-        }
-        const hasCommands = (s) => /(insertRow|updateRow|deleteRow)\s*\(/.test(s);
-        const candidates = commentBlocks.filter(b => hasCommands(b.content));
-        if (!candidates.length)
-            return null;
-        let chosen = null;
-        if (hasOpen && !hasClose) {
-            const openIdx = useLastPairOnly ? lowerCleaned.lastIndexOf(openTag) : cleaned.search(/<tableEdit>/i);
-            chosen = candidates.find(b => b.start > openIdx) || (useLastPairOnly ? candidates[candidates.length - 1] : candidates[0]);
-        }
-        else if (!hasOpen && hasClose) {
-            const closeIdx = useLastPairOnly ? lowerCleaned.lastIndexOf(closeTag) : cleaned.search(/<\/tableEdit>/i);
-            for (let i = candidates.length - 1; i >= 0; i--) {
-                if (candidates[i].end < closeIdx) {
-                    chosen = candidates[i];
-                    break;
-                }
-            }
-            chosen = chosen || candidates[candidates.length - 1];
-        }
-        else if (hasAnyTag) {
-            const lastOpenIdx = lowerCleaned.lastIndexOf(openTag);
-            const lastCloseIdx = lowerCleaned.lastIndexOf(closeTag);
-            const tagIdx = useLastPairOnly
-                ? (lastCloseIdx !== -1 ? lastCloseIdx : lastOpenIdx)
-                : (hasOpen ? cleaned.search(/<tableEdit>/i) : cleaned.search(/<\/tableEdit>/i));
-            let bestDist = Infinity;
-            candidates.forEach(b => {
-                const dist = Math.min(Math.abs(b.start - tagIdx), Math.abs(b.end - tagIdx));
-                if (dist < bestDist) {
-                    bestDist = dist;
-                    chosen = b;
-                }
-            });
-        }
-        else if (allowNoTableEditTags) {
-            chosen = useLastPairOnly ? candidates[candidates.length - 1] : candidates[0];
-        }
-        if (!chosen)
-            return null;
-        return { inner: chosen.raw, cleaned, mode: 'comment_fallback', hasOpen, hasClose };
-    }
-    function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = 'standard', isImportMode = false) {
-        if (!tableData) {
-            logError_ACU('Cannot apply edits, tableData is not loaded.');
+    function isLegacyV1TagData_ACU(tagData) {
+        if (!isObjectRecord_ACU(tagData))
             return false;
-        }
-        const extracted = extractTableEditInner_ACU(aiResponse, { allowNoTableEditTags: true });
-        if (!extracted || !extracted.inner) {
-            logWarn_ACU('No recognizable table edit block found (missing <tableEdit> boundary and/or incomplete <!-- --> wrapper).');
-            return true;
-        }
-        const editsString = extracted.inner.replace(/<!--|-->/g, '').trim();
-        if (!editsString) {
-            logDebug_ACU('Empty <tableEdit> block. No edits to apply.');
-            return true;
-        }
-        // [新增] SQLite 模式：检测是否为 SQL 语句，是则走 SQL 执行路径
-        if (isSqliteMode() && isSqlContent(editsString)) {
-            try {
-                const provider = getStorageProvider();
-                const result = provider.applyEdits(editsString, updateMode);
-                logDebug_ACU(`[SQL Mode] applyEdits 完成: success=${result.success}, appliedEdits=${result.appliedEdits}, modifiedKeys=${result.modifiedKeys.join(',')}`);
-                return result;
-            }
-            catch (e) {
-                // SQL 执行失败，抛出错误供上层重试循环捕获
-                logError_ACU(`[SQL Mode] SQL 执行失败: ${e?.message}`);
-                throw e;
-            }
-        }
-        // 指令重组：处理 AI 生成的多行指令
-        const originalLines = editsString.split('\n');
-        const commandLines = [];
-        let commandReconstructor = '';
-        let isInJsonBlock = false;
-        originalLines.forEach(line => {
-            const trimmedLine = line.trim();
-            if (trimmedLine === '')
-                return;
-            let lineContent = trimmedLine;
-            if (!isInJsonBlock && lineContent.includes('//') && !lineContent.includes('"//') && !lineContent.includes("'//")) {
-                lineContent = lineContent.split('//')[0].trim();
-            }
-            if (lineContent === '')
-                return;
-            if ((lineContent.startsWith('insertRow') || lineContent.startsWith('deleteRow') || lineContent.startsWith('updateRow')) && !isInJsonBlock) {
-                if (commandReconstructor) {
-                    commandLines.push(commandReconstructor);
-                }
-                commandReconstructor = lineContent;
-            }
-            else {
-                commandReconstructor += ' ' + lineContent;
-            }
-            if (commandReconstructor) {
-                const totalOpen = (commandReconstructor.match(/{/g) || []).length;
-                const totalClose = (commandReconstructor.match(/}/g) || []).length;
-                if (totalOpen > totalClose) {
-                    isInJsonBlock = true;
-                }
-                else {
-                    isInJsonBlock = false;
-                }
-            }
-        });
-        if (commandReconstructor) {
-            commandLines.push(commandReconstructor);
-        }
-        // 二次处理：拆分挤在一行里的多条指令
-        const finalCommandLines = [];
-        commandLines.forEach(line => {
-            const multiCommandPattern = /(?:^|;\s*)((?:insertRow|deleteRow|updateRow)\s*\()/g;
-            const positions = [];
-            let match;
-            while ((match = multiCommandPattern.exec(line)) !== null) {
-                positions.push(match.index + (match[0].length - match[1].length));
-            }
-            if (positions.length <= 1) {
-                finalCommandLines.push(line.replace(/;\s*$/, ''));
-            }
-            else {
-                for (let i = 0; i < positions.length; i++) {
-                    const start = positions[i];
-                    const end = i + 1 < positions.length ? positions[i + 1] : line.length;
-                    const subCommand = line.substring(start, end).replace(/;\s*$/, '').trim();
-                    if (subCommand)
-                        finalCommandLines.push(subCommand);
-                }
-            }
-        });
-        const sheetKeysForIndexing = getSortedSheetKeys_ACU(tableData);
-        const sheets = sheetKeysForIndexing.map(key => tableData[key]);
-        let appliedEdits = 0;
-        const editCountsByTable = {};
-        // 指令解析函数
-        const parseTableEditCommandLine_ACU = (rawLine) => {
-            try {
-                let commandLineWithoutComment = rawLine;
-                if (commandLineWithoutComment.match(/\)\s*;?\s*\/\/.*$/)) {
-                    commandLineWithoutComment = commandLineWithoutComment.replace(/\/\/.*$/, '').trim();
-                }
-                if (!commandLineWithoutComment)
-                    return null;
-                const match = commandLineWithoutComment.match(/^(insertRow|deleteRow|updateRow)\s*\((.*)\);?$/);
-                if (!match)
-                    return null;
-                const command = match[1];
-                const argsString = match[2];
-                let args;
-                const firstBracket = argsString.indexOf('{');
-                if (firstBracket === -1) {
-                    args = JSON.parse(`[${argsString}]`);
-                }
-                else {
-                    const paramsPart = argsString.substring(0, firstBracket).trim();
-                    let jsonPart = argsString.substring(firstBracket);
-                    const initialArgs = JSON.parse(`[${paramsPart.replace(/,$/, '')}]`);
-                    try {
-                        const jsonData = JSON.parse(jsonPart);
-                        args = [...initialArgs, jsonData];
-                    }
-                    catch (jsonError) {
-                        logError_ACU(`Primary JSON parse failed for: "${jsonPart}". Attempting sanitization pipeline...`, jsonError);
-                        const originalLooseObjectResult = coerceLooseRowObject_ACU(jsonPart);
-                        if (originalLooseObjectResult.success) {
-                            args = [...initialArgs, originalLooseObjectResult.result];
-                            logWarn_ACU(`[JSON Sanitization] Recovered malformed row object from original payload via loose parsing. Keys: ${originalLooseObjectResult.recoveredKeys.join(', ')}`);
-                        }
-                        else {
-                            const sanitizeResult = sanitizeJsonPipeline_ACU(jsonPart);
-                            if (!sanitizeResult.success) {
-                                logError_ACU(`JSON sanitization pipeline failed for: "${jsonPart}"`, new Error(sanitizeResult.error || 'Unknown sanitization error'));
-                                throw jsonError;
-                            }
-                            try {
-                                const jsonData = JSON.parse(sanitizeResult.result);
-                                args = [...initialArgs, jsonData];
-                                if (sanitizeResult.layersApplied.length > 0) {
-                                    logWarn_ACU(`[JSON Sanitization] Applied layers: ${sanitizeResult.layersApplied.join(', ')}`);
-                                }
-                            }
-                            catch (sanitizedJsonError) {
-                                const looseObjectResult = coerceLooseRowObject_ACU(sanitizeResult.result);
-                                if (looseObjectResult.success) {
-                                    args = [...initialArgs, looseObjectResult.result];
-                                    logWarn_ACU(`[JSON Sanitization] Recovered malformed row object from sanitized payload via loose parsing. Keys: ${looseObjectResult.recoveredKeys.join(', ')}`);
-                                }
-                                else {
-                                    const sanitizedPreview = sanitizeResult.result.length > 400
-                                        ? `${sanitizeResult.result.slice(0, 400)}...`
-                                        : sanitizeResult.result;
-                                    logError_ACU(`Sanitized JSON parse failed after layers [${sanitizeResult.layersApplied.join(', ') || 'none'}]: "${sanitizedPreview}"`, sanitizedJsonError);
-                                    logError_ACU(`[JSON Sanitization] Loose row object recovery failed. Original: ${originalLooseObjectResult.error || 'Unknown'}; Sanitized: ${looseObjectResult.error || 'Unknown'}`);
-                                    throw sanitizedJsonError;
-                                }
-                            }
-                        }
-                    }
-                }
-                return { command, args, line: commandLineWithoutComment };
-            }
-            catch (e) {
-                logError_ACU(`Failed to parse command line: "${rawLine}"`, e);
-                return null;
-            }
-        };
-        // 总结表/总体大纲同步新增检查
-        let summaryInsertCount = 0;
-        let outlineInsertCount = 0;
-        const standardizedFillEnabled = settings_ACU?.standardizedTableFillEnabled !== false;
-        if (standardizedFillEnabled) {
-            finalCommandLines.forEach(line => {
-                try {
-                    const parsed = parseTableEditCommandLine_ACU(line);
-                    if (!parsed || parsed.command !== 'insertRow')
-                        return;
-                    const tableIndex = parsed.args?.[0];
-                    const table = sheets[tableIndex];
-                    if (!table || !table.name)
-                        return;
-                    if (!isSummaryOrOutlineTable_ACU(table.name))
-                        return;
-                    if (table.name === '总结表')
-                        summaryInsertCount++;
-                    if (table.name === '总体大纲')
-                        outlineInsertCount++;
-                }
-                catch (e) { }
-            });
-        }
-        const allowSummaryOutlineInsert = !standardizedFillEnabled ||
-            (summaryInsertCount === 1 && outlineInsertCount === 1) ||
-            (summaryInsertCount === 0 && outlineInsertCount === 0);
-        if (standardizedFillEnabled && !allowSummaryOutlineInsert && (summaryInsertCount > 0 || outlineInsertCount > 0)) {
-            logWarn_ACU(`[屏蔽] 总结表/总体大纲新增不同步：总结=${summaryInsertCount}, 大纲=${outlineInsertCount}，本轮两表均不写入。`);
-        }
-        // seedRows 物化
-        const materializeSeedRowsIfNeeded_ACU = (table) => {
-            try {
-                if (!table || typeof table !== 'object')
-                    return;
-                if (!Array.isArray(table.content) || table.content.length !== 1)
-                    return;
-                let sr = (Array.isArray(table.seedRows) && table.seedRows.length > 0) ? table.seedRows : null;
-                if (!sr && table.uid && String(table.uid).startsWith('sheet_')) {
-                    sr = getEffectiveSeedRowsForSheet_ACU(String(table.uid), { guideData: null, allowTemplateFallback: true });
-                    if (Array.isArray(sr) && sr.length > 0) {
-                        try {
-                            table.seedRows = JSON.parse(JSON.stringify(sr));
-                        }
-                        catch (e) { }
-                    }
-                }
-                if (!Array.isArray(sr) || sr.length === 0)
-                    return;
-                const headerRow = Array.isArray(table.content[0]) ? JSON.parse(JSON.stringify(table.content[0])) : ["row_id"];
-                const seed = JSON.parse(JSON.stringify(sr));
-                table.content = [headerRow, ...seed];
-            }
-            catch (e) {
-                logWarn_ACU('[表格编辑] restoreSeedRows 失败:', e);
-            }
-        };
-        // 逐条应用编辑指令
-        finalCommandLines.forEach(line => {
-            const parsed = parseTableEditCommandLine_ACU(line);
-            if (!parsed) {
-                logWarn_ACU(`Skipping malformed or truncated command line: "${line}"`);
-                return;
-            }
-            const { command, args } = parsed;
-            try {
-                switch (command) {
-                    case 'insertRow': {
-                        const [tableIndex, data] = args;
-                        const table = sheets[tableIndex];
-                        if (!table || !table.name) {
-                            logWarn_ACU(`Table at index ${tableIndex} not found or has no name. Skipping insertRow.`);
-                            break;
-                        }
-                        materializeSeedRowsIfNeeded_ACU(table);
-                        const sheetKey = sheetKeysForIndexing[tableIndex];
-                        const isSummaryTable = isSummaryOrOutlineTable_ACU(table.name);
-                        const isUnifiedMode = (updateMode === 'full' || updateMode === 'manual_unified' || updateMode === 'auto_unified');
-                        const isStandardMode = (updateMode === 'standard' || updateMode === 'auto_standard' || updateMode === 'manual_standard');
-                        const isSummaryMode = (updateMode === 'summary' || updateMode === 'auto_summary' || updateMode === 'auto_summary_silent' || updateMode === 'manual_summary');
-                        const isManualMode = (updateMode && updateMode.startsWith('manual'));
-                        if (isUnifiedMode) {
-                            // 允许所有操作
-                        }
-                        else if (isStandardMode && isSummaryTable) {
-                            if (isManualMode) {
-                                logDebug_ACU(`[屏蔽] 标准表更新模式(手动)：忽略总结表/总体大纲的insertRow操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
-                                break;
-                            }
-                        }
-                        else if (isSummaryMode && !isSummaryTable) {
-                            if (isManualMode) {
-                                logDebug_ACU(`[屏蔽] 总结表更新模式(手动)：忽略标准表的insertRow操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
-                                break;
-                            }
-                        }
-                        if (isSummaryTable && !allowSummaryOutlineInsert) {
-                            logDebug_ACU(`[屏蔽] 总结表/总体大纲新增不同步：忽略 insertRow (tableIndex: ${tableIndex}, tableName: ${table.name})`);
-                            break;
-                        }
-                        if (table && table.content && typeof data === 'object') {
-                            const newRow = [String(table.content.length)]; // 行号 = 当前 content 长度（表头占 [0]）
-                            const headers = table.content[0].slice(1);
-                            const specialIndexCol = (isSummaryTable && sheetKey && isSpecialIndexLockEnabled_ACU(sheetKey))
-                                ? getSummaryIndexColumnIndex_ACU(table)
-                                : -1;
-                            headers.forEach((_, colIndex) => {
-                                let nextVal = data[colIndex] || (data[String(colIndex)] || "");
-                                if (colIndex === specialIndexCol) {
-                                    nextVal = formatSummaryIndexCode_ACU(table.content.length);
-                                }
-                                newRow.push(nextVal);
-                            });
-                            table.content.push(newRow);
-                            if (isSummaryTable && specialIndexCol >= 0) {
-                                applySummaryIndexSequenceToTable_ACU(table, specialIndexCol);
-                            }
-                            logDebug_ACU(`Applied insertRow to table ${tableIndex} (${table.name}) with data:`, data);
-                            appliedEdits++;
-                            editCountsByTable[table.name] = (editCountsByTable[table.name] || 0) + 1;
-                        }
-                        break;
-                    }
-                    case 'deleteRow': {
-                        const [tableIndex, rowIndex] = args;
-                        const table = sheets[tableIndex];
-                        if (!table || !table.name) {
-                            logWarn_ACU(`Table at index ${tableIndex} not found or has no name. Skipping deleteRow.`);
-                            break;
-                        }
-                        materializeSeedRowsIfNeeded_ACU(table);
-                        const isSummaryTable = isSummaryOrOutlineTable_ACU(table.name);
-                        if (isSummaryTable) {
-                            logDebug_ACU(`[屏蔽] 总结表/总体大纲忽略 deleteRow 操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
-                            break;
-                        }
-                        const isUnifiedMode = (updateMode === 'full' || updateMode === 'manual_unified' || updateMode === 'auto_unified');
-                        const isStandardMode = (updateMode === 'standard' || updateMode === 'auto_standard' || updateMode === 'manual_standard');
-                        const isSummaryMode = (updateMode === 'summary' || updateMode === 'auto_summary' || updateMode === 'auto_summary_silent' || updateMode === 'manual_summary');
-                        const isManualMode = (updateMode && updateMode.startsWith('manual'));
-                        if (isUnifiedMode) {
-                            // 允许所有操作
-                        }
-                        else if (isStandardMode && isSummaryTable) {
-                            if (isManualMode) {
-                                logDebug_ACU(`[屏蔽] 标准表更新模式(手动)：忽略总结表/总体大纲的deleteRow操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
-                                break;
-                            }
-                        }
-                        else if (isSummaryMode && !isSummaryTable) {
-                            if (isManualMode) {
-                                logDebug_ACU(`[屏蔽] 总结表更新模式(手动)：忽略标准表的deleteRow操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
-                                break;
-                            }
-                        }
-                        if (table && table.content && table.content.length > rowIndex + 1) {
-                            table.content.splice(rowIndex + 1, 1);
-                            logDebug_ACU(`Applied deleteRow to table ${tableIndex} (${table.name}) at index ${rowIndex}`);
-                            appliedEdits++;
-                            editCountsByTable[table.name] = (editCountsByTable[table.name] || 0) + 1;
-                        }
-                        break;
-                    }
-                    case 'updateRow': {
-                        const [tableIndex, rowIndex, data] = args;
-                        const table = sheets[tableIndex];
-                        if (!table || !table.name) {
-                            logWarn_ACU(`Table at index ${tableIndex} not found or has no name. Skipping updateRow.`);
-                            break;
-                        }
-                        materializeSeedRowsIfNeeded_ACU(table);
-                        const sheetKey = sheetKeysForIndexing[tableIndex];
-                        const isSummaryTable = isSummaryOrOutlineTable_ACU(table.name);
-                        if (isSummaryTable) {
-                            logDebug_ACU(`[屏蔽] 总结表/总体大纲忽略 updateRow 操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
-                            break;
-                        }
-                        const isUnifiedMode = (updateMode === 'full' || updateMode === 'manual_unified' || updateMode === 'auto_unified');
-                        const isStandardMode = (updateMode === 'standard' || updateMode === 'auto_standard' || updateMode === 'manual_standard');
-                        const isSummaryMode = (updateMode === 'summary' || updateMode === 'auto_summary' || updateMode === 'auto_summary_silent' || updateMode === 'manual_summary');
-                        const isManualMode = (updateMode && updateMode.startsWith('manual'));
-                        if (isUnifiedMode) {
-                            // 允许所有操作
-                        }
-                        else if (isStandardMode && isSummaryTable) {
-                            if (isManualMode) {
-                                logDebug_ACU(`[屏蔽] 标准表更新模式(手动)：忽略总结表/总体大纲的updateRow操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
-                                break;
-                            }
-                        }
-                        else if (isSummaryMode && !isSummaryTable) {
-                            if (isManualMode) {
-                                logDebug_ACU(`[屏蔽] 总结表更新模式(手动)：忽略标准表的updateRow操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
-                                break;
-                            }
-                        }
-                        if (table && table.content && table.content.length > rowIndex + 1 && typeof data === 'object') {
-                            const lockState = sheetKey ? getTableLocksForSheet_ACU(sheetKey) : { rows: new Set(), cols: new Set(), cells: new Set() };
-                            if (lockState.rows.has(rowIndex)) {
-                                logDebug_ACU(`[锁定] 行锁定阻止 updateRow (tableIndex: ${tableIndex}, rowIndex: ${rowIndex})`);
-                                break;
-                            }
-                            Object.keys(data).forEach(colIndexStr => {
-                                const colIndex = parseInt(colIndexStr, 10);
-                                if (isNaN(colIndex))
-                                    return;
-                                if (lockState.cols.has(colIndex))
-                                    return;
-                                if (lockState.cells.has(`${rowIndex}:${colIndex}`))
-                                    return;
-                                if (table.content[rowIndex + 1].length > colIndex + 1) {
-                                    table.content[rowIndex + 1][colIndex + 1] = data[colIndexStr];
-                                }
-                            });
-                            if (isSummaryTable && sheetKey && isSpecialIndexLockEnabled_ACU(sheetKey)) {
-                                const specialIndexCol = getSummaryIndexColumnIndex_ACU(table);
-                                if (specialIndexCol >= 0)
-                                    applySummaryIndexSequenceToTable_ACU(table, specialIndexCol);
-                            }
-                            logDebug_ACU(`Applied updateRow to table ${tableIndex} (${table.name}) at index ${rowIndex} with data:`, data);
-                            appliedEdits++;
-                            editCountsByTable[table.name] = (editCountsByTable[table.name] || 0) + 1;
-                        }
-                        break;
-                    }
-                }
-            }
-            catch (e) {
-                logError_ACU(`Failed to parse or apply command: "${line}"`, e);
-            }
-        });
-        // 将统计信息写入表格对象
-        Object.keys(editCountsByTable).forEach(tableName => {
-            const sheetKey = Object.keys(tableData).find(k => tableData[k].name === tableName);
-            if (sheetKey) {
-                if (!tableData[sheetKey]._lastUpdateStats) {
-                    tableData[sheetKey]._lastUpdateStats = {};
-                }
-                tableData[sheetKey]._lastUpdateStats.changes = editCountsByTable[tableName];
-            }
-        });
-        // 收集所有被修改的表格 key
-        const modifiedSheetKeys = [];
-        Object.keys(editCountsByTable).forEach(tableName => {
-            if (editCountsByTable[tableName] > 0) {
-                const sheetKey = Object.keys(tableData).find(k => tableData[k].name === tableName);
-                if (sheetKey)
-                    modifiedSheetKeys.push(sheetKey);
-            }
-        });
-        return { success: true, modifiedKeys: modifiedSheetKeys, appliedEdits };
-    }
-    function parseAndApplyTableEdits_ACU(aiResponse, updateMode = 'standard', isImportMode = false) {
-        if (!currentJsonTableData_ACU) {
-            logError_ACU('Cannot apply edits, currentJsonTableData_ACU is not loaded.');
+        if (isV2TagData_ACU(tagData))
             return false;
+        if (hasAnySheetKey_ACU(tagData.independentData))
+            return true;
+        if (hasAnySheetKey_ACU(tagData.incrementalData))
+            return true;
+        if (hasNonEmptyStringArray_ACU(tagData.modifiedKeys))
+            return true;
+        if (hasNonEmptyStringArray_ACU(tagData.updateGroupKeys))
+            return true;
+        const storageMode = tagData._acu_storage_mode;
+        if ((storageMode === 'checkpoint' || storageMode === 'delta' || storageMode === 'legacy')
+            && (hasOwnKey_ACU(tagData, 'independentData') || hasOwnKey_ACU(tagData, 'incrementalData'))) {
+            return true;
         }
-        return parseAndApplyTableEditsToData_ACU(aiResponse, currentJsonTableData_ACU, updateMode, isImportMode);
-    }
-    /**
-     * 检测 <tableEdit> 内容是否为 SQL 语句
-     * 跳过空行和注释行后，检查第一条非空行是否以 SQL 关键字开头
-     */
-    function isSqlContent(content) {
-        const lines = content.split('\n');
-        for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed)
-                continue;
-            // 跳过 SQL 注释
-            if (trimmed.startsWith('--'))
-                continue;
-            // 跳过 HTML 注释残留
-            if (trimmed.startsWith('<!--') || trimmed.startsWith('-->'))
-                continue;
-            // 检查是否以 SQL 关键字开头
-            const sqlKeywords = /^(INSERT|UPDATE|DELETE|ALTER|BEGIN|CREATE|DROP|REPLACE)\b/i;
-            return sqlKeywords.test(trimmed);
+        const storageVersion = tagData._acu_storage_version;
+        if (storageVersion === 1 && (hasOwnKey_ACU(tagData, 'independentData') || hasOwnKey_ACU(tagData, 'incrementalData'))) {
+            return true;
         }
         return false;
     }
-
-    /**
-     * service/table/native-table-service-adapter.ts — 原生模式适配器
-     *
-     * 将现有的 table-service.ts 中的函数包装为 ITableStorageProvider 接口。
-     * 不修改 table-service.ts 的任何代码，只做适配委托。
-     * 原生模式下系统行为与当前完全一致。
-     */
-    class NativeTableServiceAdapter {
-        constructor() {
-            this.mode = 'native';
+    function hasLegacyTopLevelTableData_ACU(message, isolationConfig) {
+        if (!message || !isLegacyMatchForIsolation_ACU(message, isolationConfig))
+            return false;
+        return hasAnySheetKey_ACU(message.TavernDB_ACU_IndependentData)
+            || hasAnySheetKey_ACU(message.TavernDB_ACU_Data)
+            || hasAnySheetKey_ACU(message.TavernDB_ACU_SummaryData)
+            || hasNonEmptyStringArray_ACU(message.TavernDB_ACU_ModifiedKeys)
+            || hasNonEmptyStringArray_ACU(message.TavernDB_ACU_UpdateGroupKeys);
+    }
+    function resolveTableStorageStrategy_ACU(chat, isolationKey, isolationConfig = { enabled: false, code: '' }) {
+        if (!Array.isArray(chat) || chat.length === 0) {
+            return { mode: 'empty' };
         }
-        /**
-         * 从聊天消息加载表格数据
-         * 委托给 loadOrCreateJsonTableFromChatHistory_ACU
-         */
-        async loadFromChat() {
-            logDebug_ACU('[原生适配器] loadFromChat: 开始加载表格数据');
-            const result = await loadOrCreateJsonTableFromChatHistory_ACU();
-            logDebug_ACU(`[原生适配器] loadFromChat: 结果=${result.source}, loaded=${result.loaded}`);
-            return result;
+        let hasV2 = false;
+        let hasLegacy = false;
+        const legacyReasons = new Set();
+        for (let i = 0; i < chat.length; i += 1) {
+            const message = chat[i];
+            if (!message || message.is_user)
+                continue;
+            const tagData = readIsolatedTagData_ACU(message, isolationKey);
+            if (tagData) {
+                if (isV2TagData_ACU(tagData)) {
+                    hasV2 = true;
+                }
+                if (isLegacyV1TagData_ACU(tagData)) {
+                    hasLegacy = true;
+                    legacyReasons.add(`message#${i}: isolated legacy tag data`);
+                }
+            }
+            if (hasLegacyTopLevelTableData_ACU(message, isolationConfig)) {
+                hasLegacy = true;
+                legacyReasons.add(`message#${i}: legacy top-level table fields`);
+            }
         }
-        /**
-         * 保存当前数据到聊天消息
-         * 委托给 saveIndependentTableToChatHistory_ACU
-         */
-        async saveToChat(targetSheetKeys, updateGroupKeys) {
-            return saveIndependentTableToChatHistory_ACU(-1, targetSheetKeys ?? null, updateGroupKeys ?? null);
-        }
-        /**
-         * 获取当前运行时的完整表格数据
-         * 直接返回 currentJsonTableData_ACU 全局变量
-         */
-        getCurrentData() {
-            return currentJsonTableData_ACU;
-        }
-        /**
-         * 应用 AI 返回的编辑指令（DSL 格式）
-         * 委托给 parseAndApplyTableEdits_ACU
-         */
-        applyEdits(edits, updateMode) {
-            logDebug_ACU(`[原生适配器] applyEdits: 模式=${updateMode || 'standard'}, 编辑指令长度=${edits.length}`);
-            const success = parseAndApplyTableEdits_ACU(edits, updateMode || 'standard');
-            // parseAndApplyTableEdits_ACU 返回 boolean：
-            // true = 成功或无编辑，false = 失败
+        if (hasLegacy) {
             return {
-                success: !!success,
-                modifiedKeys: [], // 原生模式下不追踪具体修改了哪些 sheet
-                appliedEdits: success ? 1 : 0,
+                mode: 'legacy-v1',
+                reason: Array.from(legacyReasons).join('; ') || 'legacy table data detected',
+                warning: hasV2 ? 'mixed legacy-v1 and v2 data detected; legacy-v1 wins' : undefined,
             };
         }
-        /**
-         * SQL 查询 — 原生模式不支持
-         */
-        executeQuery(_sql, _params) {
-            throw new Error('SQL 查询仅在 SQLite 模式下可用。请在设置中切换到 SQLite 模式。');
+        if (hasV2) {
+            return { mode: 'v2' };
         }
-        /**
-         * SQL 变更 — 原生模式不支持
-         */
-        executeMutation(_sql, _params) {
-            throw new Error('SQL 变更仅在 SQLite 模式下可用。请在设置中切换到 SQLite 模式。');
-        }
-        /**
-         * 销毁/清理 — 原生模式无需清理
-         */
-        dispose() {
-            // 原生模式没有需要清理的资源
-        }
+        return { mode: 'empty' };
     }
 
     var commonjsGlobal = typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : typeof global !== 'undefined' ? global : typeof self !== 'undefined' ? self : {};
@@ -8414,7 +7046,9 @@ $CONTENT
         const normalizedHeaders = Array.isArray(tableHeaders)
             ? tableHeaders.map((item) => String(item ?? '').trim()).filter(Boolean)
             : [];
-        const comparableHeaders = normalizedHeaders[0] === 'row_id'
+        const firstHeader = normalizedHeaders[0];
+        const isRowIdHeader = firstHeader === 'row_id' || firstHeader === '行号';
+        const comparableHeaders = isRowIdHeader
             ? normalizedHeaders.slice(1)
             : normalizedHeaders;
         const comparableColumns = columnInfos.filter((item) => item.sqlName.toLowerCase() !== 'row_id');
@@ -8937,8 +7571,11 @@ $CONTENT
             // 构建列名映射（英文 → 中文）
             const ddl = meta.sourceData?.ddl || this.engine.getTableDDL(tableName) || '';
             const { sqlToChinese } = buildColumnNameMap(ddl);
-            // 转换为 content
-            const content = resultToContent(queryResult.columns, queryResult.values, sqlToChinese);
+            // 转换为 content。
+            // sql.js 对空表 SELECT * 可能返回空结果集且不带 columns；此时必须从 DDL 恢复列名，
+            // 否则空表会被导出成只有 ['row_id'] 的坏表头，污染后续 checkpoint/可视化编辑器。
+            const columns = queryResult.columns.length > 0 ? queryResult.columns : parseDDLColumnNames(ddl);
+            const content = resultToContent(columns, queryResult.values, sqlToChinese);
             return {
                 uid: meta.uid,
                 name: meta.name,
@@ -9000,6 +7637,2118 @@ $CONTENT
         }
         catch (_) {
             return {};
+        }
+    }
+
+    function deepClone_ACU$3(value) {
+        return JSON.parse(JSON.stringify(value));
+    }
+    function getV2FrameRefs_ACU(chat, isolationKey) {
+        const refs = [];
+        let aiFloor = 0;
+        for (let i = 0; i < chat.length; i += 1) {
+            const message = chat[i];
+            if (!message || message.is_user)
+                continue;
+            aiFloor += 1;
+            const tagData = readIsolatedTagData_ACU(message, isolationKey);
+            if (isV2TagData_ACU(tagData)) {
+                refs.push({ messageIndex: i, aiFloor, frame: tagData.storageFrame });
+            }
+        }
+        return refs;
+    }
+    function applyEventToScheduleSummary_ACU(summary, event, aiFloor) {
+        if (!event)
+            return;
+        const filledKeys = [...new Set([...(event.filledSheetKeys || []), ...(event.groupKeys || [])])];
+        for (const sheetKey of filledKeys) {
+            if (!summary[sheetKey])
+                summary[sheetKey] = {};
+            summary[sheetKey].lastFilledAiFloor = aiFloor;
+        }
+        for (const sheetKey of event.changedSheetKeys || []) {
+            if (!summary[sheetKey])
+                summary[sheetKey] = {};
+            summary[sheetKey].lastChangedAiFloor = aiFloor;
+        }
+    }
+    function replayEventForState_ACU(event, aiFloor) {
+        if (!event)
+            return;
+        const filledKeys = [...new Set([...(event.filledSheetKeys || []), ...(event.groupKeys || [])])];
+        for (const sheetKey of filledKeys) {
+            if (!independentTableStates_ACU[sheetKey])
+                independentTableStates_ACU[sheetKey] = {};
+            independentTableStates_ACU[sheetKey].lastUpdatedAiFloor = aiFloor;
+        }
+    }
+    function replayCheckpointSchedule_ACU(checkpoint, fallbackAiFloor) {
+        const summary = checkpoint.scheduleSummary || {};
+        for (const [sheetKey, state] of Object.entries(summary)) {
+            if (state.lastFilledAiFloor === undefined)
+                continue;
+            if (!independentTableStates_ACU[sheetKey])
+                independentTableStates_ACU[sheetKey] = {};
+            independentTableStates_ACU[sheetKey].lastUpdatedAiFloor = state.lastFilledAiFloor;
+        }
+        replayEventForState_ACU(checkpoint.event, fallbackAiFloor);
+    }
+    function replaceState_ACU(state, next) {
+        Object.keys(state).forEach(key => delete state[key]);
+        Object.assign(state, deepClone_ACU$3(next));
+    }
+    function splitSqlStatementsForReplay_ACU(sql) {
+        const statements = [];
+        let current = '';
+        let inString = false;
+        let stringChar = '';
+        for (let i = 0; i < sql.length; i += 1) {
+            const char = sql[i];
+            if (inString) {
+                current += char;
+                if (char === stringChar) {
+                    if (i + 1 < sql.length && sql[i + 1] === stringChar) {
+                        current += sql[i + 1];
+                        i += 1;
+                    }
+                    else {
+                        inString = false;
+                    }
+                }
+            }
+            else if (char === "'" || char === '"') {
+                inString = true;
+                stringChar = char;
+                current += char;
+            }
+            else if (char === ';') {
+                const trimmed = current.trim();
+                if (trimmed)
+                    statements.push(trimmed);
+                current = '';
+            }
+            else {
+                current += char;
+            }
+        }
+        const tail = current.trim();
+        if (tail)
+            statements.push(tail);
+        return statements;
+    }
+    function normalizeSqlStatementsForReplay_ACU(statements) {
+        return statements
+            .flatMap(statement => splitSqlStatementsForReplay_ACU(String(statement || '').replace(/<!--|-->/g, '').trim()))
+            .map(statement => normalizeStatementValues(normalizeSqlStructure(statement)))
+            .filter(Boolean);
+    }
+    async function ensureSqlReplayRuntime_ACU(runtime, state) {
+        if (runtime.loaded)
+            return;
+        await runtime.engine.init();
+        runtime.syncBridge.loadFromTableData(state);
+        runtime.loaded = true;
+    }
+    function exportSqlReplayRuntime_ACU(runtime, state) {
+        if (!runtime.loaded)
+            return;
+        const next = runtime.syncBridge.exportToTableData((state.mate || { type: 'acu', version: 1 }));
+        replaceState_ACU(state, next);
+    }
+    async function reloadSqlReplayRuntime_ACU(runtime, state) {
+        if (!runtime.loaded)
+            return;
+        runtime.engine.dispose();
+        runtime.loaded = false;
+        await ensureSqlReplayRuntime_ACU(runtime, state);
+    }
+    async function applySqlBatchOperationV2_ACU(state, operation, runtime) {
+        const statements = normalizeSqlStatementsForReplay_ACU(operation.statements || []);
+        if (statements.length === 0)
+            return;
+        await ensureSqlReplayRuntime_ACU(runtime, state);
+        const params = Array.isArray(operation.params) ? operation.params : [];
+        if (params.length > 0) {
+            statements.forEach((statement, index) => {
+                runtime.engine.run(statement, params[index] || []);
+            });
+            return;
+        }
+        runtime.engine.runBatch(statements);
+    }
+    function applyTablePatchV2_ACU(state, patch) {
+        if (patch.kind === 'sheet_replace') {
+            state[patch.sheetKey] = deepClone_ACU$3(patch.sheet);
+            return;
+        }
+        const sheet = state[patch.sheetKey];
+        if (!sheet || !Array.isArray(sheet.content)) {
+            logWarn_ACU(`[V2 Replay] 跳过 patch，缺少表或 content: ${patch.sheetKey}`);
+            return;
+        }
+        if (patch.kind === 'row_upsert') {
+            const rowIndex = sheet.content.findIndex(row => Array.isArray(row) && row[0] === patch.rowId);
+            const nextCells = deepClone_ACU$3(patch.cells);
+            if (rowIndex >= 0) {
+                sheet.content[rowIndex] = nextCells;
+            }
+            else {
+                sheet.content.push(nextCells);
+            }
+            return;
+        }
+        if (patch.kind === 'row_delete') {
+            sheet.content = sheet.content.filter(row => !(Array.isArray(row) && row[0] === patch.rowId));
+            return;
+        }
+        if (patch.kind === 'meta_update') {
+            Object.assign(sheet, deepClone_ACU$3(patch.meta));
+        }
+    }
+    function parseDslArgs_ACU(argsString) {
+        try {
+            const firstBracket = argsString.indexOf('{');
+            if (firstBracket === -1)
+                return JSON.parse(`[${argsString}]`);
+            const paramsPart = argsString.substring(0, firstBracket).trim();
+            const jsonPart = argsString.substring(firstBracket);
+            const initialArgs = JSON.parse(`[${paramsPart.replace(/,$/, '')}]`);
+            return [...initialArgs, JSON.parse(jsonPart)];
+        }
+        catch (_) {
+            return null;
+        }
+    }
+    function applyTableEditDslOperationV2_ACU(state, text) {
+        const sheetKeys = Object.keys(state).filter(k => k.startsWith('sheet_')).sort();
+        const commands = String(text || '')
+            .replace(/<!--|-->/g, '')
+            .split(/;\s*(?=(?:insertRow|updateRow|deleteRow)\s*\()/g)
+            .map(item => item.trim().replace(/;$/, ''))
+            .filter(Boolean);
+        for (const commandLine of commands) {
+            const match = commandLine.match(/^(insertRow|deleteRow|updateRow)\s*\((.*)\)$/);
+            if (!match)
+                continue;
+            const command = match[1];
+            const args = parseDslArgs_ACU(match[2]);
+            if (!args)
+                continue;
+            const tableIndex = Number(args[0]);
+            const sheetKey = sheetKeys[tableIndex];
+            const sheet = sheetKey ? state[sheetKey] : null;
+            if (!sheet || !Array.isArray(sheet.content))
+                continue;
+            if (command === 'insertRow') {
+                const data = args[1] || {};
+                const headers = Array.isArray(sheet.content[0]) ? sheet.content[0].slice(1) : [];
+                const row = [String(sheet.content.length)];
+                headers.forEach((_, colIndex) => row.push(data[colIndex] ?? data[String(colIndex)] ?? ''));
+                sheet.content.push(row);
+            }
+            else if (command === 'deleteRow') {
+                const rowIndex = Number(args[1]);
+                if (Number.isFinite(rowIndex) && sheet.content.length > rowIndex + 1)
+                    sheet.content.splice(rowIndex + 1, 1);
+            }
+            else if (command === 'updateRow') {
+                const rowIndex = Number(args[1]);
+                const data = args[2] || {};
+                const row = Number.isFinite(rowIndex) ? sheet.content[rowIndex + 1] : null;
+                if (!Array.isArray(row))
+                    continue;
+                Object.keys(data).forEach(colIndexStr => {
+                    const colIndex = Number.parseInt(colIndexStr, 10);
+                    if (!Number.isFinite(colIndex))
+                        return;
+                    row[colIndex + 1] = data[colIndexStr];
+                });
+            }
+        }
+    }
+    async function applyTableOperationV2_ACU(state, operation, runtime) {
+        if (!operation)
+            return;
+        const ownedRuntime = !runtime && operation.kind === 'sql_batch'
+            ? { engine: new SqliteEngine(), syncBridge: null, loaded: false }
+            : null;
+        if (ownedRuntime)
+            ownedRuntime.syncBridge = new SyncBridge(ownedRuntime.engine);
+        const effectiveRuntime = runtime || ownedRuntime || null;
+        try {
+            if (operation.kind === 'data_replace') {
+                if (effectiveRuntime?.loaded)
+                    exportSqlReplayRuntime_ACU(effectiveRuntime, state);
+                replaceState_ACU(state, operation.data);
+                if (effectiveRuntime?.loaded)
+                    await reloadSqlReplayRuntime_ACU(effectiveRuntime, state);
+                return;
+            }
+            if (operation.kind === 'sql_batch') {
+                if (!effectiveRuntime)
+                    throw new Error('sql_batch replay requires runtime');
+                await applySqlBatchOperationV2_ACU(state, operation, effectiveRuntime);
+                return;
+            }
+            if (operation.kind === 'sheet_replace') {
+                if (effectiveRuntime?.loaded)
+                    exportSqlReplayRuntime_ACU(effectiveRuntime, state);
+                state[operation.sheetKey] = deepClone_ACU$3(operation.sheet);
+                if (effectiveRuntime?.loaded)
+                    await reloadSqlReplayRuntime_ACU(effectiveRuntime, state);
+                return;
+            }
+            if (operation.kind === 'row_upsert' || operation.kind === 'row_delete' || operation.kind === 'meta_update') {
+                if (effectiveRuntime?.loaded)
+                    exportSqlReplayRuntime_ACU(effectiveRuntime, state);
+                applyTablePatchV2_ACU(state, operation);
+                if (effectiveRuntime?.loaded)
+                    await reloadSqlReplayRuntime_ACU(effectiveRuntime, state);
+                return;
+            }
+            if (operation.kind === 'table_edit_dsl') {
+                if (effectiveRuntime?.loaded)
+                    exportSqlReplayRuntime_ACU(effectiveRuntime, state);
+                applyTableEditDslOperationV2_ACU(state, operation.text);
+                if (effectiveRuntime?.loaded)
+                    await reloadSqlReplayRuntime_ACU(effectiveRuntime, state);
+            }
+        }
+        finally {
+            if (ownedRuntime)
+                ownedRuntime.engine.dispose();
+        }
+    }
+    function collectScheduleSummaryFromFramesV2_ACU(chatArg, isolationKey, options = {}) {
+        const chat = chatArg || [];
+        if (!Array.isArray(chat) || chat.length === 0)
+            return {};
+        const frameRefs = getV2FrameRefs_ACU(chat, isolationKey)
+            .filter(ref => options.maxMessageIndex === undefined || ref.messageIndex <= options.maxMessageIndex);
+        const checkpointRef = [...frameRefs].reverse().find(ref => ref.frame.checkpoint?.kind === 'full');
+        if (!checkpointRef || !checkpointRef.frame.checkpoint)
+            return {};
+        const summary = deepClone_ACU$3(checkpointRef.frame.checkpoint.scheduleSummary || {});
+        applyEventToScheduleSummary_ACU(summary, checkpointRef.frame.checkpoint.event, checkpointRef.aiFloor);
+        for (const ref of frameRefs) {
+            if (ref.messageIndex < checkpointRef.messageIndex)
+                continue;
+            const entries = [...(ref.frame.logEntries || [])].sort((a, b) => a.seq - b.seq);
+            for (const entry of entries) {
+                applyEventToScheduleSummary_ACU(summary, entry, ref.aiFloor);
+            }
+        }
+        return summary;
+    }
+    async function loadTableStateFromFramesV2_ACU(chatArg, isolationKeyArg, options = {}) {
+        const chat = chatArg || getChatArray_ACU();
+        if (!Array.isArray(chat) || chat.length === 0)
+            return null;
+        const isolationKey = isolationKeyArg ?? getCurrentIsolationKey_ACU();
+        const frameRefs = getV2FrameRefs_ACU(chat, isolationKey)
+            .filter(ref => options.maxMessageIndex === undefined || ref.messageIndex <= options.maxMessageIndex);
+        const checkpointRef = [...frameRefs].reverse().find(ref => ref.frame.checkpoint?.kind === 'full');
+        if (!checkpointRef || !checkpointRef.frame.checkpoint) {
+            logWarn_ACU('[V2 Replay] 未找到 full checkpoint，无法恢复 V2 表格数据。');
+            return null;
+        }
+        const checkpoint = checkpointRef.frame.checkpoint;
+        const state = deepClone_ACU$3(checkpoint.data);
+        const runtime = {
+            engine: new SqliteEngine(),
+            syncBridge: null,
+            loaded: false,
+        };
+        runtime.syncBridge = new SyncBridge(runtime.engine);
+        replayCheckpointSchedule_ACU(checkpoint, checkpointRef.aiFloor);
+        try {
+            for (const ref of frameRefs) {
+                if (ref.messageIndex < checkpointRef.messageIndex)
+                    continue;
+                const entries = [...(ref.frame.logEntries || [])].sort((a, b) => a.seq - b.seq);
+                for (const entry of entries) {
+                    try {
+                        if (Array.isArray(entry.operations) && entry.operations.length > 0) {
+                            for (const operation of entry.operations) {
+                                await applyTableOperationV2_ACU(state, operation, runtime);
+                            }
+                        }
+                        else {
+                            if (runtime.loaded)
+                                exportSqlReplayRuntime_ACU(runtime, state);
+                            // 兼容旧版 derived patch log；新 V2 不再写 patches。
+                            for (const patch of entry.patches || []) {
+                                applyTablePatchV2_ACU(state, patch);
+                            }
+                            if (runtime.loaded)
+                                await reloadSqlReplayRuntime_ACU(runtime, state);
+                        }
+                        replayEventForState_ACU(entry, ref.aiFloor);
+                    }
+                    catch (error) {
+                        logError_ACU(`[V2 Replay] 应用日志失败: messageIndex=${ref.messageIndex}, seq=${entry.seq}`, error);
+                        throw error;
+                    }
+                }
+            }
+            if (runtime.loaded)
+                exportSqlReplayRuntime_ACU(runtime, state);
+            return state;
+        }
+        finally {
+            runtime.engine.dispose();
+        }
+    }
+
+    const MAX_ENTRIES_AFTER_CHECKPOINT_ACU = 50;
+    const MAX_OPERATION_BYTES_AFTER_CHECKPOINT_ACU = 256 * 1024;
+    const MAX_OPERATION_COUNT_AFTER_CHECKPOINT_ACU = 2000;
+    const SINGLE_OPERATION_CHECKPOINT_RATIO_ACU = 0.5;
+    const CUMULATIVE_OPERATION_CHECKPOINT_RATIO_ACU = 0.35;
+    function safeJsonByteLength_ACU(value) {
+        try {
+            return new TextEncoder().encode(JSON.stringify(value)).length;
+        }
+        catch {
+            return Number.MAX_SAFE_INTEGER;
+        }
+    }
+    function countOperationUnits_ACU(operations) {
+        return operations.reduce((sum, operation) => {
+            if (operation?.kind === 'sql_batch' && Array.isArray(operation.statements))
+                return sum + operation.statements.length;
+            if (operation?.kind === 'data_replace' || operation?.kind === 'sheet_replace')
+                return sum + 1;
+            return sum + 1;
+        }, 0);
+    }
+    function deepClone_ACU$2(value) {
+        return JSON.parse(JSON.stringify(value));
+    }
+    function generateEntryId_ACU() {
+        return `v2_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    }
+    function buildCommitRevision_ACU(seq, entryId) {
+        return `${seq}:${entryId}`;
+    }
+    function findTargetAiMessage_ACU(chat, targetMessageIndex) {
+        if (targetMessageIndex !== undefined && targetMessageIndex !== -1) {
+            const message = chat[targetMessageIndex];
+            if (message && !message.is_user) {
+                return { message, index: targetMessageIndex };
+            }
+            return null;
+        }
+        for (let i = chat.length - 1; i >= 0; i -= 1) {
+            if (chat[i] && !chat[i].is_user) {
+                return { message: chat[i], index: i };
+            }
+        }
+        return null;
+    }
+    function countAiFloor_ACU$1(chat, messageIndex) {
+        let count = 0;
+        for (let i = 0; i <= messageIndex && i < chat.length; i += 1) {
+            if (chat[i] && !chat[i].is_user)
+                count += 1;
+        }
+        return count;
+    }
+    function hasAnyV2Checkpoint_ACU(chat, isolationKey) {
+        return chat.some(message => {
+            const tagData = message?.TavernDB_ACU_IsolatedData?.[isolationKey];
+            return isV2TagData_ACU(tagData) && tagData.storageFrame.checkpoint?.kind === 'full';
+        });
+    }
+    function getLatestTableStorageHeadRevisionV2_ACU(chat, isolationKey) {
+        if (!Array.isArray(chat) || chat.length === 0)
+            return null;
+        let headRevision = null;
+        for (const message of chat) {
+            const tagData = message?.TavernDB_ACU_IsolatedData?.[isolationKey];
+            if (isV2TagData_ACU(tagData)) {
+                headRevision = tagData.storageFrame.headRevision ?? headRevision;
+            }
+        }
+        return headRevision;
+    }
+    function getLogEntriesAfterLatestCheckpoint_ACU(chat, isolationKey) {
+        let latestCheckpointIndex = -1;
+        for (let i = 0; i < chat.length; i += 1) {
+            const tagData = chat[i]?.TavernDB_ACU_IsolatedData?.[isolationKey];
+            if (isV2TagData_ACU(tagData) && tagData.storageFrame.checkpoint?.kind === 'full') {
+                latestCheckpointIndex = i;
+            }
+        }
+        const entries = [];
+        for (let i = Math.max(0, latestCheckpointIndex); i < chat.length; i += 1) {
+            const tagData = chat[i]?.TavernDB_ACU_IsolatedData?.[isolationKey];
+            if (isV2TagData_ACU(tagData)) {
+                entries.push(...(tagData.storageFrame.logEntries || []));
+            }
+        }
+        return entries;
+    }
+    function shouldCreatePeriodicCheckpoint_ACU(chat, isolationKey, operations, afterData) {
+        const previousEntries = getLogEntriesAfterLatestCheckpoint_ACU(chat, isolationKey);
+        const entryCount = previousEntries.length + 1;
+        if (entryCount >= MAX_ENTRIES_AFTER_CHECKPOINT_ACU)
+            return true;
+        const previousOperations = previousEntries.flatMap(entry => entry.operations || []);
+        const cumulativeOperations = [...previousOperations, ...operations];
+        const fullCheckpointBytes = Math.max(1, safeJsonByteLength_ACU(afterData));
+        const cumulativeOperationBytes = safeJsonByteLength_ACU(cumulativeOperations);
+        const latestOperationBytes = safeJsonByteLength_ACU(operations);
+        const cumulativeOperationCount = countOperationUnits_ACU(cumulativeOperations);
+        return (cumulativeOperationBytes >= MAX_OPERATION_BYTES_AFTER_CHECKPOINT_ACU && cumulativeOperationBytes >= fullCheckpointBytes * CUMULATIVE_OPERATION_CHECKPOINT_RATIO_ACU)
+            || cumulativeOperationCount >= MAX_OPERATION_COUNT_AFTER_CHECKPOINT_ACU
+            || (latestOperationBytes >= MAX_OPERATION_BYTES_AFTER_CHECKPOINT_ACU && latestOperationBytes >= fullCheckpointBytes * SINGLE_OPERATION_CHECKPOINT_RATIO_ACU);
+    }
+    function normalizeKeys_ACU(keys, data) {
+        if (!Array.isArray(keys))
+            return [];
+        return [...new Set(keys.filter(key => typeof key === 'string' && key.startsWith('sheet_') && (!data || Boolean(data[key]))))];
+    }
+    function normalizeOperations_ACU(operations, afterData, source) {
+        if (Array.isArray(operations) && operations.length > 0) {
+            return deepClone_ACU$2(operations);
+        }
+        if (source === 'import') {
+            return [{
+                    kind: 'data_replace',
+                    data: deepClone_ACU$2(afterData),
+                    reason: 'import',
+                }];
+        }
+        return [];
+    }
+    function getOrInitV2Frame_ACU(isolatedData, isolationKey) {
+        const tagData = isolatedData[isolationKey];
+        if (isV2TagData_ACU(tagData)) {
+            return tagData.storageFrame;
+        }
+        const nextTagData = {
+            storageFrame: {
+                version: 2,
+                logEntries: [],
+            },
+            _acu_storage_version: 2,
+        };
+        if (tagData?.summaryVectorIndexState !== undefined) {
+            nextTagData.summaryVectorIndexState = tagData.summaryVectorIndexState;
+        }
+        if (tagData?.summaryVectorIndexManifest !== undefined) {
+            nextTagData.summaryVectorIndexManifest = tagData.summaryVectorIndexManifest;
+        }
+        isolatedData[isolationKey] = nextTagData;
+        return nextTagData.storageFrame;
+    }
+    async function persistTableMutationLogV2Core_ACU(options) {
+        const chat = getChatArray_ACU();
+        if (!chat || chat.length === 0) {
+            return { saved: false, error: 'chat history is empty' };
+        }
+        const target = findTargetAiMessage_ACU(chat, options.targetMessageIndex);
+        if (!target) {
+            return { saved: false, error: 'no AI message found' };
+        }
+        const isolationKey = options.isolationKey ?? getCurrentIsolationKey_ACU();
+        const afterData = deepClone_ACU$2(options.afterData);
+        const filledSheetKeys = normalizeKeys_ACU(options.filledSheetKeys, afterData);
+        const candidateChangedSheetKeys = normalizeKeys_ACU(options.candidateChangedSheetKeys, afterData);
+        const operations = normalizeOperations_ACU(options.operations, afterData, options.source);
+        const effectiveChangedSheetKeys = candidateChangedSheetKeys;
+        const isolatedData = cloneIsolatedData_ACU(target.message);
+        const frame = getOrInitV2Frame_ACU(isolatedData, isolationKey);
+        const currentWriteSet = options.writeSet ?? options.transactionContext?.writeSet;
+        const revisionWriteSet = options.revisionWriteSet;
+        const requestedBaseRevision = options.baseRevision !== undefined
+            ? options.baseRevision
+            : options.transactionContext?.baseRevision;
+        const hasExistingCheckpoint = hasAnyV2Checkpoint_ACU(chat, isolationKey);
+        const hasMetadataOnlyFillEvent = filledSheetKeys.length > 0 || (Array.isArray(options.groupKeys) && options.groupKeys.length > 0);
+        if (operations.length === 0 && !hasMetadataOnlyFillEvent && options.source !== 'import' && hasExistingCheckpoint) {
+            return { saved: false, error: `V2 operation log requires explicit operations for source=${options.source}; snapshot diff fallback is not allowed.` };
+        }
+        const shouldCheckpoint = options.forceCheckpoint
+            || !hasExistingCheckpoint
+            || shouldCreatePeriodicCheckpoint_ACU(chat, isolationKey, operations, afterData);
+        const now = Date.now();
+        const aiFloor = countAiFloor_ACU$1(chat, target.index);
+        let entry;
+        if (shouldCheckpoint) {
+            const checkpointRevision = buildCommitRevision_ACU('checkpoint', generateEntryId_ACU());
+            const checkpointEvent = {
+                filledSheetKeys,
+                changedSheetKeys: effectiveChangedSheetKeys,
+                groupKeys: options.groupKeys || [],
+                requestId: options.requestId,
+                batchId: options.batchId,
+                error: options.error,
+            };
+            frame.checkpoint = {
+                kind: 'full',
+                createdAt: now,
+                reason: options.checkpointReason || (!hasExistingCheckpoint ? 'init' : 'periodic'),
+                data: afterData,
+                scheduleSummary: collectScheduleSummaryFromFramesV2_ACU(chat, isolationKey, { maxMessageIndex: target.index }),
+                event: checkpointEvent,
+            };
+            frame.headRevision = checkpointRevision;
+            frame.logEntries = [];
+            logDebug_ACU(`[V2 Persist] 写入 full checkpoint: messageIndex=${target.index}, revision=${checkpointRevision}, sheets=${Object.keys(afterData).filter(k => k.startsWith('sheet_')).length}`);
+        }
+        else {
+            const nextSeq = Math.max(0, ...frame.logEntries.map(item => Number(item.seq) || 0)) + 1;
+            const entryId = generateEntryId_ACU();
+            const parentRevision = options.parentRevision !== undefined ? options.parentRevision : (frame.headRevision ?? null);
+            const commitRevision = buildCommitRevision_ACU(nextSeq, entryId);
+            entry = {
+                seq: nextSeq,
+                entryId,
+                createdAt: now,
+                source: options.source,
+                targetMessageIndex: target.index,
+                aiFloor,
+                filledSheetKeys,
+                changedSheetKeys: effectiveChangedSheetKeys,
+                groupKeys: options.groupKeys || [],
+                requestId: options.requestId,
+                batchId: options.batchId,
+                error: options.error,
+                operations,
+                baseRevision: requestedBaseRevision ?? parentRevision,
+                parentRevision,
+                commitRevision,
+                writeSet: currentWriteSet,
+            };
+            frame.logEntries.push(entry);
+            frame.headRevision = commitRevision;
+            logDebug_ACU(`[V2 Persist] 追加 operation log entry: messageIndex=${target.index}, seq=${entry.seq}, revision=${commitRevision}, operations=${operations.length}`);
+        }
+        target.message.TavernDB_ACU_IsolatedData = isolatedData;
+        writeMessageIdentity_ACU(target.message, {
+            enabled: settings_ACU.dataIsolationEnabled,
+            code: settings_ACU.dataIsolationCode,
+        });
+        if (operations.length === 0 && filledSheetKeys.length === 0 && !shouldCheckpoint) {
+            logWarn_ACU(`[V2 Persist] 无 operation 且无 filled 事件，仍保存空日志事件: messageIndex=${target.index}`);
+        }
+        await saveChatToHost_ACU();
+        return { saved: true, messageIndex: target.index, entry };
+    }
+    async function persistTableMutationLogV2_ACU(options) {
+        if (!options.transactionContext) {
+            return { saved: false, error: 'V2 operation log write requires TableWriteTransactionContext; direct unsafe writes are not allowed.' };
+        }
+        if (options.assumeCommitLock) {
+            return persistTableMutationLogV2Core_ACU(options);
+        }
+        return options.transactionContext.runCommit(() => persistTableMutationLogV2Core_ACU(options), options.revisionWriteSet);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // service/table/table-service.ts — 表格数据操作 service 层
+    // 从 data/repositories/table-repo.ts 迁入（消除 data 层越权）
+    // ═══════════════════════════════════════════════════════════════
+    const TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU = 'Table persistence requires table update commit model; direct unsafe writes are not allowed.';
+    async function persistTablesToChatMessage_ACU(options = {}) {
+        if (!options.transactionContext || options.assumeCommitLock !== true) {
+            logError_ACU(TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU);
+            return { saved: false, error: TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU };
+        }
+        return persistTablesToChatMessageWithLockOption_ACU(options);
+    }
+    async function persistTablesToChatMessageWithLockOption_ACU(options = {}) {
+        const { targetMessageIndex = -1, targetSheetKeys = null, updateGroupKeys = null, trackingSheetKeys, tableData: explicitTableData, trackAsUpdate = true, source, requestId, batchId, operations, revisionWriteSet, assumeCommitLock, transactionContext, } = options;
+        const effectiveTableData = explicitTableData !== undefined ? explicitTableData : currentJsonTableData_ACU;
+        if (!effectiveTableData) {
+            logError_ACU('Save aborted: currentJsonTableData_ACU is null.');
+            return { saved: false, error: 'currentJsonTableData is null' };
+        }
+        const currentIsolationKey = getCurrentIsolationKey_ACU();
+        const persistCore = async () => {
+            const chat = getChatArray_ACU();
+            if (!chat || chat.length === 0) {
+                logError_ACU('Save failed: Chat history is empty.');
+                return { saved: false, error: 'chat history is empty' };
+            }
+            const strategy = resolveTableStorageStrategy_ACU(chat, currentIsolationKey, {
+                enabled: settings_ACU.dataIsolationEnabled,
+                code: settings_ACU.dataIsolationCode,
+            });
+            if (strategy.mode === 'legacy-v1') {
+                const message = 'legacy-v1 table storage must be migrated during database load before any write; write-time fallback is not allowed.';
+                logError_ACU(message);
+                return { saved: false, error: message };
+            }
+            let keysToSave = Array.isArray(targetSheetKeys)
+                ? targetSheetKeys.filter((sheetKey) => typeof sheetKey === 'string' && sheetKey.length > 0)
+                : getSortedSheetKeys_ACU(effectiveTableData);
+            keysToSave = [...new Set(keysToSave.filter(sheetKey => Boolean(effectiveTableData[sheetKey])))];
+            const changedCandidateKeys = Array.isArray(trackingSheetKeys)
+                ? trackingSheetKeys.filter((sheetKey) => typeof sheetKey === 'string' && sheetKey.length > 0)
+                : keysToSave;
+            const trackingKeySet = new Set(changedCandidateKeys.filter(sheetKey => Boolean(effectiveTableData[sheetKey])));
+            const metadataOnlyUpdateGroupKeys = Array.isArray(updateGroupKeys)
+                ? [...new Set(updateGroupKeys.filter(sheetKey => typeof sheetKey === 'string' && Boolean(effectiveTableData[sheetKey])))]
+                : [];
+            try {
+                const existingGuide = getChatSheetGuideDataForIsolationKey_ACU(currentIsolationKey);
+                if (!existingGuide || !Object.keys(existingGuide).some(k => k.startsWith('sheet_'))) {
+                    const templateObjForSeed = parseTableTemplateJson_ACU({ stripSeedRows: false });
+                    const guideData = buildChatSheetGuideDataFromData_ACU(effectiveTableData, {
+                        preserveSeedRowsFromGuideData: null,
+                        seedRowsFromTemplateObj: templateObjForSeed,
+                    });
+                    if (guideData && Object.keys(guideData).some(k => k.startsWith('sheet_'))) {
+                        setChatSheetGuideDataForIsolationKey_ACU(currentIsolationKey, guideData, { reason: 'first_fill' });
+                        logDebug_ACU(`[SheetGuide] Created chat sheet guide for tag [${currentIsolationKey || '无标签'}] (tables=${Object.keys(guideData).filter(k => k.startsWith('sheet_')).length}).`);
+                    }
+                }
+            }
+            catch (e) {
+                logWarn_ACU('[SheetGuide] Failed to create sheet guide on first fill:', e);
+            }
+            const persistV2InTransaction = async (transactionContext) => {
+                const result = await persistTableMutationLogV2_ACU({
+                    targetMessageIndex,
+                    source: source || (metadataOnlyUpdateGroupKeys.length > 0 ? 'group_fill' : 'system'),
+                    afterData: effectiveTableData,
+                    operations,
+                    filledSheetKeys: trackAsUpdate ? metadataOnlyUpdateGroupKeys : [],
+                    candidateChangedSheetKeys: [...trackingKeySet],
+                    groupKeys: metadataOnlyUpdateGroupKeys,
+                    requestId,
+                    batchId,
+                    forceCheckpoint: strategy.mode === 'empty',
+                    checkpointReason: strategy.mode === 'empty' ? 'init' : undefined,
+                    isolationKey: currentIsolationKey,
+                    revisionWriteSet,
+                    assumeCommitLock,
+                    transactionContext,
+                });
+                return { saved: result.saved, messageIndex: result.messageIndex, error: result.error };
+            };
+            if (!transactionContext || assumeCommitLock !== true) {
+                logError_ACU(TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU);
+                return { saved: false, error: TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU };
+            }
+            return persistV2InTransaction(transactionContext);
+        };
+        return persistCore();
+    }
+    async function persistTablesToChatMessageLegacyV1WithLockOption_ACU(options = {}) {
+        const { targetMessageIndex = -1, targetSheetKeys = null, updateGroupKeys = null, trackingSheetKeys = targetSheetKeys, tableData: explicitTableData, trackAsUpdate = true, } = options;
+        /**
+         * 保存独立表格数据到聊天记录。
+         * 返回 { saved: boolean, messageIndex?: number, error?: string }
+         * 注意：不再内部调用 refreshMergedDataAndNotify，调用方按需自行刷新。
+         */
+        const _skipPostRefresh = false;
+        const effectiveTableData = explicitTableData !== undefined ? explicitTableData : currentJsonTableData_ACU;
+        if (!effectiveTableData) {
+            logError_ACU('Save aborted: currentJsonTableData_ACU is null.');
+            return { saved: false, error: 'currentJsonTableData is null' };
+        }
+        const currentIsolationKey = getCurrentIsolationKey_ACU();
+        const persistCore = async () => {
+            const chat = getChatArray_ACU();
+            if (!chat || chat.length === 0) {
+                logError_ACU('Save failed: Chat history is empty.');
+                return { saved: false, error: 'chat history is empty' };
+            }
+            let targetMessage = null;
+            let finalIndex = -1;
+            if (targetMessageIndex !== -1 && chat[targetMessageIndex] && !chat[targetMessageIndex].is_user) {
+                targetMessage = chat[targetMessageIndex];
+                finalIndex = targetMessageIndex;
+            }
+            else {
+                for (let i = chat.length - 1; i >= 0; i--) {
+                    if (!chat[i].is_user) {
+                        targetMessage = chat[i];
+                        finalIndex = i;
+                        break;
+                    }
+                }
+            }
+            if (!targetMessage) {
+                logWarn_ACU('Save failed: No AI message found.');
+                return { saved: false, error: 'no AI message found' };
+            }
+            // 查找上一个 AI 楼层的 tagData 作为 delta 的 base
+            let prevTagData = null;
+            for (let i = finalIndex - 1; i >= 0; i--) {
+                if (!chat[i].is_user) {
+                    const td = readIsolatedTagData_ACU(chat[i], currentIsolationKey);
+                    if (td && td.independentData && Object.keys(td.independentData).some(k => k.startsWith('sheet_'))) {
+                        prevTagData = td;
+                    }
+                    break;
+                }
+            }
+            try {
+                const existingGuide = getChatSheetGuideDataForIsolationKey_ACU(currentIsolationKey);
+                if (!existingGuide || !Object.keys(existingGuide).some(k => k.startsWith('sheet_'))) {
+                    const templateObjForSeed = parseTableTemplateJson_ACU({ stripSeedRows: false });
+                    const guideData = buildChatSheetGuideDataFromData_ACU(effectiveTableData, {
+                        preserveSeedRowsFromGuideData: null,
+                        seedRowsFromTemplateObj: templateObjForSeed,
+                    });
+                    if (guideData && Object.keys(guideData).some(k => k.startsWith('sheet_'))) {
+                        setChatSheetGuideDataForIsolationKey_ACU(currentIsolationKey, guideData, { reason: 'first_fill' });
+                        logDebug_ACU(`[SheetGuide] Created chat sheet guide for tag [${currentIsolationKey || '无标签'}] (tables=${Object.keys(guideData).filter(k => k.startsWith('sheet_')).length}).`);
+                    }
+                }
+            }
+            catch (e) {
+                logWarn_ACU('[SheetGuide] Failed to create sheet guide on first fill:', e);
+            }
+            const isolatedData = cloneIsolatedData_ACU(targetMessage);
+            if (!isolatedData[currentIsolationKey]) {
+                isolatedData[currentIsolationKey] = {
+                    independentData: {},
+                    modifiedKeys: [],
+                    updateGroupKeys: [],
+                };
+            }
+            const currentTagData = isolatedData[currentIsolationKey];
+            let independentData = {};
+            if (isDeltaTagData_ACU(currentTagData) && currentTagData.incrementalData) {
+                independentData = prevTagData?.independentData
+                    ? JSON.parse(JSON.stringify(prevTagData.independentData))
+                    : JSON.parse(JSON.stringify(currentTagData.independentData || {}));
+                const existingCheckpointData = JSON.parse(JSON.stringify(currentTagData.independentData || {}));
+                for (const [sheetKey, delta] of Object.entries(currentTagData.incrementalData)) {
+                    const baseSheet = independentData[sheetKey] || existingCheckpointData[sheetKey];
+                    if (!baseSheet) {
+                        logWarn_ACU(`[表格增量] 楼层 #${finalIndex} 既有 delta 表 ${sheetKey} 缺少 base，回退保留当前楼层已存快照`);
+                        if (existingCheckpointData[sheetKey]) {
+                            independentData[sheetKey] = existingCheckpointData[sheetKey];
+                        }
+                        continue;
+                    }
+                    const normalizedBaseSheet = JSON.parse(JSON.stringify(baseSheet));
+                    if (Array.isArray(normalizedBaseSheet.content)) {
+                        normalizedBaseSheet.content = ensureStableRowIdsForSheetContent_ACU(normalizedBaseSheet.content);
+                    }
+                    independentData[sheetKey] = applyTableDelta_ACU(normalizedBaseSheet, delta, sheetKey);
+                }
+            }
+            else {
+                independentData = JSON.parse(JSON.stringify(currentTagData.independentData || {}));
+            }
+            let keysToSave = Array.isArray(targetSheetKeys)
+                ? targetSheetKeys.filter((sheetKey) => typeof sheetKey === 'string' && sheetKey.length > 0)
+                : getSortedSheetKeys_ACU(effectiveTableData);
+            keysToSave = [...new Set(keysToSave.filter(sheetKey => Boolean(effectiveTableData[sheetKey])))];
+            const trackingCandidateKeys = [
+                ...keysToSave,
+                ...(Array.isArray(trackingSheetKeys)
+                    ? trackingSheetKeys.filter((sheetKey) => typeof sheetKey === 'string' && sheetKey.length > 0)
+                    : []),
+            ];
+            const trackingKeySet = new Set(trackingCandidateKeys.filter(sheetKey => Boolean(effectiveTableData[sheetKey])));
+            const actuallyModifiedKeys = [...trackingKeySet];
+            const metadataOnlyUpdateGroupKeys = Array.isArray(updateGroupKeys)
+                ? [...new Set(updateGroupKeys.filter(sheetKey => trackingKeySet.has(sheetKey) && Boolean(effectiveTableData[sheetKey])))]
+                : [];
+            if (keysToSave.length === 0 && trackAsUpdate && actuallyModifiedKeys.length > 0) {
+                const existingModifiedKeys = currentTagData.modifiedKeys || [];
+                currentTagData.modifiedKeys = [...new Set([...existingModifiedKeys, ...actuallyModifiedKeys])];
+                if (metadataOnlyUpdateGroupKeys.length > 0) {
+                    const existingGroupKeys = currentTagData.updateGroupKeys || [];
+                    currentTagData.updateGroupKeys = [...new Set([...existingGroupKeys, ...metadataOnlyUpdateGroupKeys])];
+                }
+                writeIsolatedTagData_ACU(targetMessage, currentIsolationKey, currentTagData);
+                writeMessageIdentity_ACU(targetMessage, {
+                    enabled: settings_ACU.dataIsolationEnabled,
+                    code: settings_ACU.dataIsolationCode,
+                });
+                await saveChatToHost_ACU();
+                return { saved: true, messageIndex: finalIndex };
+            }
+            keysToSave.forEach(sheetKey => {
+                const table = effectiveTableData[sheetKey];
+                if (table) {
+                    const normalizedTable = JSON.parse(JSON.stringify(table));
+                    if (Array.isArray(normalizedTable.content)) {
+                        normalizedTable.content = ensureStableRowIdsForSheetContent_ACU(normalizedTable.content);
+                    }
+                    independentData[sheetKey] = sanitizeSheetForStorage_ACU(normalizedTable);
+                }
+            });
+            currentTagData.independentData = independentData;
+            // ── 增量/checkpoint 模式判定 ──
+            let persistedChangedKeySet = new Set();
+            if (prevTagData && prevTagData.independentData) {
+                // 尝试对目标楼层已合并后的表构建 delta。
+                // 同一楼层可能由多个更新组分批写入，必须保留此前组已写入的 incrementalData。
+                const incrementalData = {};
+                let anyDegraded = false;
+                for (const sheetKey of Object.keys(independentData).filter(k => k.startsWith('sheet_'))) {
+                    const nextSheet = independentData[sheetKey];
+                    if (!nextSheet)
+                        continue;
+                    const normalizedBaseSheet = JSON.parse(JSON.stringify(prevTagData.independentData[sheetKey] || null));
+                    if (normalizedBaseSheet && Array.isArray(normalizedBaseSheet.content)) {
+                        normalizedBaseSheet.content = ensureStableRowIdsForSheetContent_ACU(normalizedBaseSheet.content);
+                    }
+                    const result = buildTableDelta_ACU(normalizedBaseSheet, nextSheet, sheetKey);
+                    if (result.degraded) {
+                        anyDegraded = true;
+                        logDebug_ACU(`[表格增量] ${sheetKey} 退化: ${result.degradeReason}，本楼层将使用 checkpoint 模式`);
+                        break;
+                    }
+                    if (result.delta && (result.delta.rowDeltas.length > 0 || result.delta.metaChanged)) {
+                        incrementalData[sheetKey] = result.delta;
+                    }
+                }
+                if (!anyDegraded) {
+                    // delta 模式：写入增量数据，independentData 清空以节省存储空间
+                    currentTagData.incrementalData = incrementalData;
+                    currentTagData.independentData = {};
+                    currentTagData._acu_storage_mode = 'delta';
+                    currentTagData._acu_storage_version = 1;
+                    persistedChangedKeySet = new Set(Object.keys(incrementalData));
+                    logDebug_ACU(`[表格增量] 楼层 #${finalIndex} 使用 delta 模式，${Object.keys(incrementalData).length} 张表有变更`);
+                }
+                else {
+                    // checkpoint 模式：退化，写完整快照
+                    delete currentTagData.incrementalData;
+                    currentTagData._acu_storage_mode = 'checkpoint';
+                    currentTagData._acu_storage_version = 1;
+                    persistedChangedKeySet = new Set(actuallyModifiedKeys.filter(sheetKey => Boolean(independentData[sheetKey])));
+                    logDebug_ACU(`[表格Checkpoint] 楼层 #${finalIndex} 使用 checkpoint 模式`);
+                }
+            }
+            else {
+                // 无上一楼层 base → checkpoint 模式（首楼层或首次出现该标签）
+                delete currentTagData.incrementalData;
+                currentTagData._acu_storage_mode = 'checkpoint';
+                currentTagData._acu_storage_version = 1;
+                persistedChangedKeySet = new Set(actuallyModifiedKeys.filter(sheetKey => Boolean(independentData[sheetKey])));
+                logDebug_ACU(`[表格Checkpoint] 楼层 #${finalIndex} 无 base，使用 checkpoint 模式`);
+            }
+            const trackingModifiedKeys = actuallyModifiedKeys;
+            const trackingUpdateGroupKeys = metadataOnlyUpdateGroupKeys;
+            if (trackAsUpdate && trackingModifiedKeys.length > 0) {
+                const existingModifiedKeys = currentTagData.modifiedKeys || [];
+                currentTagData.modifiedKeys = [...new Set([...existingModifiedKeys, ...trackingModifiedKeys])];
+                logDebug_ACU(`[Tracking] Recorded modified keys for tag [${currentIsolationKey || '无标签'}] at index ${finalIndex}: ${currentTagData.modifiedKeys.join(', ')}`);
+            }
+            if (trackAsUpdate && trackingUpdateGroupKeys.length > 0 && trackingModifiedKeys.length > 0) {
+                const existingGroupKeys = currentTagData.updateGroupKeys || [];
+                currentTagData.updateGroupKeys = [...new Set([...existingGroupKeys, ...trackingUpdateGroupKeys])];
+                logDebug_ACU(`[Merge Update Success] Group keys for tag [${currentIsolationKey || '无标签'}] recorded at index ${finalIndex}: ${currentTagData.updateGroupKeys.join(', ')}`);
+            }
+            else if (trackAsUpdate && updateGroupKeys && updateGroupKeys.length > 0 && actuallyModifiedKeys.length === 0) {
+                logDebug_ACU(`[Merge Update Failed] No tables were modified for tag [${currentIsolationKey || '无标签'}]. Group keys NOT recorded: ${updateGroupKeys.join(', ')}`);
+            }
+            else if (trackAsUpdate && updateGroupKeys && updateGroupKeys.length > 0 && trackingUpdateGroupKeys.length === 0) {
+                logDebug_ACU(`[Merge Update Skipped] No tracked group keys intersected for tag [${currentIsolationKey || '无标签'}]. Group keys NOT recorded: ${updateGroupKeys.join(', ')}`);
+            }
+            writeIsolatedTagData_ACU(targetMessage, currentIsolationKey, currentTagData);
+            writeMessageIdentity_ACU(targetMessage, {
+                enabled: settings_ACU.dataIsolationEnabled,
+                code: settings_ACU.dataIsolationCode,
+            });
+            logDebug_ACU(`Saved ${keysToSave.length} tables for tag [${currentIsolationKey || '无标签'}] to message at index ${finalIndex}. Actually modified: ${actuallyModifiedKeys.length} tables.`);
+            await saveChatToHost_ACU();
+            return { saved: true, messageIndex: finalIndex };
+        };
+        return persistCore();
+    }
+    /**
+     * @deprecated 旧兼容写入口已收口禁用。所有表格写入必须走 runTableUpdateCommit_ACU。
+     */
+    async function saveIndependentTableToChatHistory_ACU(_targetMessageIndex = -1, _targetSheetKeys = null, _updateGroupKeys = null, _skipPostRefresh = false, _trackingSheetKeys = _targetSheetKeys, _source, _requestId, _batchId, _transactionContext, _operations, _revisionWriteSet) {
+        logError_ACU(TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU);
+        return { saved: false, error: TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU };
+    }
+    /**
+     * 检查当前聊天是否为首次初始化（无任何已有表格数据）。
+     */
+    async function checkIfFirstTimeInit_ACU() {
+        const chat = getChatArray_ACU();
+        if (!chat || chat.length === 0)
+            return true;
+        const currentIsolationKey = getCurrentIsolationKey_ACU();
+        for (let i = chat.length - 1; i >= 0; i--) {
+            const message = chat[i];
+            if (message.is_user)
+                continue;
+            const tagData = readIsolatedTagData_ACU(message, currentIsolationKey);
+            if (isV2TagData_ACU(tagData)) {
+                const checkpointData = tagData.storageFrame?.checkpoint?.data;
+                if (checkpointData && Object.keys(checkpointData).some(k => k.startsWith('sheet_'))) {
+                    return false;
+                }
+                const hasV2SheetOperation = (tagData.storageFrame?.logEntries || []).some((entry) => Array.isArray(entry?.operations) && entry.operations.some((operation) => {
+                    if (operation?.kind === 'sheet_replace')
+                        return typeof operation.sheetKey === 'string' && operation.sheetKey.startsWith('sheet_');
+                    if (operation?.kind === 'row_upsert' || operation?.kind === 'row_delete' || operation?.kind === 'meta_update')
+                        return typeof operation.sheetKey === 'string' && operation.sheetKey.startsWith('sheet_');
+                    if (operation?.kind === 'data_replace')
+                        return operation.data && Object.keys(operation.data).some((k) => k.startsWith('sheet_'));
+                    if (operation?.kind === 'sql_batch')
+                        return Array.isArray(operation.statements) && operation.statements.length > 0;
+                    return false;
+                }));
+                if (hasV2SheetOperation)
+                    return false;
+            }
+            if (tagData?.independentData && Object.keys(tagData.independentData).some(k => k.startsWith('sheet_'))) {
+                return false;
+            }
+            const isolationConfig = { enabled: settings_ACU.dataIsolationEnabled, code: settings_ACU.dataIsolationCode };
+            if (isLegacyMatchForIsolation_ACU(message, isolationConfig)) {
+                const legacyIndep = readLegacyIndependentData_ACU(message);
+                if (legacyIndep && Object.keys(legacyIndep).some(k => k.startsWith('sheet_'))) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    /**
+     * 从模板初始化数据库到内存（不写聊天记录）。
+     * 返回 { initialized: boolean, error?: string }
+     */
+    async function initializeJsonTableInChatHistory_ACU() {
+        logDebug_ACU('No database found in chat history. Initializing a new one from template.');
+        try {
+            _set_currentJsonTableData_ACU(parseTableTemplateJson_ACU({ stripSeedRows: true }));
+            logDebug_ACU('Successfully initialized database in memory.');
+        }
+        catch (error) {
+            logError_ACU('Failed to parse template and initialize database in memory:', error);
+            _set_currentJsonTableData_ACU(null);
+            return { initialized: false, error: '从模板解析数据库失败，请检查模板格式。' };
+        }
+        if (!currentJsonTableData_ACU) {
+            return { initialized: false, error: '从模板解析数据库失败，请检查模板格式。' };
+        }
+        logDebug_ACU('Database initialized in memory. It will be saved to chat history on the first update.');
+        try {
+            const guideData = await ensureChatSheetGuideSeeded_ACU({ reason: 'init_chat_seedrows' });
+            if (guideData) {
+                attachSeedRowsToCurrentDataFromGuide_ACU(guideData);
+            }
+        }
+        catch (e) {
+            logWarn_ACU('[SheetGuide] Failed to ensure sheet guide during initialization:', e);
+        }
+        try {
+            await deleteAllGeneratedEntries_ACU$1();
+            logDebug_ACU('Deleted all generated lorebook entries during initialization.');
+        }
+        catch (deleteError) {
+            logWarn_ACU('Failed to delete generated lorebook entries during initialization:', deleteError);
+        }
+        return { initialized: true };
+    }
+    /**
+     * 从聊天记录加载或创建表格数据到内存。
+     * 返回 { loaded: boolean, source: 'merged'|'initialized'|'empty', error?: string }
+     * 注意：不再内部调用 refreshMergedDataAndNotify，调用方按需自行刷新。
+     */
+    async function loadOrCreateJsonTableFromChatHistory_ACU() {
+        _set_currentJsonTableData_ACU(null);
+        logDebug_ACU('Attempting to load database from chat history...');
+        const chat = getChatArray_ACU();
+        applyTemplateScopeForCurrentChat_ACU();
+        if (!chat || chat.length === 0) {
+            logDebug_ACU('Chat history is empty. Initializing new database.');
+            const initResult = await initializeJsonTableInChatHistory_ACU();
+            return { loaded: initResult.initialized, source: 'initialized', error: initResult.error };
+        }
+        const mergedData = await mergeAllIndependentTables_ACU();
+        if (mergedData) {
+            _set_currentJsonTableData_ACU(mergedData);
+            logDebug_ACU('Database content successfully merged (tag-aware) and loaded into memory.');
+            return { loaded: true, source: 'merged' };
+        }
+        logDebug_ACU('No database found for current tag in chat history. Initializing a new one.');
+        const initResult = await initializeJsonTableInChatHistory_ACU();
+        return { loaded: initResult.initialized, source: 'initialized', error: initResult.error };
+    }
+
+    /**
+     * service/ai/prompt-builder/json-sanitizer.ts
+     * AI 响应 JSON 清洗管线 + 松散对象解析
+     * 从 prompt-builder.ts 的 parseAndApplyTableEdits_ACU 内部提取的纯函数集合
+     */
+    /** 将全角/中文引号统一为标准双引号 */
+    function normalizeQuotesLayer_ACU(jsonStr) {
+        if (typeof jsonStr !== 'string' || !jsonStr)
+            return jsonStr;
+        return jsonStr.replace(/[""「」『』＂]/g, '"');
+    }
+    function getNextNonWhitespaceMeta_ACU(text, startIndex) {
+        for (let i = startIndex; i < text.length; i++) {
+            if (!/\s/.test(text[i]))
+                return { char: text[i], index: i };
+        }
+        return { char: '', index: -1 };
+    }
+    function isLikelyJsonValueStart_ACU(char) {
+        return !!char && (char === '"' ||
+            char === '{' ||
+            char === '[' ||
+            char === '-' ||
+            /\d/.test(char) ||
+            char === 't' ||
+            char === 'f' ||
+            char === 'n');
+    }
+    function isLikelyStringCloser_ACU(text, quoteIndex, stringKind, containerType) {
+        const nextMeta = getNextNonWhitespaceMeta_ACU(text, quoteIndex + 1);
+        const nextChar = nextMeta.char;
+        if (!nextChar)
+            return stringKind !== 'key';
+        if (stringKind === 'key')
+            return nextChar === ':';
+        if (nextChar === '}' || nextChar === ']')
+            return true;
+        if (nextChar !== ',')
+            return false;
+        const afterComma = getNextNonWhitespaceMeta_ACU(text, nextMeta.index + 1).char;
+        if (!afterComma)
+            return true;
+        if (containerType === 'object')
+            return afterComma === '"' || afterComma === '}';
+        if (containerType === 'array')
+            return afterComma === ']' || isLikelyJsonValueStart_ACU(afterComma);
+        return isLikelyJsonValueStart_ACU(afterComma) || afterComma === '}' || afterComma === ']';
+    }
+    function escapeUnescapedQuotesLayer_ACU(jsonStr) {
+        if (typeof jsonStr !== 'string') {
+            return { success: false, result: jsonStr, error: 'Input is not a string' };
+        }
+        let result = '';
+        let inString = false;
+        let escapeNext = false;
+        let currentStringKind = null;
+        const containerStack = [];
+        const getTopContainer = () => containerStack.length ? containerStack[containerStack.length - 1] : null;
+        const markParentValueCompleted = () => {
+            const parent = getTopContainer();
+            if (!parent)
+                return;
+            if (parent.type === 'object' || parent.type === 'array') {
+                parent.expecting = 'commaOrEnd';
+            }
+        };
+        for (let i = 0; i < jsonStr.length; i++) {
+            const char = jsonStr[i];
+            if (escapeNext) {
+                result += char;
+                escapeNext = false;
+                continue;
+            }
+            if (inString) {
+                if (char === '\\') {
+                    result += char;
+                    escapeNext = true;
+                    continue;
+                }
+                if (char === '"') {
+                    const top = getTopContainer();
+                    const containerType = top?.type || null;
+                    if (isLikelyStringCloser_ACU(jsonStr, i, currentStringKind, containerType)) {
+                        result += char;
+                        inString = false;
+                        if (currentStringKind === 'key' && top && top.type === 'object') {
+                            top.expecting = 'colon';
+                        }
+                        else {
+                            markParentValueCompleted();
+                        }
+                        currentStringKind = null;
+                    }
+                    else {
+                        result += '\\"';
+                    }
+                    continue;
+                }
+                result += char;
+                continue;
+            }
+            if (char === '"') {
+                result += char;
+                inString = true;
+                const top = getTopContainer();
+                currentStringKind = top && top.type === 'object' && (top.expecting === 'key' || top.expecting === 'keyOrEnd')
+                    ? 'key'
+                    : 'value';
+                continue;
+            }
+            if (char === '{') {
+                result += char;
+                containerStack.push({ type: 'object', expecting: 'keyOrEnd' });
+                continue;
+            }
+            if (char === '[') {
+                result += char;
+                containerStack.push({ type: 'array', expecting: 'valueOrEnd' });
+                continue;
+            }
+            if (char === ':') {
+                result += char;
+                const top = getTopContainer();
+                if (top && top.type === 'object')
+                    top.expecting = 'value';
+                continue;
+            }
+            if (char === ',') {
+                result += char;
+                const top = getTopContainer();
+                if (top && top.type === 'object')
+                    top.expecting = 'key';
+                if (top && top.type === 'array')
+                    top.expecting = 'value';
+                continue;
+            }
+            if (char === '}' || char === ']') {
+                result += char;
+                containerStack.pop();
+                markParentValueCompleted();
+                continue;
+            }
+            result += char;
+        }
+        return { success: true, result, error: null };
+    }
+    function sanitizeControlCharsLayer_ACU(jsonStr) {
+        if (typeof jsonStr !== 'string' || !jsonStr)
+            return jsonStr;
+        let result = '';
+        let inString = false;
+        let escapeNext = false;
+        for (let i = 0; i < jsonStr.length; i++) {
+            const char = jsonStr[i];
+            if (escapeNext) {
+                result += char;
+                escapeNext = false;
+                continue;
+            }
+            if (char === '\\') {
+                result += char;
+                if (inString)
+                    escapeNext = true;
+                continue;
+            }
+            if (char === '"') {
+                result += char;
+                inString = !inString;
+                continue;
+            }
+            if (inString && char === '\n') {
+                result += '\\n';
+                continue;
+            }
+            if (inString && char === '\r') {
+                result += '\\r';
+                continue;
+            }
+            if (inString && char === '\t') {
+                result += '\\t';
+                continue;
+            }
+            if (inString && char === '\0') {
+                result += '\\u0000';
+                continue;
+            }
+            result += char;
+        }
+        return result;
+    }
+    function removeTrailingCommasLayer_ACU(jsonStr) {
+        if (typeof jsonStr !== 'string' || !jsonStr)
+            return jsonStr;
+        let result = '';
+        let inString = false;
+        let escapeNext = false;
+        for (let i = 0; i < jsonStr.length; i++) {
+            const char = jsonStr[i];
+            if (escapeNext) {
+                result += char;
+                escapeNext = false;
+                continue;
+            }
+            if (char === '\\') {
+                result += char;
+                if (inString)
+                    escapeNext = true;
+                continue;
+            }
+            if (char === '"') {
+                result += char;
+                inString = !inString;
+                continue;
+            }
+            if (!inString && char === ',') {
+                const nextChar = getNextNonWhitespaceMeta_ACU(jsonStr, i + 1).char;
+                if (nextChar === '}' || nextChar === ']')
+                    continue;
+            }
+            result += char;
+        }
+        return result;
+    }
+    function fixNumericKeysLayer_ACU(jsonStr) {
+        if (typeof jsonStr !== 'string' || !jsonStr)
+            return jsonStr;
+        return jsonStr.replace(/([{,]\s*)(-?\d+)(\s*:)/g, '$1"$2"$3');
+    }
+    function sanitizeJsonPipeline_ACU(jsonStr) {
+        if (typeof jsonStr !== 'string') {
+            return { success: false, result: jsonStr, layersApplied: [], error: 'Input is not a string' };
+        }
+        const layersApplied = [];
+        let current = jsonStr;
+        logDebug_ACU(`[JSON清洗] sanitizeJsonPipeline: 输入长度=${jsonStr.length}`);
+        const normalizedQuotes = normalizeQuotesLayer_ACU(current);
+        if (normalizedQuotes !== current)
+            layersApplied.push('normalizeQuotes');
+        current = normalizedQuotes;
+        const escapedQuotes = escapeUnescapedQuotesLayer_ACU(current);
+        if (!escapedQuotes.success) {
+            return { success: false, result: current, layersApplied, error: escapedQuotes.error };
+        }
+        if (escapedQuotes.result !== current)
+            layersApplied.push('escapeUnescapedQuotes');
+        current = escapedQuotes.result;
+        const sanitizedControlChars = sanitizeControlCharsLayer_ACU(current);
+        if (sanitizedControlChars !== current)
+            layersApplied.push('sanitizeControlChars');
+        current = sanitizedControlChars;
+        const withoutTrailingCommas = removeTrailingCommasLayer_ACU(current);
+        if (withoutTrailingCommas !== current)
+            layersApplied.push('removeTrailingCommas');
+        current = withoutTrailingCommas;
+        const fixedNumericKeys = fixNumericKeysLayer_ACU(current);
+        if (fixedNumericKeys !== current)
+            layersApplied.push('fixNumericKeys');
+        current = fixedNumericKeys;
+        return { success: true, result: current, layersApplied, error: null };
+    }
+    // ═══ 松散对象解析 ═══
+    function splitTopLevelSegments_ACU(text, delimiterChar = ',') {
+        if (typeof text !== 'string' || !text)
+            return [];
+        const segments = [];
+        let current = '';
+        let inString = false;
+        let escapeNext = false;
+        let braceDepth = 0;
+        let bracketDepth = 0;
+        let parenDepth = 0;
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i];
+            if (escapeNext) {
+                current += char;
+                escapeNext = false;
+                continue;
+            }
+            if (char === '\\') {
+                current += char;
+                if (inString)
+                    escapeNext = true;
+                continue;
+            }
+            if (char === '"') {
+                current += char;
+                inString = !inString;
+                continue;
+            }
+            if (!inString) {
+                if (char === '{')
+                    braceDepth++;
+                else if (char === '}')
+                    braceDepth = Math.max(0, braceDepth - 1);
+                else if (char === '[')
+                    bracketDepth++;
+                else if (char === ']')
+                    bracketDepth = Math.max(0, bracketDepth - 1);
+                else if (char === '(')
+                    parenDepth++;
+                else if (char === ')')
+                    parenDepth = Math.max(0, parenDepth - 1);
+                else if (char === delimiterChar && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0) {
+                    if (current.trim())
+                        segments.push(current.trim());
+                    current = '';
+                    continue;
+                }
+            }
+            current += char;
+        }
+        if (current.trim())
+            segments.push(current.trim());
+        return segments;
+    }
+    function findTopLevelDelimiterIndex_ACU(text, delimiterChar = ':') {
+        if (typeof text !== 'string' || !text)
+            return -1;
+        let inString = false;
+        let escapeNext = false;
+        let braceDepth = 0;
+        let bracketDepth = 0;
+        let parenDepth = 0;
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i];
+            if (escapeNext) {
+                escapeNext = false;
+                continue;
+            }
+            if (char === '\\') {
+                if (inString)
+                    escapeNext = true;
+                continue;
+            }
+            if (char === '"') {
+                inString = !inString;
+                continue;
+            }
+            if (!inString) {
+                if (char === '{')
+                    braceDepth++;
+                else if (char === '}')
+                    braceDepth = Math.max(0, braceDepth - 1);
+                else if (char === '[')
+                    bracketDepth++;
+                else if (char === ']')
+                    bracketDepth = Math.max(0, bracketDepth - 1);
+                else if (char === '(')
+                    parenDepth++;
+                else if (char === ')')
+                    parenDepth = Math.max(0, parenDepth - 1);
+                else if (char === delimiterChar && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0)
+                    return i;
+            }
+        }
+        return -1;
+    }
+    function tryParseLooseJsonValue_ACU(rawValue) {
+        if (typeof rawValue !== 'string')
+            return { success: true, value: rawValue, error: null };
+        const trimmed = rawValue.trim();
+        if (!trimmed)
+            return { success: false, value: null, error: 'Empty value' };
+        const normalizedValue = (trimmed.startsWith("'") && trimmed.endsWith("'"))
+            ? `"${trimmed.slice(1, -1)
+            .replace(/\\/g, '\\\\')
+            .replace(/"/g, '\\"')
+            .replace(/\r/g, '\\r')
+            .replace(/\n/g, '\\n')
+            .replace(/\t/g, '\\t')}"`
+            : trimmed;
+        const wrappedValue = `[${normalizedValue}]`;
+        try {
+            return { success: true, value: JSON.parse(wrappedValue)[0], error: null };
+        }
+        catch (directError) {
+            const sanitizedWrapped = sanitizeJsonPipeline_ACU(wrappedValue);
+            if (sanitizedWrapped.success) {
+                try {
+                    return { success: true, value: JSON.parse(sanitizedWrapped.result)[0], error: null };
+                }
+                catch (sanitizedError) { }
+            }
+            return { success: false, value: null, error: directError?.message || 'Failed to parse loose value' };
+        }
+    }
+    function parseLooseObjectKey_ACU(rawKey) {
+        const trimmed = typeof rawKey === 'string' ? rawKey.trim() : '';
+        if (!trimmed)
+            return null;
+        if (/^-?\d+$/.test(trimmed))
+            return trimmed;
+        const parsedKey = tryParseLooseJsonValue_ACU(trimmed);
+        if (parsedKey.success && (typeof parsedKey.value === 'string' || typeof parsedKey.value === 'number')) {
+            return String(parsedKey.value);
+        }
+        return trimmed.replace(/^["']|["']$/g, '');
+    }
+    function coerceLooseRowObject_ACU(jsonStr) {
+        if (typeof jsonStr !== 'string') {
+            return { success: false, result: null, recoveredKeys: [], error: 'Input is not a string' };
+        }
+        const trimmed = jsonStr.trim();
+        if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+            return { success: false, result: null, recoveredKeys: [], error: 'Input is not an object literal' };
+        }
+        const body = trimmed.slice(1, -1).trim();
+        if (!body)
+            return { success: true, result: {}, recoveredKeys: [], error: null };
+        const segments = splitTopLevelSegments_ACU(body, ',').filter(Boolean);
+        logDebug_ACU(`[JSON清洗] coerceLooseRowObject: ${segments.length} 个段落`);
+        if (!segments.length) {
+            return { success: false, result: null, recoveredKeys: [], error: 'No top-level segments detected' };
+        }
+        const result = {};
+        let nextAutoKey = 0;
+        for (const segment of segments) {
+            const colonIndex = findTopLevelDelimiterIndex_ACU(segment, ':');
+            if (colonIndex !== -1) {
+                const parsedKey = parseLooseObjectKey_ACU(segment.slice(0, colonIndex));
+                const parsedValue = tryParseLooseJsonValue_ACU(segment.slice(colonIndex + 1));
+                if (!parsedKey || !parsedValue.success) {
+                    return {
+                        success: false,
+                        result: null,
+                        recoveredKeys: Object.keys(result),
+                        error: `Failed to parse keyed segment: ${segment}`,
+                    };
+                }
+                result[parsedKey] = parsedValue.value;
+                const numericKey = Number.parseInt(parsedKey, 10);
+                if (!Number.isNaN(numericKey) && String(numericKey) === parsedKey) {
+                    nextAutoKey = Math.max(nextAutoKey, numericKey + 1);
+                }
+                continue;
+            }
+            const parsedValue = tryParseLooseJsonValue_ACU(segment);
+            if (!parsedValue.success) {
+                return {
+                    success: false,
+                    result: null,
+                    recoveredKeys: Object.keys(result),
+                    error: `Failed to parse value-only segment: ${segment}`,
+                };
+            }
+            while (Object.prototype.hasOwnProperty.call(result, String(nextAutoKey))) {
+                nextAutoKey++;
+            }
+            result[String(nextAutoKey)] = parsedValue.value;
+            nextAutoKey++;
+        }
+        const recoveredKeys = Object.keys(result).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+        if (!recoveredKeys.length) {
+            return { success: false, result: null, recoveredKeys: [], error: 'No recoverable columns found' };
+        }
+        return { success: true, result, recoveredKeys, error: null };
+    }
+
+    /**
+     * service/ai/prompt-builder/table-edit-parser.ts
+     * AI 响应表格编辑解析 — <tableEdit> 块提取 + 指令解析 + 编辑应用
+     * 从 prompt-builder.ts 拆出（L502-L1519）
+     * JSON 清洗管线已提取到 json-sanitizer.ts
+     */
+    function normalizeAiResponseForTableEditParsing_ACU(text) {
+        if (typeof text !== 'string')
+            return '';
+        let cleaned = text.trim();
+        cleaned = cleaned.replace(/'\s*\+\s*'/g, '');
+        if (cleaned.startsWith("'") && cleaned.endsWith("'"))
+            cleaned = cleaned.slice(1, -1);
+        cleaned = cleaned.replace(/\\n/g, '\n');
+        cleaned = cleaned.replace(/\\\\"/g, '\\"');
+        cleaned = cleaned.replace(/：/g, ':');
+        return cleaned;
+    }
+    function extractTableEditInner_ACU(text, options = {}) {
+        const { allowNoTableEditTags = true, useLastPairOnly = (settings_ACU?.tableEditLastPairOnly !== false) } = options;
+        const cleaned = normalizeAiResponseForTableEditParsing_ACU(text);
+        if (!cleaned)
+            return null;
+        if (useLastPairOnly) {
+            const fullRe = /<tableEdit>([\s\S]*?)<\/tableEdit>/ig;
+            let lastMatch = null;
+            let m;
+            while ((m = fullRe.exec(cleaned)) !== null) {
+                lastMatch = m;
+            }
+            if (lastMatch && typeof lastMatch[1] === 'string') {
+                return { inner: lastMatch[1], cleaned, mode: 'full_last' };
+            }
+        }
+        else {
+            const fullMatch = cleaned.match(/<tableEdit>([\s\S]*?)<\/tableEdit>/i);
+            if (fullMatch && typeof fullMatch[1] === 'string') {
+                return { inner: fullMatch[1], cleaned, mode: 'full' };
+            }
+        }
+        const lowerCleaned = cleaned.toLowerCase();
+        const openTag = '<tableedit>';
+        const closeTag = '</tableedit>';
+        const hasOpen = lowerCleaned.includes(openTag);
+        const hasClose = lowerCleaned.includes(closeTag);
+        const hasAnyTag = hasOpen || hasClose;
+        const commentRe = /<!--([\s\S]*?)-->/g;
+        const commentBlocks = [];
+        let m;
+        while ((m = commentRe.exec(cleaned)) !== null) {
+            commentBlocks.push({
+                start: m.index,
+                end: commentRe.lastIndex,
+                raw: m[0],
+                content: m[1] || ''
+            });
+        }
+        const hasCommands = (s) => /(insertRow|updateRow|deleteRow)\s*\(/.test(s);
+        const candidates = commentBlocks.filter(b => hasCommands(b.content));
+        if (!candidates.length)
+            return null;
+        let chosen = null;
+        if (hasOpen && !hasClose) {
+            const openIdx = useLastPairOnly ? lowerCleaned.lastIndexOf(openTag) : cleaned.search(/<tableEdit>/i);
+            chosen = candidates.find(b => b.start > openIdx) || (useLastPairOnly ? candidates[candidates.length - 1] : candidates[0]);
+        }
+        else if (!hasOpen && hasClose) {
+            const closeIdx = useLastPairOnly ? lowerCleaned.lastIndexOf(closeTag) : cleaned.search(/<\/tableEdit>/i);
+            for (let i = candidates.length - 1; i >= 0; i--) {
+                if (candidates[i].end < closeIdx) {
+                    chosen = candidates[i];
+                    break;
+                }
+            }
+            chosen = chosen || candidates[candidates.length - 1];
+        }
+        else if (hasAnyTag) {
+            const lastOpenIdx = lowerCleaned.lastIndexOf(openTag);
+            const lastCloseIdx = lowerCleaned.lastIndexOf(closeTag);
+            const tagIdx = useLastPairOnly
+                ? (lastCloseIdx !== -1 ? lastCloseIdx : lastOpenIdx)
+                : (hasOpen ? cleaned.search(/<tableEdit>/i) : cleaned.search(/<\/tableEdit>/i));
+            let bestDist = Infinity;
+            candidates.forEach(b => {
+                const dist = Math.min(Math.abs(b.start - tagIdx), Math.abs(b.end - tagIdx));
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    chosen = b;
+                }
+            });
+        }
+        else if (allowNoTableEditTags) {
+            chosen = useLastPairOnly ? candidates[candidates.length - 1] : candidates[0];
+        }
+        if (!chosen)
+            return null;
+        return { inner: chosen.raw, cleaned, mode: 'comment_fallback', hasOpen, hasClose };
+    }
+    function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = 'standard', isImportMode = false) {
+        if (!tableData) {
+            logError_ACU('Cannot apply edits, tableData is not loaded.');
+            return false;
+        }
+        const extracted = extractTableEditInner_ACU(aiResponse, { allowNoTableEditTags: true });
+        if (!extracted || !extracted.inner) {
+            logWarn_ACU('No recognizable table edit block found (missing <tableEdit> boundary and/or incomplete <!-- --> wrapper).');
+            return true;
+        }
+        const editsString = extracted.inner.replace(/<!--|-->/g, '').trim();
+        if (!editsString) {
+            logDebug_ACU('Empty <tableEdit> block. No edits to apply.');
+            return true;
+        }
+        // SQLite SQL 写入必须由 table-update-commit 公共提交模型执行；解析器不得直接改运行时 DB。
+        if (isSqliteMode() && isSqlContent(editsString)) {
+            const message = 'SQLite SQL tableEdit must be applied through table update commit model.';
+            logError_ACU(`[SQL Mode] ${message}`);
+            throw new Error(message);
+        }
+        // 指令重组：处理 AI 生成的多行指令
+        const originalLines = editsString.split('\n');
+        const commandLines = [];
+        let commandReconstructor = '';
+        let isInJsonBlock = false;
+        originalLines.forEach(line => {
+            const trimmedLine = line.trim();
+            if (trimmedLine === '')
+                return;
+            let lineContent = trimmedLine;
+            if (!isInJsonBlock && lineContent.includes('//') && !lineContent.includes('"//') && !lineContent.includes("'//")) {
+                lineContent = lineContent.split('//')[0].trim();
+            }
+            if (lineContent === '')
+                return;
+            if ((lineContent.startsWith('insertRow') || lineContent.startsWith('deleteRow') || lineContent.startsWith('updateRow')) && !isInJsonBlock) {
+                if (commandReconstructor) {
+                    commandLines.push(commandReconstructor);
+                }
+                commandReconstructor = lineContent;
+            }
+            else {
+                commandReconstructor += ' ' + lineContent;
+            }
+            if (commandReconstructor) {
+                const totalOpen = (commandReconstructor.match(/{/g) || []).length;
+                const totalClose = (commandReconstructor.match(/}/g) || []).length;
+                if (totalOpen > totalClose) {
+                    isInJsonBlock = true;
+                }
+                else {
+                    isInJsonBlock = false;
+                }
+            }
+        });
+        if (commandReconstructor) {
+            commandLines.push(commandReconstructor);
+        }
+        // 二次处理：拆分挤在一行里的多条指令
+        const finalCommandLines = [];
+        commandLines.forEach(line => {
+            const multiCommandPattern = /(?:^|;\s*)((?:insertRow|deleteRow|updateRow)\s*\()/g;
+            const positions = [];
+            let match;
+            while ((match = multiCommandPattern.exec(line)) !== null) {
+                positions.push(match.index + (match[0].length - match[1].length));
+            }
+            if (positions.length <= 1) {
+                finalCommandLines.push(line.replace(/;\s*$/, ''));
+            }
+            else {
+                for (let i = 0; i < positions.length; i++) {
+                    const start = positions[i];
+                    const end = i + 1 < positions.length ? positions[i + 1] : line.length;
+                    const subCommand = line.substring(start, end).replace(/;\s*$/, '').trim();
+                    if (subCommand)
+                        finalCommandLines.push(subCommand);
+                }
+            }
+        });
+        const sheetKeysForIndexing = getSortedSheetKeys_ACU(tableData);
+        const sheets = sheetKeysForIndexing.map(key => tableData[key]);
+        let appliedEdits = 0;
+        const editCountsByTable = {};
+        // 指令解析函数
+        const parseTableEditCommandLine_ACU = (rawLine) => {
+            try {
+                let commandLineWithoutComment = rawLine;
+                if (commandLineWithoutComment.match(/\)\s*;?\s*\/\/.*$/)) {
+                    commandLineWithoutComment = commandLineWithoutComment.replace(/\/\/.*$/, '').trim();
+                }
+                if (!commandLineWithoutComment)
+                    return null;
+                const match = commandLineWithoutComment.match(/^(insertRow|deleteRow|updateRow)\s*\((.*)\);?$/);
+                if (!match)
+                    return null;
+                const command = match[1];
+                const argsString = match[2];
+                let args;
+                const firstBracket = argsString.indexOf('{');
+                if (firstBracket === -1) {
+                    args = JSON.parse(`[${argsString}]`);
+                }
+                else {
+                    const paramsPart = argsString.substring(0, firstBracket).trim();
+                    let jsonPart = argsString.substring(firstBracket);
+                    const initialArgs = JSON.parse(`[${paramsPart.replace(/,$/, '')}]`);
+                    try {
+                        const jsonData = JSON.parse(jsonPart);
+                        args = [...initialArgs, jsonData];
+                    }
+                    catch (jsonError) {
+                        logError_ACU(`Primary JSON parse failed for: "${jsonPart}". Attempting sanitization pipeline...`, jsonError);
+                        const originalLooseObjectResult = coerceLooseRowObject_ACU(jsonPart);
+                        if (originalLooseObjectResult.success) {
+                            args = [...initialArgs, originalLooseObjectResult.result];
+                            logWarn_ACU(`[JSON Sanitization] Recovered malformed row object from original payload via loose parsing. Keys: ${originalLooseObjectResult.recoveredKeys.join(', ')}`);
+                        }
+                        else {
+                            const sanitizeResult = sanitizeJsonPipeline_ACU(jsonPart);
+                            if (!sanitizeResult.success) {
+                                logError_ACU(`JSON sanitization pipeline failed for: "${jsonPart}"`, new Error(sanitizeResult.error || 'Unknown sanitization error'));
+                                throw jsonError;
+                            }
+                            try {
+                                const jsonData = JSON.parse(sanitizeResult.result);
+                                args = [...initialArgs, jsonData];
+                                if (sanitizeResult.layersApplied.length > 0) {
+                                    logWarn_ACU(`[JSON Sanitization] Applied layers: ${sanitizeResult.layersApplied.join(', ')}`);
+                                }
+                            }
+                            catch (sanitizedJsonError) {
+                                const looseObjectResult = coerceLooseRowObject_ACU(sanitizeResult.result);
+                                if (looseObjectResult.success) {
+                                    args = [...initialArgs, looseObjectResult.result];
+                                    logWarn_ACU(`[JSON Sanitization] Recovered malformed row object from sanitized payload via loose parsing. Keys: ${looseObjectResult.recoveredKeys.join(', ')}`);
+                                }
+                                else {
+                                    const sanitizedPreview = sanitizeResult.result.length > 400
+                                        ? `${sanitizeResult.result.slice(0, 400)}...`
+                                        : sanitizeResult.result;
+                                    logError_ACU(`Sanitized JSON parse failed after layers [${sanitizeResult.layersApplied.join(', ') || 'none'}]: "${sanitizedPreview}"`, sanitizedJsonError);
+                                    logError_ACU(`[JSON Sanitization] Loose row object recovery failed. Original: ${originalLooseObjectResult.error || 'Unknown'}; Sanitized: ${looseObjectResult.error || 'Unknown'}`);
+                                    throw sanitizedJsonError;
+                                }
+                            }
+                        }
+                    }
+                }
+                return { command, args, line: commandLineWithoutComment };
+            }
+            catch (e) {
+                logError_ACU(`Failed to parse command line: "${rawLine}"`, e);
+                return null;
+            }
+        };
+        // 总结表/总体大纲同步新增检查
+        let summaryInsertCount = 0;
+        let outlineInsertCount = 0;
+        const standardizedFillEnabled = settings_ACU?.standardizedTableFillEnabled !== false;
+        if (standardizedFillEnabled) {
+            finalCommandLines.forEach(line => {
+                try {
+                    const parsed = parseTableEditCommandLine_ACU(line);
+                    if (!parsed || parsed.command !== 'insertRow')
+                        return;
+                    const tableIndex = parsed.args?.[0];
+                    const table = sheets[tableIndex];
+                    if (!table || !table.name)
+                        return;
+                    if (!isSummaryOrOutlineTable_ACU(table.name))
+                        return;
+                    if (table.name === '总结表')
+                        summaryInsertCount++;
+                    if (table.name === '总体大纲')
+                        outlineInsertCount++;
+                }
+                catch (e) { }
+            });
+        }
+        const allowSummaryOutlineInsert = !standardizedFillEnabled ||
+            (summaryInsertCount === 1 && outlineInsertCount === 1) ||
+            (summaryInsertCount === 0 && outlineInsertCount === 0);
+        if (standardizedFillEnabled && !allowSummaryOutlineInsert && (summaryInsertCount > 0 || outlineInsertCount > 0)) {
+            logWarn_ACU(`[屏蔽] 总结表/总体大纲新增不同步：总结=${summaryInsertCount}, 大纲=${outlineInsertCount}，本轮两表均不写入。`);
+        }
+        // seedRows 物化
+        const materializeSeedRowsIfNeeded_ACU = (table) => {
+            try {
+                if (!table || typeof table !== 'object')
+                    return;
+                if (!Array.isArray(table.content) || table.content.length !== 1)
+                    return;
+                let sr = (Array.isArray(table.seedRows) && table.seedRows.length > 0) ? table.seedRows : null;
+                if (!sr && table.uid && String(table.uid).startsWith('sheet_')) {
+                    sr = getEffectiveSeedRowsForSheet_ACU(String(table.uid), { guideData: null, allowTemplateFallback: true });
+                    if (Array.isArray(sr) && sr.length > 0) {
+                        try {
+                            table.seedRows = JSON.parse(JSON.stringify(sr));
+                        }
+                        catch (e) { }
+                    }
+                }
+                if (!Array.isArray(sr) || sr.length === 0)
+                    return;
+                const headerRow = Array.isArray(table.content[0]) ? JSON.parse(JSON.stringify(table.content[0])) : ["row_id"];
+                const seed = JSON.parse(JSON.stringify(sr));
+                table.content = [headerRow, ...seed];
+            }
+            catch (e) {
+                logWarn_ACU('[表格编辑] restoreSeedRows 失败:', e);
+            }
+        };
+        // 逐条应用编辑指令
+        finalCommandLines.forEach(line => {
+            const parsed = parseTableEditCommandLine_ACU(line);
+            if (!parsed) {
+                logWarn_ACU(`Skipping malformed or truncated command line: "${line}"`);
+                return;
+            }
+            const { command, args } = parsed;
+            try {
+                switch (command) {
+                    case 'insertRow': {
+                        const [tableIndex, data] = args;
+                        const table = sheets[tableIndex];
+                        if (!table || !table.name) {
+                            logWarn_ACU(`Table at index ${tableIndex} not found or has no name. Skipping insertRow.`);
+                            break;
+                        }
+                        materializeSeedRowsIfNeeded_ACU(table);
+                        const sheetKey = sheetKeysForIndexing[tableIndex];
+                        const isSummaryTable = isSummaryOrOutlineTable_ACU(table.name);
+                        const isUnifiedMode = (updateMode === 'full' || updateMode === 'manual_unified' || updateMode === 'auto_unified');
+                        const isStandardMode = (updateMode === 'standard' || updateMode === 'auto_standard' || updateMode === 'manual_standard');
+                        const isSummaryMode = (updateMode === 'summary' || updateMode === 'auto_summary' || updateMode === 'auto_summary_silent' || updateMode === 'manual_summary');
+                        const isManualMode = (updateMode && updateMode.startsWith('manual'));
+                        if (isUnifiedMode) {
+                            // 允许所有操作
+                        }
+                        else if (isStandardMode && isSummaryTable) {
+                            if (isManualMode) {
+                                logDebug_ACU(`[屏蔽] 标准表更新模式(手动)：忽略总结表/总体大纲的insertRow操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
+                                break;
+                            }
+                        }
+                        else if (isSummaryMode && !isSummaryTable) {
+                            if (isManualMode) {
+                                logDebug_ACU(`[屏蔽] 总结表更新模式(手动)：忽略标准表的insertRow操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
+                                break;
+                            }
+                        }
+                        if (isSummaryTable && !allowSummaryOutlineInsert) {
+                            logDebug_ACU(`[屏蔽] 总结表/总体大纲新增不同步：忽略 insertRow (tableIndex: ${tableIndex}, tableName: ${table.name})`);
+                            break;
+                        }
+                        if (table && table.content && typeof data === 'object') {
+                            const newRow = [String(table.content.length)]; // 行号 = 当前 content 长度（表头占 [0]）
+                            const headers = table.content[0].slice(1);
+                            const specialIndexCol = (isSummaryTable && sheetKey && isSpecialIndexLockEnabled_ACU(sheetKey))
+                                ? getSummaryIndexColumnIndex_ACU(table)
+                                : -1;
+                            headers.forEach((_, colIndex) => {
+                                let nextVal = data[colIndex] || (data[String(colIndex)] || "");
+                                if (colIndex === specialIndexCol) {
+                                    nextVal = formatSummaryIndexCode_ACU(table.content.length);
+                                }
+                                newRow.push(nextVal);
+                            });
+                            table.content.push(newRow);
+                            if (isSummaryTable && specialIndexCol >= 0) {
+                                applySummaryIndexSequenceToTable_ACU(table, specialIndexCol);
+                            }
+                            logDebug_ACU(`Applied insertRow to table ${tableIndex} (${table.name}) with data:`, data);
+                            appliedEdits++;
+                            editCountsByTable[table.name] = (editCountsByTable[table.name] || 0) + 1;
+                        }
+                        break;
+                    }
+                    case 'deleteRow': {
+                        const [tableIndex, rowIndex] = args;
+                        const table = sheets[tableIndex];
+                        if (!table || !table.name) {
+                            logWarn_ACU(`Table at index ${tableIndex} not found or has no name. Skipping deleteRow.`);
+                            break;
+                        }
+                        materializeSeedRowsIfNeeded_ACU(table);
+                        const isSummaryTable = isSummaryOrOutlineTable_ACU(table.name);
+                        if (isSummaryTable) {
+                            logDebug_ACU(`[屏蔽] 总结表/总体大纲忽略 deleteRow 操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
+                            break;
+                        }
+                        const isUnifiedMode = (updateMode === 'full' || updateMode === 'manual_unified' || updateMode === 'auto_unified');
+                        const isStandardMode = (updateMode === 'standard' || updateMode === 'auto_standard' || updateMode === 'manual_standard');
+                        const isSummaryMode = (updateMode === 'summary' || updateMode === 'auto_summary' || updateMode === 'auto_summary_silent' || updateMode === 'manual_summary');
+                        const isManualMode = (updateMode && updateMode.startsWith('manual'));
+                        if (isUnifiedMode) {
+                            // 允许所有操作
+                        }
+                        else if (isStandardMode && isSummaryTable) {
+                            if (isManualMode) {
+                                logDebug_ACU(`[屏蔽] 标准表更新模式(手动)：忽略总结表/总体大纲的deleteRow操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
+                                break;
+                            }
+                        }
+                        else if (isSummaryMode && !isSummaryTable) {
+                            if (isManualMode) {
+                                logDebug_ACU(`[屏蔽] 总结表更新模式(手动)：忽略标准表的deleteRow操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
+                                break;
+                            }
+                        }
+                        if (table && table.content && table.content.length > rowIndex + 1) {
+                            table.content.splice(rowIndex + 1, 1);
+                            logDebug_ACU(`Applied deleteRow to table ${tableIndex} (${table.name}) at index ${rowIndex}`);
+                            appliedEdits++;
+                            editCountsByTable[table.name] = (editCountsByTable[table.name] || 0) + 1;
+                        }
+                        break;
+                    }
+                    case 'updateRow': {
+                        const [tableIndex, rowIndex, data] = args;
+                        const table = sheets[tableIndex];
+                        if (!table || !table.name) {
+                            logWarn_ACU(`Table at index ${tableIndex} not found or has no name. Skipping updateRow.`);
+                            break;
+                        }
+                        materializeSeedRowsIfNeeded_ACU(table);
+                        const sheetKey = sheetKeysForIndexing[tableIndex];
+                        const isSummaryTable = isSummaryOrOutlineTable_ACU(table.name);
+                        if (isSummaryTable) {
+                            logDebug_ACU(`[屏蔽] 总结表/总体大纲忽略 updateRow 操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
+                            break;
+                        }
+                        const isUnifiedMode = (updateMode === 'full' || updateMode === 'manual_unified' || updateMode === 'auto_unified');
+                        const isStandardMode = (updateMode === 'standard' || updateMode === 'auto_standard' || updateMode === 'manual_standard');
+                        const isSummaryMode = (updateMode === 'summary' || updateMode === 'auto_summary' || updateMode === 'auto_summary_silent' || updateMode === 'manual_summary');
+                        const isManualMode = (updateMode && updateMode.startsWith('manual'));
+                        if (isUnifiedMode) {
+                            // 允许所有操作
+                        }
+                        else if (isStandardMode && isSummaryTable) {
+                            if (isManualMode) {
+                                logDebug_ACU(`[屏蔽] 标准表更新模式(手动)：忽略总结表/总体大纲的updateRow操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
+                                break;
+                            }
+                        }
+                        else if (isSummaryMode && !isSummaryTable) {
+                            if (isManualMode) {
+                                logDebug_ACU(`[屏蔽] 总结表更新模式(手动)：忽略标准表的updateRow操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
+                                break;
+                            }
+                        }
+                        if (table && table.content && table.content.length > rowIndex + 1 && typeof data === 'object') {
+                            const lockState = sheetKey ? getTableLocksForSheet_ACU(sheetKey) : { rows: new Set(), cols: new Set(), cells: new Set() };
+                            if (lockState.rows.has(rowIndex)) {
+                                logDebug_ACU(`[锁定] 行锁定阻止 updateRow (tableIndex: ${tableIndex}, rowIndex: ${rowIndex})`);
+                                break;
+                            }
+                            Object.keys(data).forEach(colIndexStr => {
+                                const colIndex = parseInt(colIndexStr, 10);
+                                if (isNaN(colIndex))
+                                    return;
+                                if (lockState.cols.has(colIndex))
+                                    return;
+                                if (lockState.cells.has(`${rowIndex}:${colIndex}`))
+                                    return;
+                                if (table.content[rowIndex + 1].length > colIndex + 1) {
+                                    table.content[rowIndex + 1][colIndex + 1] = data[colIndexStr];
+                                }
+                            });
+                            if (isSummaryTable && sheetKey && isSpecialIndexLockEnabled_ACU(sheetKey)) {
+                                const specialIndexCol = getSummaryIndexColumnIndex_ACU(table);
+                                if (specialIndexCol >= 0)
+                                    applySummaryIndexSequenceToTable_ACU(table, specialIndexCol);
+                            }
+                            logDebug_ACU(`Applied updateRow to table ${tableIndex} (${table.name}) at index ${rowIndex} with data:`, data);
+                            appliedEdits++;
+                            editCountsByTable[table.name] = (editCountsByTable[table.name] || 0) + 1;
+                        }
+                        break;
+                    }
+                }
+            }
+            catch (e) {
+                logError_ACU(`Failed to parse or apply command: "${line}"`, e);
+            }
+        });
+        // 将统计信息写入表格对象
+        Object.keys(editCountsByTable).forEach(tableName => {
+            const sheetKey = Object.keys(tableData).find(k => tableData[k].name === tableName);
+            if (sheetKey) {
+                if (!tableData[sheetKey]._lastUpdateStats) {
+                    tableData[sheetKey]._lastUpdateStats = {};
+                }
+                tableData[sheetKey]._lastUpdateStats.changes = editCountsByTable[tableName];
+            }
+        });
+        // 收集所有被修改的表格 key
+        const modifiedSheetKeys = [];
+        Object.keys(editCountsByTable).forEach(tableName => {
+            if (editCountsByTable[tableName] > 0) {
+                const sheetKey = Object.keys(tableData).find(k => tableData[k].name === tableName);
+                if (sheetKey)
+                    modifiedSheetKeys.push(sheetKey);
+            }
+        });
+        return { success: true, modifiedKeys: modifiedSheetKeys, appliedEdits };
+    }
+    function parseAndApplyTableEdits_ACU(aiResponse, updateMode = 'standard', isImportMode = false) {
+        if (!currentJsonTableData_ACU) {
+            logError_ACU('Cannot apply edits, currentJsonTableData_ACU is not loaded.');
+            return false;
+        }
+        return parseAndApplyTableEditsToData_ACU(aiResponse, currentJsonTableData_ACU, updateMode, isImportMode);
+    }
+    /**
+     * 检测 <tableEdit> 内容是否为 SQL 语句
+     * 跳过空行和注释行后，检查第一条非空行是否以 SQL 关键字开头
+     */
+    function isSqlContent(content) {
+        const lines = content.split('\n');
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed)
+                continue;
+            // 跳过 SQL 注释
+            if (trimmed.startsWith('--'))
+                continue;
+            // 跳过 HTML 注释残留
+            if (trimmed.startsWith('<!--') || trimmed.startsWith('-->'))
+                continue;
+            // 检查是否以 SQL 关键字开头
+            const sqlKeywords = /^(INSERT|UPDATE|DELETE|ALTER|BEGIN|CREATE|DROP|REPLACE)\b/i;
+            return sqlKeywords.test(trimmed);
+        }
+        return false;
+    }
+
+    /**
+     * service/table/native-table-service-adapter.ts — 原生模式适配器
+     *
+     * 将现有的 table-service.ts 中的函数包装为 ITableStorageProvider 接口。
+     * 不修改 table-service.ts 的任何代码，只做适配委托。
+     * 原生模式下系统行为与当前完全一致。
+     */
+    class NativeTableServiceAdapter {
+        constructor() {
+            this.mode = 'native';
+        }
+        /**
+         * 从聊天消息加载表格数据
+         * 委托给 loadOrCreateJsonTableFromChatHistory_ACU
+         */
+        async loadFromChat() {
+            logDebug_ACU('[原生适配器] loadFromChat: 开始加载表格数据');
+            const result = await loadOrCreateJsonTableFromChatHistory_ACU();
+            logDebug_ACU(`[原生适配器] loadFromChat: 结果=${result.source}, loaded=${result.loaded}`);
+            return result;
+        }
+        isReady() {
+            return true;
+        }
+        /**
+         * 禁止 provider 自行保存聊天记录。
+         * 所有写入必须通过 table-update-commit 公共提交模型完成。
+         */
+        async saveToChat(_targetSheetKeys, _updateGroupKeys, _trackingSheetKeys, _options) {
+            const message = 'NativeTableServiceAdapter.saveToChat is disabled; use table update commit model.';
+            logError_ACU(`[原生适配器] ${message}`);
+            return { saved: false, error: message };
+        }
+        /**
+         * 获取当前运行时的完整表格数据
+         * 直接返回 currentJsonTableData_ACU 全局变量
+         */
+        getCurrentData() {
+            return currentJsonTableData_ACU;
+        }
+        replaceAllData(data) {
+            const cloned = JSON.parse(JSON.stringify(data || {}));
+            _set_currentJsonTableData_ACU(cloned);
+            const modifiedKeys = Object.keys(cloned).filter(key => key.startsWith('sheet_'));
+            return { success: true, modifiedKeys, appliedEdits: modifiedKeys.length };
+        }
+        /**
+         * 应用 AI 返回的编辑指令（DSL 格式）
+         * 委托给 parseAndApplyTableEdits_ACU
+         */
+        applyEdits(edits, updateMode) {
+            logDebug_ACU(`[原生适配器] applyEdits: 模式=${updateMode || 'standard'}, 编辑指令长度=${edits.length}`);
+            const success = parseAndApplyTableEdits_ACU(edits, updateMode || 'standard');
+            // parseAndApplyTableEdits_ACU 返回 boolean：
+            // true = 成功或无编辑，false = 失败
+            return {
+                success: !!success,
+                modifiedKeys: [], // 原生模式下不追踪具体修改了哪些 sheet
+                appliedEdits: success ? 1 : 0,
+            };
+        }
+        /**
+         * SQL 查询 — 原生模式不支持
+         */
+        executeQuery(_sql, _params) {
+            throw new Error('SQL 查询仅在 SQLite 模式下可用。请在设置中切换到 SQLite 模式。');
+        }
+        /**
+         * SQL 变更 — 原生模式不支持
+         */
+        executeMutation(_sql, _params) {
+            throw new Error('SQL 变更仅在 SQLite 模式下可用。请在设置中切换到 SQLite 模式。');
+        }
+        /**
+         * 销毁/清理 — 原生模式无需清理
+         */
+        dispose() {
+            // 原生模式没有需要清理的资源
         }
     }
 
@@ -9441,6 +10190,541 @@ $CONTENT
         return { jsonData, fromPresetName };
     }
 
+    function deepClone_ACU$1(value) {
+        return JSON.parse(JSON.stringify(value));
+    }
+    function sheetKeysOfData_ACU(data) {
+        if (!data || typeof data !== 'object')
+            return [];
+        return Object.keys(data).filter(key => key.startsWith('sheet_') && Boolean(data[key]));
+    }
+    function countAiFloor_ACU(chat, messageIndex) {
+        let count = 0;
+        for (let i = 0; i <= messageIndex && i < chat.length; i += 1) {
+            if (chat[i] && !chat[i].is_user)
+                count += 1;
+        }
+        return count;
+    }
+    function findLatestAiMessage_ACU(chat) {
+        for (let i = chat.length - 1; i >= 0; i -= 1) {
+            if (chat[i] && !chat[i].is_user)
+                return { message: chat[i], index: i };
+        }
+        return null;
+    }
+    function noteFilled_ACU(summary, sheetKey, aiFloor) {
+        if (!summary[sheetKey])
+            summary[sheetKey] = {};
+        summary[sheetKey].lastFilledAiFloor = Math.max(summary[sheetKey].lastFilledAiFloor || 0, aiFloor);
+    }
+    function noteChanged_ACU(summary, sheetKey, aiFloor) {
+        if (!summary[sheetKey])
+            summary[sheetKey] = {};
+        summary[sheetKey].lastChangedAiFloor = Math.max(summary[sheetKey].lastChangedAiFloor || 0, aiFloor);
+    }
+    function noteFilledAndChanged_ACU(summary, sheetKey, aiFloor) {
+        noteFilled_ACU(summary, sheetKey, aiFloor);
+        noteChanged_ACU(summary, sheetKey, aiFloor);
+    }
+    function normalizeSheetKeys_ACU$1(value, allowedSheetKeys) {
+        if (!Array.isArray(value))
+            return [];
+        return [...new Set(value.filter((item) => typeof item === 'string' && allowedSheetKeys.has(item)))];
+    }
+    function collectContainerSheetKeys_ACU(container, allowedSheetKeys) {
+        if (!container || typeof container !== 'object' || Array.isArray(container))
+            return [];
+        return Object.keys(container).filter(key => allowedSheetKeys.has(key));
+    }
+    function applyLegacyTracking_ACU(summary, aiFloor, allowedSheetKeys, options) {
+        const dataKeys = normalizeSheetKeys_ACU$1(options.dataKeys || [], allowedSheetKeys);
+        const deltaKeys = normalizeSheetKeys_ACU$1(options.deltaKeys || [], allowedSheetKeys);
+        const modifiedKeys = normalizeSheetKeys_ACU$1(options.modifiedKeys || [], allowedSheetKeys);
+        const updateGroupKeys = normalizeSheetKeys_ACU$1(options.updateGroupKeys || [], allowedSheetKeys);
+        updateGroupKeys.forEach(sheetKey => noteFilled_ACU(summary, sheetKey, aiFloor));
+        modifiedKeys.forEach(sheetKey => noteFilledAndChanged_ACU(summary, sheetKey, aiFloor));
+        deltaKeys.forEach(sheetKey => noteFilledAndChanged_ACU(summary, sheetKey, aiFloor));
+        if (updateGroupKeys.length === 0 && modifiedKeys.length === 0 && deltaKeys.length === 0) {
+            dataKeys.forEach(sheetKey => noteFilledAndChanged_ACU(summary, sheetKey, aiFloor));
+        }
+    }
+    function collectLegacyScheduleSummaryForMigration_ACU(chat, isolationKey, isolationConfig, data) {
+        if (!Array.isArray(chat) || chat.length === 0)
+            return {};
+        const allowedSheetKeys = new Set(sheetKeysOfData_ACU(data));
+        if (allowedSheetKeys.size === 0)
+            return {};
+        const summary = {};
+        for (let i = 0; i < chat.length; i += 1) {
+            const message = chat[i];
+            if (!message || message.is_user)
+                continue;
+            const aiFloor = countAiFloor_ACU(chat, i);
+            const tagData = readIsolatedTagData_ACU(message, isolationKey);
+            if (tagData && !isV2TagData_ACU(tagData)) {
+                applyLegacyTracking_ACU(summary, aiFloor, allowedSheetKeys, {
+                    dataKeys: collectContainerSheetKeys_ACU(tagData.independentData, allowedSheetKeys),
+                    deltaKeys: collectContainerSheetKeys_ACU(tagData.incrementalData, allowedSheetKeys),
+                    modifiedKeys: tagData.modifiedKeys,
+                    updateGroupKeys: tagData.updateGroupKeys,
+                });
+            }
+            if (isLegacyMatchForIsolation_ACU(message, isolationConfig)) {
+                applyLegacyTracking_ACU(summary, aiFloor, allowedSheetKeys, {
+                    dataKeys: [
+                        ...collectContainerSheetKeys_ACU(readLegacyIndependentData_ACU(message), allowedSheetKeys),
+                        ...collectContainerSheetKeys_ACU(readLegacyStandardData_ACU(message), allowedSheetKeys),
+                        ...collectContainerSheetKeys_ACU(readLegacySummaryData_ACU(message), allowedSheetKeys),
+                    ],
+                    modifiedKeys: readModifiedKeys_ACU(message),
+                    updateGroupKeys: readUpdateGroupKeys_ACU(message),
+                });
+            }
+        }
+        return summary;
+    }
+    function removeLegacyIsolatedSlot_ACU(message, isolationKey) {
+        const isolatedData = cloneIsolatedData_ACU(message);
+        if (!isolatedData || typeof isolatedData !== 'object' || !Object.prototype.hasOwnProperty.call(isolatedData, isolationKey))
+            return;
+        if (isV2TagData_ACU(isolatedData[isolationKey])) {
+            message.TavernDB_ACU_IsolatedData = isolatedData;
+            return;
+        }
+        delete isolatedData[isolationKey];
+        if (Object.keys(isolatedData).length === 0) {
+            delete message.TavernDB_ACU_IsolatedData;
+        }
+        else {
+            message.TavernDB_ACU_IsolatedData = isolatedData;
+        }
+    }
+    function removeLegacyTopLevelFields_ACU(message, isolationConfig) {
+        if (!isLegacyMatchForIsolation_ACU(message, isolationConfig))
+            return;
+        delete message.TavernDB_ACU_IndependentData;
+        delete message.TavernDB_ACU_Data;
+        delete message.TavernDB_ACU_SummaryData;
+        delete message.TavernDB_ACU_ModifiedKeys;
+        delete message.TavernDB_ACU_UpdateGroupKeys;
+        delete message.TavernDB_ACU_Identity;
+    }
+    function cleanupLegacyFieldsAfterV2Write_ACU(chat, isolationKey, isolationConfig) {
+        for (const message of chat) {
+            if (!message)
+                continue;
+            removeLegacyIsolatedSlot_ACU(message, isolationKey);
+            removeLegacyTopLevelFields_ACU(message, isolationConfig);
+        }
+    }
+    function buildMigrationRevision_ACU() {
+        return `checkpoint:migration:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`;
+    }
+    async function migrateLegacyStorageToV2OnLoad_ACU(options) {
+        const chat = getChatArray_ACU();
+        if (!Array.isArray(chat) || chat.length === 0) {
+            return { migrated: false, error: 'chat history is empty' };
+        }
+        const sheetKeys = sheetKeysOfData_ACU(options.data);
+        if (sheetKeys.length === 0) {
+            return { migrated: false, error: 'legacy migration requires non-empty merged table data' };
+        }
+        const strategy = resolveTableStorageStrategy_ACU(chat, options.isolationKey, options.isolationConfig);
+        if (strategy.mode !== 'legacy-v1') {
+            return { migrated: false };
+        }
+        const target = findLatestAiMessage_ACU(chat);
+        if (!target) {
+            return { migrated: false, error: 'no AI message found for legacy migration' };
+        }
+        const existingTargetTagData = readIsolatedTagData_ACU(target.message, options.isolationKey);
+        const scheduleSummary = collectLegacyScheduleSummaryForMigration_ACU(chat, options.isolationKey, options.isolationConfig, options.data);
+        const revision = buildMigrationRevision_ACU();
+        const frame = {
+            version: 2,
+            headRevision: revision,
+            checkpoint: {
+                kind: 'full',
+                createdAt: Date.now(),
+                reason: 'migration',
+                data: deepClone_ACU$1(options.data),
+                scheduleSummary,
+            },
+            logEntries: [],
+        };
+        const isolatedData = cloneIsolatedData_ACU(target.message);
+        isolatedData[options.isolationKey] = {
+            ...(existingTargetTagData?.summaryVectorIndexState !== undefined ? { summaryVectorIndexState: existingTargetTagData.summaryVectorIndexState } : {}),
+            ...(existingTargetTagData?.summaryVectorIndexManifest !== undefined ? { summaryVectorIndexManifest: existingTargetTagData.summaryVectorIndexManifest } : {}),
+            storageFrame: frame,
+            _acu_storage_version: 2,
+        };
+        target.message.TavernDB_ACU_IsolatedData = isolatedData;
+        cleanupLegacyFieldsAfterV2Write_ACU(chat, options.isolationKey, options.isolationConfig);
+        await saveChatToHost_ACU();
+        logDebug_ACU(`[V2 Migration] legacy-v1 migrated to V2 checkpoint: messageIndex=${target.index}, isolationKey=[${options.isolationKey || '无标签'}], sheets=${sheetKeys.length}`);
+        return { migrated: true, messageIndex: target.index };
+    }
+
+    class ReadWriteLock_ACU {
+        constructor() {
+            this.activeReaders = 0;
+            this.activeWriter = false;
+            this.queue = [];
+        }
+        acquireRead() {
+            return this.enqueue('read');
+        }
+        acquireWrite() {
+            return this.enqueue('write');
+        }
+        enqueue(mode) {
+            return new Promise((resolve) => {
+                this.queue.push({ mode, resolve });
+                this.drain();
+            });
+        }
+        drain() {
+            if (this.activeWriter || this.queue.length === 0)
+                return;
+            const first = this.queue[0];
+            if (first.mode === 'write') {
+                if (this.activeReaders > 0)
+                    return;
+                this.queue.shift();
+                this.activeWriter = true;
+                first.resolve(() => {
+                    this.activeWriter = false;
+                    this.drain();
+                });
+                return;
+            }
+            while (this.queue.length > 0 && this.queue[0].mode === 'read' && !this.activeWriter) {
+                const request = this.queue.shift();
+                this.activeReaders += 1;
+                request.resolve(() => {
+                    this.activeReaders = Math.max(0, this.activeReaders - 1);
+                    if (this.activeReaders === 0)
+                        this.drain();
+                });
+            }
+        }
+    }
+    const keyedLocks_ACU = new Map();
+    const runtimeRevisions_ACU = new Map();
+    function getRuntimeRevisionState_ACU(scopeKey) {
+        let state = runtimeRevisions_ACU.get(scopeKey);
+        if (!state) {
+            state = { global: 0, allRevision: 0, sheets: new Map() };
+            runtimeRevisions_ACU.set(scopeKey, state);
+        }
+        return state;
+    }
+    function getRuntimeScopeKey_ACU(parts) {
+        return [
+            normalizeScopePart_ACU(parts.chatKey, 'current-chat'),
+            normalizeScopePart_ACU(parts.isolationKey, 'default'),
+            'runtime',
+        ].join('::');
+    }
+    function encodeRuntimeRevisionSnapshot_ACU(snapshot) {
+        return `runtime-v1:${JSON.stringify(snapshot)}`;
+    }
+    function decodeRuntimeRevisionSnapshot_ACU(value) {
+        if (!value || typeof value !== 'string' || !value.startsWith('runtime-v1:'))
+            return null;
+        try {
+            return JSON.parse(value.slice('runtime-v1:'.length));
+        }
+        catch (_) {
+            return null;
+        }
+    }
+    function captureRuntimeRevisionSnapshotForScope_ACU(scopeKey, writeSet) {
+        const state = getRuntimeRevisionState_ACU(scopeKey);
+        const normalized = normalizeTableWriteSet_ACU(writeSet);
+        const sheetKeys = [...new Set(normalized
+                .filter(unit => unit.kind !== 'all')
+                .map(unit => unit.sheetKey)
+                .filter(Boolean))].sort();
+        return encodeRuntimeRevisionSnapshot_ACU({
+            scopeKey,
+            all: normalized.some(unit => unit.kind === 'all'),
+            global: state.global,
+            allRevision: state.allRevision,
+            sheets: Object.fromEntries(sheetKeys.map(sheetKey => [sheetKey, state.sheets.get(sheetKey) || 0])),
+        });
+    }
+    function assertRuntimeRevisionFresh_ACU(scopeKey, baseRevision, writeSet, reason) {
+        const snapshot = decodeRuntimeRevisionSnapshot_ACU(baseRevision);
+        if (!snapshot)
+            return;
+        if (snapshot.scopeKey && snapshot.scopeKey !== scopeKey) {
+            throw new Error(`[RuntimeRevision] 写入基准作用域不匹配，请重新读取当前运行时数据后重试。reason=${reason}`);
+        }
+        const state = getRuntimeRevisionState_ACU(scopeKey);
+        if (snapshot.all && state.global !== snapshot.global) {
+            throw new Error(`[RuntimeRevision] 运行时数据已变化：base=${snapshot.global}, current=${state.global}。请重新读取当前数据后重试。reason=${reason}`);
+        }
+        if (state.allRevision !== snapshot.allRevision) {
+            throw new Error(`[RuntimeRevision] 运行时全局数据已变化：baseAll=${snapshot.allRevision}, currentAll=${state.allRevision}。请重新读取当前数据后重试。reason=${reason}`);
+        }
+        const normalized = normalizeTableWriteSet_ACU(writeSet);
+        for (const unit of normalized) {
+            if (unit.kind === 'all')
+                continue;
+            const sheetKey = unit.sheetKey;
+            const expected = Number(snapshot.sheets?.[sheetKey] || 0);
+            const actual = state.sheets.get(sheetKey) || 0;
+            if (actual !== expected) {
+                throw new Error(`[RuntimeRevision] 表 ${sheetKey} 已变化：base=${expected}, current=${actual}。请重新读取当前运行时数据后重试。reason=${reason}`);
+            }
+        }
+    }
+    function normalizeRevisionBumpWriteSet_ACU(revisionWriteSet, fallbackWriteSet) {
+        if (revisionWriteSet === undefined)
+            return normalizeTableWriteSet_ACU(fallbackWriteSet);
+        if (!Array.isArray(revisionWriteSet) || revisionWriteSet.length === 0)
+            return [];
+        return normalizeTableWriteSet_ACU(revisionWriteSet);
+    }
+    function bumpRuntimeRevision_ACU(scopeKey, writeSet) {
+        const state = getRuntimeRevisionState_ACU(scopeKey);
+        const normalized = Array.isArray(writeSet) ? writeSet : [];
+        if (normalized.length === 0)
+            return `runtime:${state.global}`;
+        state.global += 1;
+        const revision = state.global;
+        if (normalized.some(unit => unit.kind === 'all')) {
+            state.allRevision = revision;
+        }
+        else {
+            for (const unit of normalized) {
+                const sheetKey = unit.sheetKey;
+                if (sheetKey)
+                    state.sheets.set(sheetKey, revision);
+            }
+        }
+        return `runtime:${revision}`;
+    }
+    function getLock_ACU(scopeKey) {
+        let lock = keyedLocks_ACU.get(scopeKey);
+        if (!lock) {
+            lock = new ReadWriteLock_ACU();
+            keyedLocks_ACU.set(scopeKey, lock);
+        }
+        return lock;
+    }
+    async function acquireRead_ACU(scopeKey) {
+        return getLock_ACU(scopeKey).acquireRead();
+    }
+    async function acquireWrite_ACU(scopeKey) {
+        return getLock_ACU(scopeKey).acquireWrite();
+    }
+    function normalizeScopePart_ACU(value, fallback) {
+        const normalized = String(value || fallback).trim();
+        return normalized || fallback;
+    }
+    function deepClone_ACU(value) {
+        return value == null ? value : JSON.parse(JSON.stringify(value));
+    }
+    function buildTableMaintenanceScopeKey_ACU(parts) {
+        return [
+            normalizeScopePart_ACU(parts.chatKey, 'current-chat'),
+            normalizeScopePart_ACU(parts.isolationKey, 'default'),
+            'maintenance',
+        ].join('::');
+    }
+    function buildTableSheetMutationScopeKey_ACU(parts) {
+        return [
+            normalizeScopePart_ACU(parts.chatKey, 'current-chat'),
+            normalizeScopePart_ACU(parts.isolationKey, 'default'),
+            'sheet',
+            parts.sheetKey || '*',
+        ].join('::');
+    }
+    function buildTableCommitScopeKey_ACU(parts) {
+        return [
+            normalizeScopePart_ACU(parts.chatKey, 'current-chat'),
+            normalizeScopePart_ACU(parts.isolationKey, 'default'),
+            'commit',
+        ].join('::');
+    }
+    function captureTableRuntimeRevisionForWriteSet_ACU(writeSet, parts = {}) {
+        const chatKey = normalizeScopePart_ACU(parts.chatKey ?? currentChatFileIdentifier_ACU, 'current-chat');
+        const isolationKey = normalizeScopePart_ACU(parts.isolationKey ?? getCurrentIsolationKey_ACU(), 'default');
+        return captureRuntimeRevisionSnapshotForScope_ACU(getRuntimeScopeKey_ACU({ chatKey, isolationKey }), normalizeTableWriteSet_ACU(writeSet));
+    }
+    function resolveTableWriteTargetMessageIndex_ACU(chat, requestedTargetMessageIndex) {
+        if (!Array.isArray(chat) || chat.length === 0)
+            return -1;
+        if (Number.isInteger(requestedTargetMessageIndex) && requestedTargetMessageIndex !== -1) {
+            const index = requestedTargetMessageIndex;
+            return chat[index] && !chat[index].is_user ? index : -1;
+        }
+        for (let i = chat.length - 1; i >= 0; i -= 1) {
+            if (chat[i] && !chat[i].is_user)
+                return i;
+        }
+        return -1;
+    }
+    function generateTransactionId_ACU() {
+        return `twtx_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    }
+    function normalizeTableWriteSet_ACU(writeSet) {
+        if (!Array.isArray(writeSet) || writeSet.length === 0) {
+            return [{ kind: 'all' }];
+        }
+        if (writeSet.some(unit => unit?.kind === 'all')) {
+            return [{ kind: 'all' }];
+        }
+        const seen = new Set();
+        const normalized = [];
+        for (const unit of writeSet) {
+            if (!unit || unit.kind === 'all')
+                continue;
+            const sheetKey = String(unit.sheetKey || '').trim();
+            if (!sheetKey)
+                return [{ kind: 'all' }];
+            let key = '';
+            let next;
+            if (unit.kind === 'row') {
+                const rowId = String(unit.rowId || '').trim();
+                if (!rowId)
+                    return [{ kind: 'sheet', sheetKey }];
+                next = { kind: 'row', sheetKey, rowId };
+                key = `row:${sheetKey}:${rowId}`;
+            }
+            else if (unit.kind === 'cell') {
+                const rowId = String(unit.rowId || '').trim();
+                const columnKey = String(unit.columnKey || '').trim();
+                if (!rowId || !columnKey)
+                    return [{ kind: 'sheet', sheetKey }];
+                next = { kind: 'cell', sheetKey, rowId, columnKey };
+                key = `cell:${sheetKey}:${rowId}:${columnKey}`;
+            }
+            else if (unit.kind === 'schema') {
+                next = { kind: 'schema', sheetKey };
+                key = `schema:${sheetKey}`;
+            }
+            else {
+                next = { kind: 'sheet', sheetKey };
+                key = `sheet:${sheetKey}`;
+            }
+            if (!seen.has(key)) {
+                seen.add(key);
+                normalized.push(next);
+            }
+        }
+        return normalized.length > 0 ? normalized : [{ kind: 'all' }];
+    }
+    function extractSheetKeysForLocks_ACU(writeSet) {
+        if (writeSet.some(unit => unit.kind === 'all'))
+            return '*';
+        return [...new Set(writeSet.map(unit => unit.sheetKey).filter(Boolean))].sort();
+    }
+    function getConflictSheetKey_ACU(unit) {
+        return unit.kind === 'all' ? null : unit.sheetKey;
+    }
+    function tableWriteUnitsConflict_ACU(a, b) {
+        if (a.kind === 'all' || b.kind === 'all')
+            return true;
+        const sheetA = getConflictSheetKey_ACU(a);
+        const sheetB = getConflictSheetKey_ACU(b);
+        if (!sheetA || !sheetB || sheetA !== sheetB)
+            return false;
+        if (a.kind === 'sheet' || b.kind === 'sheet')
+            return true;
+        if (a.kind === 'schema' || b.kind === 'schema')
+            return true;
+        if (a.kind === 'row' && b.kind === 'row')
+            return a.rowId === b.rowId;
+        if (a.kind === 'row' && b.kind === 'cell')
+            return a.rowId === b.rowId;
+        if (a.kind === 'cell' && b.kind === 'row')
+            return a.rowId === b.rowId;
+        if (a.kind === 'cell' && b.kind === 'cell')
+            return a.rowId === b.rowId && a.columnKey === b.columnKey;
+        return true;
+    }
+    function tableWriteSetsConflict_ACU(left, right) {
+        const normalizedLeft = normalizeTableWriteSet_ACU(left);
+        const normalizedRight = normalizeTableWriteSet_ACU(right);
+        return normalizedLeft.some(a => normalizedRight.some(b => tableWriteUnitsConflict_ACU(a, b)));
+    }
+    async function acquireTransactionLocks_ACU(options) {
+        const releases = [];
+        try {
+            const maintenanceKey = buildTableMaintenanceScopeKey_ACU(options);
+            releases.push(options.maintenanceMode === 'exclusive'
+                ? await acquireWrite_ACU(maintenanceKey)
+                : await acquireRead_ACU(maintenanceKey));
+            const sheetLockTarget = extractSheetKeysForLocks_ACU(options.writeSet);
+            const wildcardKey = buildTableSheetMutationScopeKey_ACU({ ...options, sheetKey: '*' });
+            if (sheetLockTarget === '*') {
+                releases.push(await acquireWrite_ACU(wildcardKey));
+                return releases;
+            }
+            releases.push(await acquireRead_ACU(wildcardKey));
+            for (const sheetKey of sheetLockTarget) {
+                releases.push(await acquireWrite_ACU(buildTableSheetMutationScopeKey_ACU({ ...options, sheetKey })));
+            }
+            return releases;
+        }
+        catch (error) {
+            for (const release of releases.reverse())
+                release();
+            throw error;
+        }
+    }
+    async function runTableWriteTransaction_ACU(options, task) {
+        const chatKey = normalizeScopePart_ACU(currentChatFileIdentifier_ACU, 'current-chat');
+        const isolationKey = normalizeScopePart_ACU(options.isolationKey ?? getCurrentIsolationKey_ACU(), 'default');
+        const writeSet = normalizeTableWriteSet_ACU(options.writeSet);
+        const maintenanceMode = options.maintenanceMode || 'shared';
+        const releases = await acquireTransactionLocks_ACU({ chatKey, isolationKey, writeSet, maintenanceMode });
+        const transactionId = generateTransactionId_ACU();
+        const runtimeScopeKey = getRuntimeScopeKey_ACU({ chatKey, isolationKey });
+        const baseRevision = options.baseRevision ?? captureRuntimeRevisionSnapshotForScope_ACU(runtimeScopeKey, writeSet);
+        try {
+            const ctx = {
+                transactionId,
+                chatKey,
+                isolationKey,
+                source: options.source,
+                baseRevision,
+                writeSet,
+                assertFresh: (reason) => {
+                    assertRuntimeRevisionFresh_ACU(runtimeScopeKey, baseRevision, writeSet, reason || options.reason);
+                },
+                runCommit: async (commitTask, revisionWriteSet) => {
+                    const releaseCommit = await acquireWrite_ACU(buildTableCommitScopeKey_ACU({ chatKey, isolationKey }));
+                    try {
+                        assertRuntimeRevisionFresh_ACU(runtimeScopeKey, baseRevision, writeSet, options.reason);
+                        const result = await commitTask();
+                        const resolvedRevisionWriteSet = typeof revisionWriteSet === 'function' ? revisionWriteSet(result) : revisionWriteSet;
+                        bumpRuntimeRevision_ACU(runtimeScopeKey, normalizeRevisionBumpWriteSet_ACU(resolvedRevisionWriteSet, writeSet));
+                        return result;
+                    }
+                    finally {
+                        releaseCommit();
+                    }
+                },
+            };
+            const workingData = deepClone_ACU(options.initialData !== undefined ? options.initialData : currentJsonTableData_ACU);
+            return await task(ctx, workingData);
+        }
+        finally {
+            for (const release of releases.reverse())
+                release();
+        }
+    }
+    function _resetTableWriteTransactionLocksForTest_ACU() {
+        keyedLocks_ACU.clear();
+        runtimeRevisions_ACU.clear();
+    }
+
     /**
      * service/runtime/helpers-data-merge.ts — 数据合并/格式化/首楼初始化/阈值
      * 从 helpers-remaining.ts 拆出
@@ -9490,7 +10774,7 @@ $CONTENT
         });
         return data;
     }
-    async function mergeAllIndependentTables_ACU() {
+    async function mergeAllIndependentTablesLegacyV1_ACU() {
         const chat = getChatArray_ACU();
         if (!chat || chat.length === 0) {
             logDebug_ACU('Cannot merge data: Chat history is empty.');
@@ -9791,6 +11075,40 @@ $CONTENT
         mergedData = reorderDataBySheetKeys_ACU(mergedData, orderedKeys);
         return migrateContentNullToRowId(mergedData);
     }
+    async function mergeAllIndependentTables_ACU() {
+        const chat = getChatArray_ACU();
+        if (!chat || chat.length === 0) {
+            logDebug_ACU('Cannot merge data: Chat history is empty.');
+            return null;
+        }
+        const currentIsolationKey = getCurrentIsolationKey_ACU();
+        const strategy = resolveTableStorageStrategy_ACU(chat, currentIsolationKey, {
+            enabled: settings_ACU.dataIsolationEnabled,
+            code: settings_ACU.dataIsolationCode,
+        });
+        if (strategy.mode === 'v2') {
+            return loadTableStateFromFramesV2_ACU(chat, currentIsolationKey);
+        }
+        if (strategy.mode === 'legacy-v1' && strategy.warning) {
+            logWarn_ACU(`[TableStorage] ${strategy.warning}; reason=${strategy.reason}`);
+        }
+        if (strategy.mode === 'legacy-v1') {
+            const mergedLegacyData = await mergeAllIndependentTablesLegacyV1_ACU();
+            const migrationResult = await migrateLegacyStorageToV2OnLoad_ACU({
+                data: mergedLegacyData,
+                isolationKey: currentIsolationKey,
+                isolationConfig: {
+                    enabled: settings_ACU.dataIsolationEnabled,
+                    code: settings_ACU.dataIsolationCode,
+                },
+            });
+            if (!migrationResult.migrated) {
+                throw new Error(`旧存储迁移到 V2 失败: ${migrationResult.error || '未执行迁移'}`);
+            }
+            return mergedLegacyData;
+        }
+        return mergeAllIndependentTablesLegacyV1_ACU();
+    }
     // [重构] 刷新合并数据并通知前端和更新世界书
     function formatJsonToReadable_ACU(jsonData) {
         if (!jsonData)
@@ -9866,6 +11184,44 @@ $CONTENT
         const aiCount = chat.filter(m => m && !m.is_user).length;
         return userCount === 0 && aiCount === 1;
     }
+    function messageHasTableDataForCurrentIsolation_ACU(message, isolationKey) {
+        try {
+            if (!message || message.is_user)
+                return false;
+            const tagData = readIsolatedTagData_ACU(message, isolationKey);
+            if (isV2TagData_ACU(tagData) && tagData.storageFrame.checkpoint?.kind === 'full')
+                return true;
+            if (tagData?.independentData && Object.keys(tagData.independentData).some(k => k.startsWith('sheet_')))
+                return true;
+            if (isLegacyMatchForIsolation_ACU(message, { enabled: settings_ACU.dataIsolationEnabled, code: settings_ACU.dataIsolationCode })) {
+                const legacyIndependent = readLegacyIndependentData_ACU(message);
+                if (legacyIndependent && Object.keys(legacyIndependent).some(k => k.startsWith('sheet_')))
+                    return true;
+                const legacyStandard = readLegacyStandardData_ACU(message);
+                if (legacyStandard && Object.keys(legacyStandard).some(k => k.startsWith('sheet_')))
+                    return true;
+                const legacySummary = readLegacySummaryData_ACU(message);
+                if (legacySummary && Object.keys(legacySummary).some(k => k.startsWith('sheet_')))
+                    return true;
+            }
+        }
+        catch (_) { }
+        return false;
+    }
+    function shouldCreateInitialSeedCheckpoint_ACU(chat, { allowPendingFirstUserMessage = false } = {}) {
+        if (!Array.isArray(chat) || chat.length === 0)
+            return false;
+        const userCount = chat.filter(m => m && m.is_user).length;
+        if (userCount !== 1 && !(allowPendingFirstUserMessage && userCount === 0))
+            return false;
+        const isolationKey = getCurrentIsolationKey_ACU();
+        return !chat.some(message => messageHasTableDataForCurrentIsolation_ACU(message, isolationKey));
+    }
+    function normalizeInitialCheckpointV2Source_ACU(source) {
+        if (source === 'game_init' || source === 'import')
+            return 'import';
+        return 'system';
+    }
     function shouldSuppressWorldbookInjection_ACU() {
         // 用户要求：取消"首楼填表后不注入书"的限制。
         // 是否创建条目，改由各条目更新逻辑自身基于"真实有效数据"判定，避免一刀切拦截整个链路。
@@ -9895,30 +11251,63 @@ $CONTENT
         });
         return out;
     }
-    async function seedGreetingLocalDataFromTemplate_ACU() {
-        try {
-            const chat = getChatArray_ACU();
-            if (!isNewChatGreetingStage_ACU(chat))
-                return false;
-            const firstAiIndex = chat.findIndex(m => m && !m.is_user);
-            const greetingMsg = chat[firstAiIndex];
-            if (!greetingMsg)
-                return false;
-            // 幂等：避免重复写入
-            if (greetingMsg._acu_local_template_base_state_seeded === GREETING_LOCAL_BASE_STATE_MARKER_ACU)
-                return false;
-            const templateObj = parseTableTemplateJson_ACU({ stripSeedRows: false }); // 模板有数据就带数据
-            if (!templateObj)
-                return false;
-            // 确保模板编号稳定（不改变内容，只补齐 orderNo）
-            const sheetKeys = Object.keys(templateObj).filter(k => k.startsWith('sheet_'));
-            ensureSheetOrderNumbers_ACU(templateObj, { baseOrderKeys: sheetKeys, forceRebuild: false });
-            const baseData = buildTemplateBaseStateDataForLocalStorage_ACU(templateObj);
-            if (!baseData)
-                return false;
-            const isolationKey = getCurrentIsolationKey_ACU();
-            const tagData = initIsolatedTagSlot_ACU(greetingMsg, isolationKey);
-            // 写入 independentData（只写 sheet_，不强制 modifiedKeys）
+    async function writeInitialTemplateCheckpoint_ACU(templateObj, { reason = 'initial_seed_checkpoint', presetName = '', source = '', registerPreset = false, force = false, cleanupWorldbook = true, } = {}) {
+        const chat = getChatArray_ACU();
+        if (!chat || !Array.isArray(chat) || chat.length === 0) {
+            logWarn_ACU('[InitialCheckpoint] 聊天记录为空，无法写入初始化数据');
+            return false;
+        }
+        const firstAiIndex = chat.findIndex(m => m && !m.is_user);
+        if (firstAiIndex === -1) {
+            logWarn_ACU('[InitialCheckpoint] 找不到第一楼AI消息');
+            return false;
+        }
+        const firstMsg = chat[firstAiIndex];
+        if (!force && firstMsg._acu_local_template_base_state_seeded === GREETING_LOCAL_BASE_STATE_MARKER_ACU)
+            return false;
+        const sheetKeys = Object.keys(templateObj || {}).filter(k => k.startsWith('sheet_'));
+        if (sheetKeys.length === 0) {
+            logWarn_ACU('[InitialCheckpoint] 模板中没有表格数据');
+            return false;
+        }
+        ensureSheetOrderNumbers_ACU(templateObj, { baseOrderKeys: sheetKeys, forceRebuild: false });
+        const templateSnapshot = sanitizeTemplateSnapshotForChat_ACU(templateObj);
+        const normalizedPresetName = deriveTemplatePresetNameForImport_ACU({ presetName });
+        const normalizedSource = source || reason;
+        if (registerPreset && normalizedPresetName && templateSnapshot?.templateStr) {
+            try {
+                const savePresetOk = upsertTemplatePreset_ACU(normalizedPresetName, templateSnapshot.templateStr);
+                if (!savePresetOk) {
+                    logWarn_ACU(`[TemplateScope] 保存模板预设失败：${normalizedPresetName}`);
+                }
+            }
+            catch (e) {
+                logWarn_ACU('[TemplateScope] 保存模板预设失败:', e);
+            }
+        }
+        const baseData = buildTemplateBaseStateDataForLocalStorage_ACU(templateObj);
+        if (!baseData)
+            return false;
+        const isolationKey = getCurrentIsolationKey_ACU();
+        firstMsg._acu_local_template_base_state_seeded = GREETING_LOCAL_BASE_STATE_MARKER_ACU;
+        _set_suppressWorldbookInjectionInGreeting_ACU(false);
+        const guideData = buildChatSheetGuideDataFromTemplateObj_ACU(templateObj, { stripSeedRows: false });
+        if (guideData) {
+            setChatSheetGuideDataForIsolationKey_ACU(isolationKey, guideData, {
+                reason,
+                syncTemplateScope: true,
+                templateSource: templateSnapshot?.templateStr || templateObj,
+                presetName: normalizedPresetName,
+                source: normalizedSource,
+            });
+            applyTemplateScopeForCurrentChat_ACU();
+        }
+        const strategy = resolveTableStorageStrategy_ACU(chat, isolationKey, {
+            enabled: settings_ACU.dataIsolationEnabled,
+            code: settings_ACU.dataIsolationCode,
+        });
+        if (strategy.mode === 'legacy-v1') {
+            const tagData = initIsolatedTagSlot_ACU(firstMsg, isolationKey);
             const indep = {};
             Object.keys(baseData).forEach(k => {
                 if (!k.startsWith('sheet_'))
@@ -9926,112 +11315,90 @@ $CONTENT
                 indep[k] = JSON.parse(JSON.stringify(baseData[k]));
             });
             tagData.independentData = indep;
-            // 这是一份"基底"，不应被认为是AI更新结果，因此 modifiedKeys 留空
             tagData.modifiedKeys = [];
             tagData.updateGroupKeys = [];
             tagData._acu_base_state = GREETING_LOCAL_BASE_STATE_MARKER_ACU;
             tagData._acu_storage_mode = 'checkpoint';
             tagData._acu_storage_version = 1;
-            // 同步旧格式（兼容老逻辑）
-            writeLegacyCompatData_ACU(greetingMsg, JSON.parse(JSON.stringify(indep)), [], []);
-            // 标记幂等
-            greetingMsg._acu_local_template_base_state_seeded = GREETING_LOCAL_BASE_STATE_MARKER_ACU;
-            // 不在这里做全局注入抑制；
-            // 是否真正创建世界书条目，交给后续各条目逻辑按"是否存在真实有效数据"决定。
-            _set_suppressWorldbookInjectionInGreeting_ACU(false);
+            writeLegacyCompatData_ACU(firstMsg, JSON.parse(JSON.stringify(indep)), [], [], { legacyConfirmed: true });
             await saveChatToHost_ACU();
-            // [关键] 新开对话时应清理旧的世界书条目，但仍不能创建新条目。
-            // 这里主动清理一次，确保"开场白阶段不注入，但旧条目会被清掉"。
+        }
+        else {
+            const saveResult = await runTableWriteTransaction_ACU({
+                source: normalizeInitialCheckpointV2Source_ACU(normalizedSource),
+                reason: 'initial_checkpoint_v2',
+                isolationKey,
+                writeSet: [{ kind: 'all' }],
+                initialData: baseData,
+            }, async (transactionContext) => persistTableMutationLogV2_ACU({
+                targetMessageIndex: firstAiIndex,
+                source: normalizeInitialCheckpointV2Source_ACU(normalizedSource),
+                afterData: baseData,
+                filledSheetKeys: [],
+                candidateChangedSheetKeys: [],
+                groupKeys: [],
+                forceCheckpoint: true,
+                checkpointReason: 'init',
+                isolationKey,
+                transactionContext,
+            }));
+            if (!saveResult.saved) {
+                logWarn_ACU(`[InitialCheckpoint] V2 checkpoint 写入失败：${saveResult.error || 'unknown error'}`);
+                return false;
+            }
+        }
+        if (cleanupWorldbook) {
             try {
                 await deleteAllGeneratedEntries_ACU$1();
-                logDebug_ACU('[Worldbook] Deleted generated entries on new chat greeting seed (cleanup-only).');
+                logDebug_ACU(`[InitialCheckpoint] Deleted generated entries before first real reply. reason=${reason}`);
             }
             catch (e) {
-                logWarn_ACU('[Worldbook] Cleanup on greeting seed failed:', e);
+                logWarn_ACU('[InitialCheckpoint] Cleanup before first real reply failed:', e);
             }
-            // 更新内存（但不触发世界书注入）
-            _set_currentJsonTableData_ACU(reorderDataBySheetKeys_ACU(JSON.parse(JSON.stringify(baseData)), getSortedSheetKeys_ACU(baseData)));
-            return { success: true, messageIndex: firstAiIndex };
+        }
+        _set_currentJsonTableData_ACU(reorderDataBySheetKeys_ACU(JSON.parse(JSON.stringify(baseData)), getSortedSheetKeys_ACU(baseData)));
+        logDebug_ACU(`[InitialCheckpoint] 初始化 checkpoint 已写入。reason=${reason}, messageIndex=${firstAiIndex}, sheetCount=${sheetKeys.length}`);
+        return { success: true, messageIndex: firstAiIndex, sheetCount: sheetKeys.length };
+    }
+    async function ensureInitialSeedCheckpoint_ACU({ reason = 'initial_seed_checkpoint', allowPendingFirstUserMessage = false } = {}) {
+        try {
+            const chat = getChatArray_ACU();
+            if (!shouldCreateInitialSeedCheckpoint_ACU(chat, { allowPendingFirstUserMessage }))
+                return false;
+            const templateObj = parseTableTemplateJson_ACU({ stripSeedRows: false });
+            if (!templateObj)
+                return false;
+            const result = await writeInitialTemplateCheckpoint_ACU(templateObj, {
+                reason,
+                source: reason,
+                registerPreset: false,
+                force: false,
+                cleanupWorldbook: true,
+            });
+            if (result && typeof result === 'object' && result.success) {
+                return { success: true, messageIndex: result.messageIndex };
+            }
+            return result;
         }
         catch (e) {
-            logWarn_ACU('[GreetingLocalBaseState] Failed to seed greeting local data from template:', e);
+            logWarn_ACU('[InitialSeed] Failed to persist initial seed checkpoint:', e);
             return { success: false };
         }
     }
-    // [新增] 直接将模板数据填充到第一楼的实际表格数据
-    // 用于 initGameSession 场景，确保模板中的所有表格数据（包括种子数据）都被写入第一楼
+    async function seedGreetingLocalDataFromTemplate_ACU() {
+        return ensureInitialSeedCheckpoint_ACU({ reason: 'legacy_seed_greeting_alias' });
+    }
+    // 用于 initGameSession 场景；与发送前初始化共用同一条 checkpoint 写入链路。
     async function fillFirstLayerWithTemplateData_ACU(templateObj, { reason = 'game_init', presetName = '', source = 'game_init', registerPreset = true } = {}) {
         try {
-            const chat = getChatArray_ACU();
-            if (!chat || !Array.isArray(chat) || chat.length === 0) {
-                logWarn_ACU('[FillFirstLayer] 聊天记录为空，无法填充数据');
-                return false;
-            }
-            // 找到第一条AI消息（第一楼）
-            const firstAiIndex = chat.findIndex(m => m && !m.is_user);
-            if (firstAiIndex === -1) {
-                logWarn_ACU('[FillFirstLayer] 找不到第一楼AI消息');
-                return false;
-            }
-            const firstMsg = chat[firstAiIndex];
-            // 确保模板编号稳定
-            const sheetKeys = Object.keys(templateObj).filter(k => k.startsWith('sheet_'));
-            if (sheetKeys.length === 0) {
-                logWarn_ACU('[FillFirstLayer] 模板中没有表格数据');
-                return false;
-            }
-            ensureSheetOrderNumbers_ACU(templateObj, { baseOrderKeys: sheetKeys, forceRebuild: false });
-            const templateSnapshot = sanitizeTemplateSnapshotForChat_ACU(templateObj);
-            const normalizedPresetName = deriveTemplatePresetNameForImport_ACU({ presetName });
-            if (registerPreset && normalizedPresetName && templateSnapshot?.templateStr) {
-                try {
-                    const savePresetOk = upsertTemplatePreset_ACU(normalizedPresetName, templateSnapshot.templateStr);
-                    if (!savePresetOk) {
-                        logWarn_ACU(`[TemplateScope] 保存模板预设失败：${normalizedPresetName}`);
-                    }
-                }
-                catch (e) {
-                    logWarn_ACU('[TemplateScope] 保存模板预设失败:', e);
-                }
-            }
-            // 构建完整的表格数据（包含所有种子数据）
-            const fullData = { mate: { type: 'chatSheets', version: 1 } };
-            sheetKeys.forEach(k => {
-                fullData[k] = JSON.parse(JSON.stringify(templateObj[k]));
+            return await writeInitialTemplateCheckpoint_ACU(templateObj, {
+                reason,
+                presetName,
+                source,
+                registerPreset,
+                force: true,
+                cleanupWorldbook: true,
             });
-            const isolationKey = getCurrentIsolationKey_ACU();
-            // 写入新版格式
-            const tagData = initIsolatedTagSlot_ACU(firstMsg, isolationKey);
-            // 写入 independentData（包含所有表格的完整数据）
-            const indep = {};
-            sheetKeys.forEach(k => {
-                indep[k] = JSON.parse(JSON.stringify(fullData[k]));
-            });
-            tagData.independentData = indep;
-            tagData.modifiedKeys = [];
-            tagData.updateGroupKeys = [];
-            tagData._acu_storage_mode = 'checkpoint';
-            tagData._acu_storage_version = 1;
-            // 同步旧格式（兼容老逻辑）
-            writeLegacyCompatData_ACU(firstMsg, JSON.parse(JSON.stringify(indep)), [], []);
-            // 同时更新指导表与聊天级模板快照（确保表头、参数、预设名同步）
-            const guideData = buildChatSheetGuideDataFromTemplateObj_ACU(templateObj, { stripSeedRows: false });
-            if (guideData) {
-                setChatSheetGuideDataForIsolationKey_ACU(isolationKey, guideData, {
-                    reason,
-                    syncTemplateScope: true,
-                    templateSource: templateSnapshot?.templateStr || templateObj,
-                    presetName: normalizedPresetName,
-                    source,
-                });
-                applyTemplateScopeForCurrentChat_ACU();
-            }
-            // 保存聊天
-            await saveChatToHost_ACU();
-            // 更新内存数据
-            _set_currentJsonTableData_ACU(reorderDataBySheetKeys_ACU(JSON.parse(JSON.stringify(fullData)), getSortedSheetKeys_ACU(fullData)));
-            logDebug_ACU(`[FillFirstLayer] 成功将模板数据填充到第一楼，共 ${sheetKeys.length} 个表格`);
-            return { success: true, messageIndex: firstAiIndex, sheetCount: sheetKeys.length };
         }
         catch (e) {
             logError_ACU('[FillFirstLayer] 填充第一楼数据失败:', e);
@@ -10337,6 +11704,14 @@ $CONTENT
         }
         return JSON.parse(JSON.stringify(DEFAULT_MATE_ACU));
     }
+    function normalizeSqlStatementsForRuntimeLog_ACU(sqlStatements) {
+        const cleaned = String(sqlStatements || '').replace(/<!--|-->/g, '').trim();
+        if (!cleaned)
+            return [];
+        return splitSqlStatements(cleaned)
+            .map(stmt => normalizeStatementValues(normalizeSqlStructure(stmt)))
+            .filter(Boolean);
+    }
     function mapSqlTableNamesToSheetKeys_ACU(tableData, tableNames) {
         if (!tableData || !Array.isArray(tableNames) || tableNames.length === 0)
             return [];
@@ -10346,8 +11721,11 @@ $CONTENT
                 continue;
             const sheet = value;
             const tableNameFromUid = typeof sheet?.uid === 'string' ? sheet.uid.trim() : '';
+            const tableNameFromName = typeof sheet?.name === 'string' ? sheet.name.trim() : '';
             const tableNameFromDDL = typeof sheet?.sourceData?.ddl === 'string' ? parseDDLTableName(sheet.sourceData.ddl) : '';
-            if ((tableNameFromUid && tableNames.includes(tableNameFromUid)) || (tableNameFromDDL && tableNames.includes(tableNameFromDDL))) {
+            if ((tableNameFromUid && tableNames.includes(tableNameFromUid))
+                || (tableNameFromName && tableNames.includes(tableNameFromName))
+                || (tableNameFromDDL && tableNames.includes(tableNameFromDDL))) {
                 matchedKeys.add(sheetKey);
             }
         }
@@ -10359,6 +11737,25 @@ $CONTENT
             this._initialized = false;
             this.engine = new SqliteEngine();
             this.syncBridge = new SyncBridge(this.engine);
+        }
+        isReady() {
+            return this._initialized && this.engine.isReady;
+        }
+        createRuntimeSnapshot() {
+            if (!this._initialized || !this.engine.isReady)
+                return null;
+            return this.engine.exportBinary();
+        }
+        async restoreRuntimeSnapshot(snapshot) {
+            if (!(snapshot instanceof Uint8Array))
+                return;
+            await this.engine.loadFromBinary(snapshot);
+            this._initialized = true;
+            this._existingTableSet = undefined;
+            this._syncToJson();
+            if (currentJsonTableData_ACU) {
+                this._buildNameMapper(currentJsonTableData_ACU);
+            }
         }
         /**
          * 从聊天消息加载表格数据到 SQLite
@@ -10391,19 +11788,23 @@ $CONTENT
                     return true;
                 });
                 if (!mergedData || !hasRealDataRows) {
-                    // 新开卡场景（mergedData=null）或空壳结构（只有表头）：
-                    // 只初始化引擎，不建表——建表延迟到第一次写操作（applyEdits/executeMutation）时
-                    // 这样用户在新开卡后还能修改表结构（DDL），直到真正填数据时才锁定表结构
-                    // 注意：executeQuery（只读）不触发建表，避免前端查询意外提前锁定表结构
-                    if (mergedData) {
-                        // 空壳结构：仍然更新 JSON 视图（前端需要显示表头），但不建 SQLite 表
-                        _set_currentJsonTableData_ACU(mergedData);
-                        this._buildNameMapper(mergedData);
-                        logDebug_ACU('[SqlTableService] 检测到空壳结构（仅表头无数据行），引擎已就绪，等待第一次填表时建表');
+                    // 首个用户消息后、首个真实 AI 回复前，把 seedRows 作为本轮初始上下文物化进运行时 SQLite。
+                    // 这一步只更新运行时视图；第一个持久化 checkpoint 由第一次填表保存链路写入。
+                    const runtimeSeedSource = mergedData || currentJsonTableData_ACU || null;
+                    const runtimeSeedData = this._buildInitialRuntimeTableData_ACU(runtimeSeedSource);
+                    if (runtimeSeedData) {
+                        this.syncBridge.loadFromTableData(runtimeSeedData);
+                        _set_currentJsonTableData_ACU(runtimeSeedData);
+                        this._buildNameMapper(runtimeSeedData);
+                        this._initialized = true;
+                        this._existingTableSet = undefined;
+                        const hasSeedRows = Object.keys(runtimeSeedData)
+                            .filter(k => k.startsWith('sheet_'))
+                            .some(k => Array.isArray(runtimeSeedData[k]?.content) && runtimeSeedData[k].content.length > 1);
+                        logDebug_ACU(`[SqlTableService] 初始 seedRows 已写入运行时 SQLite: hasSeedRows=${hasSeedRows}`);
+                        return { loaded: hasSeedRows, source: hasSeedRows ? 'initialized' : 'empty' };
                     }
-                    else {
-                        logDebug_ACU('[SqlTableService] 没有找到表格数据，引擎已就绪，等待第一次填表时从模板建表');
-                    }
+                    logDebug_ACU('[SqlTableService] 没有找到表格数据，引擎已就绪，等待第一次填表时从模板建表');
                     this._initialized = true;
                     this._existingTableSet = undefined;
                     return { loaded: false, source: 'empty' };
@@ -10426,25 +11827,34 @@ $CONTENT
             }
         }
         /**
-         * 从 SQLite 导出并保存到聊天消息
-         * 1. exportToTableData() 导出最新状态
-         * 2. 更新 currentJsonTableData_ACU
-         * 3. saveIndependentTableToChatHistory_ACU() 写入聊天
+         * 禁止 provider 自行把运行时数据写入聊天记录。
+         * 所有写入必须通过 table-update-commit 公共提交模型完成。
          */
-        async saveToChat(targetSheetKeys, updateGroupKeys) {
-            this._ensureInitialized();
+        async saveToChat(_targetSheetKeys, _updateGroupKeys, _trackingSheetKeys, _options) {
+            const message = 'SqlTableService.saveToChat is disabled; use table update commit model.';
+            logError_ACU(`[SqlTableService] ${message}`);
+            return { saved: false, error: message };
+        }
+        async replaceAllData(data) {
             try {
-                // 从 SQLite 导出最新数据到 JSON 视图
-                const mate = currentJsonTableData_ACU?.mate || { type: 'acu', version: 1, updateConfigUiSentinel: 0, globalInjectionConfig: { readableEntryPlacement: { position: '', depth: 0, order: 0 }, wrapperPlacement: { position: '', depth: 0, order: 0 } } };
-                const exportedData = this.syncBridge.exportToTableData(mate);
-                _set_currentJsonTableData_ACU(exportedData);
-                // 写入聊天消息
-                return saveIndependentTableToChatHistory_ACU(-1, targetSheetKeys ?? null, updateGroupKeys ?? null);
+                const cloned = JSON.parse(JSON.stringify(data || {}));
+                this.engine.dispose();
+                this.engine = new SqliteEngine();
+                this.syncBridge = new SyncBridge(this.engine);
+                await this.engine.init();
+                this.syncBridge.loadFromTableData(cloned);
+                _set_currentJsonTableData_ACU(cloned);
+                this._buildNameMapper(cloned);
+                this._initialized = true;
+                this._existingTableSet = undefined;
+                const modifiedKeys = Object.keys(cloned).filter(key => key.startsWith('sheet_'));
+                logDebug_ACU(`[SqlTableService] 运行时全量替换完成: tables=${modifiedKeys.length}`);
+                return { success: true, modifiedKeys, appliedEdits: modifiedKeys.length };
             }
             catch (e) {
-                const errMsg = e?.message || String(e);
-                logError_ACU(`[SqlTableService] 保存失败: ${errMsg}`);
-                return { saved: false, error: errMsg };
+                const message = e?.message || String(e);
+                logError_ACU(`[SqlTableService] 运行时全量替换失败: ${message}`);
+                return { success: false, modifiedKeys: [], appliedEdits: 0, error: message };
             }
         }
         /**
@@ -10476,48 +11886,32 @@ $CONTENT
          * 失败时抛出包含详细报错的 Error，供上层重试循环捕获
          */
         applyEdits(sqlStatements, _updateMode) {
+            return this.applyEditsBatch([sqlStatements], _updateMode);
+        }
+        applyEditsBatch(sqlTexts, _updateMode) {
             this._ensureInitialized();
             this._ensureTablesFromTemplate();
-            // 去掉 HTML 注释标记（AI 可能在 <tableEdit> 中用 <!-- --> 包裹）
-            const cleaned = sqlStatements.replace(/<!--|-->/g, '').trim();
-            if (!cleaned) {
+            const userStatements = (Array.isArray(sqlTexts) ? sqlTexts : [])
+                .flatMap(sqlText => normalizeSqlStatementsForRuntimeLog_ACU(sqlText));
+            if (userStatements.length === 0) {
                 return { success: true, modifiedKeys: [], appliedEdits: 0 };
             }
-            // 按分号拆分为多条语句（跳过字符串内的分号）
-            const rawStatements = splitSqlStatements(cleaned);
-            if (rawStatements.length === 0) {
-                return { success: true, modifiedKeys: [], appliedEdits: 0 };
-            }
-            // 对每条语句做规范化：结构字符兼容化 + 受约束字段值规范化
-            const statements = rawStatements.map(stmt => {
-                const structNormalized = normalizeSqlStructure(stmt);
-                return normalizeStatementValues(structNormalized);
-            });
-            // 收集空表 seedRows INSERT，前置到 statements（同一事务，失败一起回滚）
-            const reseedInserts = this._collectReseedInsertsForEmptyTables();
-            if (reseedInserts.length > 0) {
-                statements.unshift(...reseedInserts);
-            }
+            const statements = [...this._collectReseedInsertsForEmptyTables(), ...userStatements];
             try {
-                // 事务执行
                 const result = this.engine.runBatch(statements);
-                // 同步到 JSON 视图
                 this._syncToJson();
-                // 收集受影响的表名（从 SQL 语句中提取）
                 const modifiedTables = extractTableNamesFromStatements(statements);
                 const modifiedKeys = this._tableNamesToSheetKeys(modifiedTables);
-                logDebug_ACU(`[SqlTableService] SQL 执行成功: ${statements.length} 条语句, ${result.totalChanges} 行受影响`);
+                logDebug_ACU(`[SqlTableService] SQL 批量执行成功: ${statements.length} 条语句, ${result.totalChanges} 行受影响`);
                 return {
                     success: true,
                     modifiedKeys,
-                    appliedEdits: rawStatements.length,
+                    appliedEdits: userStatements.length,
                 };
             }
             catch (e) {
-                // 事务已回滚，数据保持原样
                 const errMsg = e?.message || String(e);
-                logError_ACU(`[SqlTableService] SQL 执行失败: ${errMsg}`);
-                // 抛出错误，供上层重试循环捕获并注入到 AI prompt
+                logError_ACU(`[SqlTableService] SQL 批量执行失败: ${errMsg}`);
                 throw e;
             }
         }
@@ -10576,6 +11970,28 @@ $CONTENT
         // ═══════════════════════════════════════════════════════════════
         // 内部方法
         // ═══════════════════════════════════════════════════════════════
+        _buildInitialRuntimeTableData_ACU(sourceData) {
+            const baseData = sourceData
+                ? JSON.parse(JSON.stringify(sourceData))
+                : this._resolveCurrentChatTemplate(!shouldUseInitialSeedRows_ACU());
+            if (!baseData || typeof baseData !== 'object')
+                return null;
+            let hasSheet = false;
+            for (const key of Object.keys(baseData).filter(k => k.startsWith('sheet_'))) {
+                const sheet = baseData[key];
+                if (!sheet || typeof sheet !== 'object')
+                    continue;
+                hasSheet = true;
+                delete sheet._acu_from_base_state;
+                const headerRow = Array.isArray(sheet.content?.[0]) ? sheet.content[0] : ['row_id'];
+                if (!Array.isArray(sheet.content) || sheet.content.length <= 1) {
+                    const seedRows = getEffectiveSeedRowsForSheet_ACU(key, { allowTemplateFallback: true });
+                    sheet.content = [headerRow, ...(Array.isArray(seedRows) ? seedRows : [])];
+                }
+                sheet.content = ensureStableRowIdsForSheetContent_ACU(sheet.content);
+            }
+            return hasSheet ? baseData : null;
+        }
         /**
          * 收集已存在空表的 seedRows INSERT 语句，用于 SQL 写入前补齐基底数据。
          *
@@ -10817,7 +12233,7 @@ $CONTENT
          * 2. preset_link  —— 当前聊天链接的全局预设
          * 3. inherit_global / 无聊天级模板 —— fallback 到 parseTableTemplateJson_ACU（全局模板）
          */
-        _resolveCurrentChatTemplate() {
+        _resolveCurrentChatTemplate(stripSeedRows = true) {
             try {
                 const scopeState = getCurrentChatTemplateScopeState_ACU();
                 if (scopeState) {
@@ -10836,9 +12252,10 @@ $CONTENT
                     if (templateStr) {
                         const parsed = safeJsonParse_ACU(templateStr, null);
                         if (parsed && typeof parsed === 'object') {
-                            const stripped = stripSeedRowsFromTemplate_ACU(JSON.parse(JSON.stringify(parsed)));
+                            const cloned = JSON.parse(JSON.stringify(parsed));
+                            const resolved = stripSeedRows ? stripSeedRowsFromTemplate_ACU(cloned) : cloned;
                             logDebug_ACU(`[SqlTableService] 使用当前聊天模板预设 (mode=${scopeState.mode})`);
-                            return stripped;
+                            return resolved;
                         }
                     }
                 }
@@ -10848,12 +12265,47 @@ $CONTENT
             }
             // 场景 3：inherit_global 或无聊天级模板，fallback 到全局模板
             logDebug_ACU('[SqlTableService] 使用全局模板 (inherit_global)');
-            return parseTableTemplateJson_ACU({ stripSeedRows: true });
+            return parseTableTemplateJson_ACU({ stripSeedRows });
         }
     }
     // ═══════════════════════════════════════════════════════════════
     // 快照级 SQL 应用（用于 grouped unified commit）
     // ═══════════════════════════════════════════════════════════════
+    async function applyParameterizedSqlMutationToTableDataSnapshot_ACU(sql, params, tableData) {
+        const engine = new SqliteEngine();
+        const syncBridge = new SyncBridge(engine);
+        try {
+            const normalizedSql = normalizeStatementValues(normalizeSqlStructure(sql));
+            const snapshotCopy = JSON.parse(JSON.stringify(tableData || {}));
+            await engine.init();
+            syncBridge.loadFromTableData(snapshotCopy);
+            const result = engine.run(normalizedSql, params);
+            const workingData = syncBridge.exportToTableData(resolveSnapshotMate_ACU(snapshotCopy));
+            const modifiedTableNames = extractTableNamesFromStatements([normalizedSql]);
+            const modifiedKeys = mapSqlTableNamesToSheetKeys_ACU(workingData, modifiedTableNames);
+            logDebug_ACU(`[SqlTableService] 参数化快照 SQL 执行成功: changes=${result.changes}, modifiedKeys=${modifiedKeys.join(',')}`);
+            return {
+                success: true,
+                modifiedKeys,
+                appliedEdits: 1,
+                changes: result.changes,
+                workingData,
+                operations: [{
+                        kind: 'sql_batch',
+                        statements: [normalizedSql],
+                        ...(Array.isArray(params) && params.length > 0 ? { params: [params.map(value => value ?? null)] } : {}),
+                    }],
+            };
+        }
+        catch (e) {
+            const errMsg = e?.message || String(e);
+            logError_ACU(`[SqlTableService] 参数化快照 SQL 执行失败: ${errMsg}`);
+            return { success: false, modifiedKeys: [], appliedEdits: 0, changes: 0, error: errMsg };
+        }
+        finally {
+            engine.dispose();
+        }
+    }
     async function applySqlEditsToTableDataSnapshot_ACU(sqlStatements, tableData, _updateMode) {
         const engine = new SqliteEngine();
         const syncBridge = new SyncBridge(engine);
@@ -10875,7 +12327,13 @@ $CONTENT
             const modifiedTableNames = extractTableNamesFromStatements(statements);
             const modifiedKeys = mapSqlTableNamesToSheetKeys_ACU(workingData, modifiedTableNames);
             logDebug_ACU(`[SqlTableService] 快照 SQL 执行成功: ${statements.length} 条语句, modifiedKeys=${modifiedKeys.join(',')}`);
-            return { success: true, modifiedKeys, appliedEdits: statements.length, workingData };
+            return {
+                success: true,
+                modifiedKeys,
+                appliedEdits: statements.length,
+                workingData,
+                operations: [{ kind: 'sql_batch', statements }],
+            };
         }
         catch (e) {
             const errMsg = e?.message || String(e);
@@ -10940,17 +12398,20 @@ $CONTENT
      */
     function extractTableNamesFromStatements(statements) {
         const tableNames = new Set();
+        const ident = '(?:`([^`]+)`|"([^"]+)"|\\[([^\\]]+)\\]|([A-Za-z_][A-Za-z0-9_]*))';
         const patterns = [
-            /INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)/i,
-            /UPDATE\s+(?:OR\s+\w+\s+)?(\w+)/i,
-            /DELETE\s+FROM\s+(\w+)/i,
-            /ALTER\s+TABLE\s+(\w+)/i,
+            new RegExp(`\\bINSERT\\s+(?:OR\\s+\\w+\\s+)?INTO\\s+${ident}`, 'i'),
+            new RegExp(`\\bUPDATE\\s+(?:OR\\s+\\w+\\s+)?${ident}`, 'i'),
+            new RegExp(`\\bDELETE\\s+FROM\\s+${ident}`, 'i'),
+            new RegExp(`\\bALTER\\s+TABLE\\s+${ident}`, 'i'),
         ];
         for (const stmt of statements) {
             for (const pattern of patterns) {
                 const match = stmt.match(pattern);
                 if (match) {
-                    tableNames.add(match[1]);
+                    const tableName = match.slice(1).find(Boolean);
+                    if (tableName)
+                        tableNames.add(tableName);
                     break;
                 }
             }
@@ -10971,13 +12432,25 @@ $CONTENT
      * 如果尚未初始化，会根据当前设置自动创建
      */
     function getStorageProvider() {
-        if (!currentProvider) {
+        const mode = getCurrentStorageMode();
+        if (!currentProvider || currentProvider.mode !== mode) {
+            if (currentProvider) {
+                logDebug_ACU(`[StorageStrategy] Provider 模式变化，重建: ${currentProvider.mode} → ${mode}`);
+                currentProvider.dispose();
+            }
             // 懒初始化：根据当前模式创建 Provider
-            const mode = getCurrentStorageMode();
             currentProvider = createProvider(mode);
             logDebug_ACU(`[StorageStrategy] 懒初始化 Provider: ${mode}`);
         }
         return currentProvider;
+    }
+    async function ensureStorageProviderReady_ACU() {
+        const expectedMode = getCurrentStorageMode();
+        const provider = getStorageProvider();
+        if (provider.mode === expectedMode && provider.isReady())
+            return provider;
+        await initStorageProvider();
+        return getStorageProvider();
     }
     /**
      * 初始化存储提供者（应用启动时调用）
@@ -11097,7 +12570,10 @@ $CONTENT
             currentProvider = createProvider('sqlite');
         }
         try {
-            await currentProvider.loadFromChat();
+            const result = await currentProvider.loadFromChat();
+            if (mode === 'sqlite' && !result.loaded && result.error) {
+                throw new Error(result.error);
+            }
         }
         catch (e) {
             logError_ACU(`[StorageStrategy] 重新加载失败: ${e?.message}`);
@@ -15457,24 +16933,17 @@ $CONTENT
                 }
             }
             logDebug_ACU(`[剧情推进] 阶段 ${stageGroup.stage} 开始执行，任务级API预设将按各任务独立决议。`);
-            const stageResults = [];
-            for (const task of stageGroup.tasks) {
+            const stageRelayTagMap = new Map(aggregatedTags);
+            const stageResults = await Promise.all(stageGroup.tasks.map((task) => {
                 const stageTask = stageEffectivePreset
                     ? { ...task, taskApiPreset: stageEffectivePreset }
                     : task;
-                const result = await executeSinglePlotTask_ACU(stageTask, sharedContext, {
-                    relayTagMap: aggregatedTags,
+                return executeSinglePlotTask_ACU(stageTask, sharedContext, {
+                    relayTagMap: stageRelayTagMap,
                     historyTagMap,
                     historyLookupOptions,
                 });
-                stageResults.push(result);
-                if (result?.success) {
-                    completedSuccessfulResults = [...completedSuccessfulResults, result];
-                    const { aggregated: stageAggregated, injectOnlyTagNames: stageInjectOnly } = aggregatePlotTaskTags_ACU(completedSuccessfulResults);
-                    aggregatedTags = stageAggregated;
-                    stageInjectOnly.forEach((name) => aggregatedInjectOnlyTagNames.add(name));
-                }
-            }
+            }));
             checkPlotAbortRequested_ACU();
             const stageSuccessfulResults = stageResults.filter((result) => result?.success);
             const stageFailedResults = stageResults.filter((result) => result && !result.success);
@@ -15497,6 +16966,9 @@ $CONTENT
                     errorMessage: `剧情任务阶段 ${stageGroup.stage} 执行失败（${failedTaskNames}），后续阶段已停止。`,
                 };
             }
+            const { aggregated: stageAggregated, injectOnlyTagNames: stageInjectOnly } = aggregatePlotTaskTags_ACU(completedSuccessfulResults);
+            aggregatedTags = stageAggregated;
+            stageInjectOnly.forEach((name) => aggregatedInjectOnlyTagNames.add(name));
             logDebug_ACU(`[剧情推进] 阶段 ${stageGroup.stage} 已完成，成功任务数: ${stageSuccessfulResults.length}`);
         }
         if (!successfulResults.length) {
@@ -15958,7 +17430,7 @@ $CONTENT
 
     // pipeline.ts
     // 从 05_core_tail.js 迁入
-    async function updateReadableLorebookEntry_ACU(createIfNeeded = false, isImport = false, targetLorebookOverride = null) {
+    async function updateReadableLorebookEntry_ACU(createIfNeeded = false, isImport = false, targetLorebookOverride = null, dataOverride = null) {
         // [健全性] 新对话开场白阶段：禁止自动创建/更新世界书条目
         // - 仅影响非导入流程（isImport=false）
         // - 仅在“无任何用户消息”的开场白阶段生效
@@ -15980,12 +17452,17 @@ $CONTENT
         }
         // [新增] 分别从最新的标准表和总结表数据源中拉取数据并合并
         let mergedData = null;
-        if (isImport) {
+        if (dataOverride) {
+            // 填表保存后调用方已经持有本轮权威快照，不需要再从聊天历史回放。
+            mergedData = JSON.parse(JSON.stringify(dataOverride));
+            _set_currentJsonTableData_ACU(mergedData);
+        }
+        else if (isImport) {
             // 外部导入时，直接使用 currentJsonTableData_ACU
             mergedData = currentJsonTableData_ACU;
         }
         else {
-            // 正常更新时，使用全表合并逻辑从整段聊天记录提取每张表的最新版本
+            // 冷启动/切换聊天/显式刷新时，才使用全表合并逻辑从整段聊天记录恢复最新版本。
             await loadAllChatMessages_ACU();
             const mergedFromHistory = await mergeAllIndependentTables_ACU();
             if (mergedFromHistory) {
@@ -17092,12 +18569,7 @@ $CONTENT
     // [可视化删表-硬删除] 追溯整个聊天记录，删除指定 sheetKey 的所有本地表格数据（新版+旧版）
     // 设计目标：即使后续有"按原楼层写回"的流程，也不会把旧表复活
     // =========================
-    async function purgeSheetKeysFromChatHistoryHard_ACU(sheetKeysToPurge) {
-        const keys = Array.isArray(sheetKeysToPurge)
-            ? [...new Set(sheetKeysToPurge.filter(k => typeof k === 'string' && k.startsWith('sheet_')))]
-            : [];
-        if (keys.length === 0)
-            return { changed: false, changedCount: 0 };
+    async function purgeSheetKeysFromChatHistoryHardCore_ACU(keys) {
         const chat = getChatArray_ACU();
         if (!Array.isArray(chat) || chat.length === 0)
             return { changed: false, changedCount: 0 };
@@ -17172,6 +18644,20 @@ $CONTENT
             catch (e) { }
         }
         return { changed: changedAny, changedCount };
+    }
+    async function purgeSheetKeysFromChatHistoryHard_ACU(sheetKeysToPurge) {
+        const keys = Array.isArray(sheetKeysToPurge)
+            ? [...new Set(sheetKeysToPurge.filter(k => typeof k === 'string' && k.startsWith('sheet_')))]
+            : [];
+        if (keys.length === 0)
+            return { changed: false, changedCount: 0 };
+        return runTableWriteTransaction_ACU({
+            source: 'system_cleanup',
+            reason: 'purgeSheetKeysFromChatHistoryHard',
+            isolationKey: getCurrentIsolationKey_ACU(),
+            writeSet: keys.map(sheetKey => ({ kind: 'sheet', sheetKey })),
+            maintenanceMode: 'exclusive',
+        }, () => purgeSheetKeysFromChatHistoryHardCore_ACU(keys));
     }
 
     /**
@@ -18187,6 +19673,104 @@ $CONTENT
     function _set_optimizationProgressToast_ACU(v) { optimizationProgressToast_ACU = v; }
     function _set_contentOptimizationAbortRequested_ACU(v) { contentOptimizationAbortRequested_ACU = v; }
 
+    function cloneTableData_ACU(data) {
+        return JSON.parse(JSON.stringify(data));
+    }
+    function normalizeSqlBindParams_ACU(params) {
+        return Array.isArray(params) && params.length > 0 ? [params.map(value => value ?? null)] : undefined;
+    }
+    async function runTableUpdateCommit_ACU(options, apply) {
+        try {
+            return await runTableWriteTransaction_ACU({
+                source: options.source,
+                reason: options.reason,
+                isolationKey: options.isolationKey ?? getCurrentIsolationKey_ACU(),
+                writeSet: options.writeSet,
+                baseRevision: options.baseRevision,
+                initialData: options.initialData !== undefined ? options.initialData : currentJsonTableData_ACU,
+            }, async (transactionContext, workingData) => {
+                let commitRevisionWriteSet = options.revisionWriteSet;
+                return transactionContext.runCommit(async () => {
+                    const applied = await apply({ transactionContext, workingData });
+                    if (!applied.success || !applied.tableData) {
+                        throw new Error(applied.error || `${options.reason}: update apply failed`);
+                    }
+                    let saved = true;
+                    let messageIndex;
+                    const persistOptions = applied.persist || {};
+                    const revisionWriteSet = persistOptions.revisionWriteSet ?? options.revisionWriteSet;
+                    const targetSheetKeys = persistOptions.targetSheetKeys !== undefined ? persistOptions.targetSheetKeys : options.targetSheetKeys;
+                    const operations = persistOptions.operations ?? options.operations;
+                    commitRevisionWriteSet = revisionWriteSet;
+                    if (!options.skipChatSave) {
+                        const saveResult = await persistTablesToChatMessage_ACU({
+                            targetMessageIndex: persistOptions.targetMessageIndex ?? options.targetMessageIndex,
+                            targetSheetKeys,
+                            updateGroupKeys: persistOptions.updateGroupKeys !== undefined ? persistOptions.updateGroupKeys : (options.updateGroupKeys ?? null),
+                            trackingSheetKeys: persistOptions.trackingSheetKeys !== undefined ? persistOptions.trackingSheetKeys : (options.trackingSheetKeys ?? []),
+                            tableData: applied.tableData,
+                            trackAsUpdate: persistOptions.trackAsUpdate ?? options.trackAsUpdate ?? false,
+                            source: options.source,
+                            operations,
+                            revisionWriteSet,
+                            assumeCommitLock: true,
+                            transactionContext,
+                        });
+                        saved = saveResult.saved;
+                        messageIndex = saveResult.messageIndex;
+                        if (!saveResult.saved) {
+                            logWarn_ACU(`[TableUpdateCommit] persist failed after runtime update, reload runtime before releasing lock: ${saveResult.error || 'unknown error'}`);
+                            await reloadStorageProvider();
+                            throw new Error(saveResult.error || `${options.reason}: persist failed`);
+                        }
+                    }
+                    _set_currentJsonTableData_ACU(cloneTableData_ACU(applied.tableData));
+                    return {
+                        success: true,
+                        value: applied.value,
+                        tableData: applied.tableData,
+                        mutationResult: applied.mutationResult,
+                        saved,
+                        messageIndex,
+                    };
+                }, () => commitRevisionWriteSet);
+            });
+        }
+        catch (error) {
+            const message = error?.message || String(error);
+            logError_ACU(`[TableUpdateCommit] ${options.reason} failed:`, error);
+            return { success: false, error: message };
+        }
+    }
+    async function runSqliteRuntimeMutationCommit_ACU(options) {
+        const operations = options.operations ?? [{
+                kind: 'sql_batch',
+                statements: [options.sql],
+                ...(normalizeSqlBindParams_ACU(options.params) ? { params: normalizeSqlBindParams_ACU(options.params) } : {}),
+            }];
+        return runTableUpdateCommit_ACU({ ...options, operations }, () => {
+            const provider = getStorageProvider();
+            const mutationResult = provider.executeMutation(options.sql, options.params);
+            if (mutationResult.errors?.length) {
+                return { success: false, error: mutationResult.errors.join(', '), mutationResult };
+            }
+            const tableData = provider.getCurrentData();
+            if (!tableData) {
+                return { success: false, error: 'SQLite runtime data export failed', mutationResult };
+            }
+            const validationError = options.validate?.({ mutationResult, tableData: tableData });
+            if (validationError) {
+                return { success: false, error: validationError, mutationResult, tableData: tableData };
+            }
+            return {
+                success: true,
+                value: options.mapValue({ mutationResult, tableData: tableData }),
+                tableData: tableData,
+                mutationResult,
+            };
+        });
+    }
+
     function isLegacyMatchForMessage_ACU(msg, settings) {
         const msgIdentity = msg?.TavernDB_ACU_Identity;
         if (settings?.dataIsolationEnabled) {
@@ -18194,9 +19778,68 @@ $CONTENT
         }
         return !msgIdentity;
     }
+    function keyListHasSheet_ACU(value, sheetKey) {
+        return Array.isArray(value) && value.includes(sheetKey);
+    }
+    function v2EventTouchesSheetData_ACU(event, sheetKey) {
+        return keyListHasSheet_ACU(event?.changedSheetKeys, sheetKey)
+            || keyListHasSheet_ACU(event?.filledSheetKeys, sheetKey)
+            || keyListHasSheet_ACU(event?.groupKeys, sheetKey);
+    }
+    function v2EventTracksFill_ACU(event, sheetKey) {
+        return keyListHasSheet_ACU(event?.filledSheetKeys, sheetKey)
+            || keyListHasSheet_ACU(event?.groupKeys, sheetKey);
+    }
+    function v2ScheduleFilledFloor_ACU(tagData, sheetKey) {
+        const value = tagData?.storageFrame?.checkpoint?.scheduleSummary?.[sheetKey]?.lastFilledAiFloor;
+        return Number.isFinite(value) && value > 0 ? Number(value) : 0;
+    }
+    function v2EntryAiFloor_ACU(entry, fallbackAiFloor) {
+        const value = Number(entry?.aiFloor);
+        return Number.isFinite(value) && value > 0 ? value : fallbackAiFloor;
+    }
+    function v2OperationTouchesSheet_ACU(operation, sheetKey) {
+        if (!operation || typeof operation !== 'object')
+            return false;
+        if (operation.kind === 'sheet_replace')
+            return operation.sheetKey === sheetKey;
+        if (operation.kind === 'row_upsert' || operation.kind === 'row_delete' || operation.kind === 'meta_update')
+            return operation.sheetKey === sheetKey;
+        if (operation.kind === 'data_replace')
+            return !!operation.data?.[sheetKey];
+        return false;
+    }
+    function v2FrameHasSheetData_ACU(tagData, sheetKey) {
+        if (!isV2TagData_ACU(tagData))
+            return false;
+        if (tagData.storageFrame.checkpoint?.kind === 'full' && tagData.storageFrame.checkpoint.data?.[sheetKey]) {
+            return true;
+        }
+        return (tagData.storageFrame.logEntries || []).some((entry) => v2EventTouchesSheetData_ACU(entry, sheetKey)
+            || (Array.isArray(entry.operations) && entry.operations.some((operation) => v2OperationTouchesSheet_ACU(operation, sheetKey))));
+    }
+    function v2FrameTrackedUpdateFloor_ACU(tagData, sheetKey, messageAiFloor) {
+        if (!isV2TagData_ACU(tagData))
+            return 0;
+        let latestFloor = v2ScheduleFilledFloor_ACU(tagData, sheetKey);
+        const checkpointEvent = tagData.storageFrame.checkpoint?.event;
+        if (v2EventTracksFill_ACU(checkpointEvent, sheetKey)) {
+            latestFloor = Math.max(latestFloor, messageAiFloor);
+        }
+        for (const entry of tagData.storageFrame.logEntries || []) {
+            if (v2EventTracksFill_ACU(entry, sheetKey)) {
+                latestFloor = Math.max(latestFloor, v2EntryAiFloor_ACU(entry, messageAiFloor));
+            }
+        }
+        return latestFloor;
+    }
     function hasTableDataInMessage_ACU(msg, options) {
         const { sheetKey, isSummaryTable, isolationKey, settings } = options;
-        if (msg?.TavernDB_ACU_IsolatedData?.[isolationKey]?.independentData?.[sheetKey]) {
+        const tagData = readIsolatedTagData_ACU(msg, isolationKey);
+        if (v2FrameHasSheetData_ACU(tagData, sheetKey)) {
+            return true;
+        }
+        if (tagData?.independentData?.[sheetKey]) {
             return true;
         }
         if (!isLegacyMatchForMessage_ACU(msg, settings)) {
@@ -18207,20 +19850,24 @@ $CONTENT
                 ? msg?.TavernDB_ACU_SummaryData?.[sheetKey]
                 : msg?.TavernDB_ACU_Data?.[sheetKey]));
     }
-    function hasTrackedUpdateInMessage_ACU(msg, options) {
+    function getTrackedUpdateFloorInMessage_ACU(msg, options, messageAiFloor) {
         const { sheetKey, isolationKey, settings } = options;
-        const tagData = msg?.TavernDB_ACU_IsolatedData?.[isolationKey];
+        const tagData = readIsolatedTagData_ACU(msg, isolationKey);
+        const v2Floor = v2FrameTrackedUpdateFloor_ACU(tagData, sheetKey, messageAiFloor);
+        if (v2Floor > 0) {
+            return v2Floor;
+        }
         const isolatedModifiedKeys = Array.isArray(tagData?.modifiedKeys) ? tagData.modifiedKeys : [];
         const isolatedUpdateGroupKeys = Array.isArray(tagData?.updateGroupKeys) ? tagData.updateGroupKeys : [];
         if (isolatedUpdateGroupKeys.includes(sheetKey) || isolatedModifiedKeys.includes(sheetKey)) {
-            return true;
+            return messageAiFloor;
         }
         if (!isLegacyMatchForMessage_ACU(msg, settings)) {
-            return false;
+            return 0;
         }
         const legacyModifiedKeys = Array.isArray(msg?.TavernDB_ACU_ModifiedKeys) ? msg.TavernDB_ACU_ModifiedKeys : [];
         const legacyUpdateGroupKeys = Array.isArray(msg?.TavernDB_ACU_UpdateGroupKeys) ? msg.TavernDB_ACU_UpdateGroupKeys : [];
-        return legacyUpdateGroupKeys.includes(sheetKey) || legacyModifiedKeys.includes(sheetKey);
+        return legacyUpdateGroupKeys.includes(sheetKey) || legacyModifiedKeys.includes(sheetKey) ? messageAiFloor : 0;
     }
     function getLatestAiMessageIndexFromChat_ACU(chat) {
         if (!Array.isArray(chat))
@@ -18245,16 +19892,22 @@ $CONTENT
         const latestAiMessageIndex = getLatestAiMessageIndexFromChat_ACU(chat);
         let latestDataMessageIndex = -1;
         let lastTrackedUpdateMessageIndex = -1;
+        let lastTrackedUpdateAiFloor = 0;
         if (Array.isArray(chat)) {
             for (let i = chat.length - 1; i >= 0; i -= 1) {
                 const msg = chat[i];
                 if (!msg || msg.is_user)
                     continue;
+                const messageAiFloor = countAiMessagesUpToIndex_ACU(chat, i);
                 if (latestDataMessageIndex === -1 && hasTableDataInMessage_ACU(msg, options)) {
                     latestDataMessageIndex = i;
                 }
-                if (lastTrackedUpdateMessageIndex === -1 && hasTrackedUpdateInMessage_ACU(msg, options)) {
-                    lastTrackedUpdateMessageIndex = i;
+                if (lastTrackedUpdateMessageIndex === -1) {
+                    const trackedFloor = getTrackedUpdateFloorInMessage_ACU(msg, options, messageAiFloor);
+                    if (trackedFloor > 0) {
+                        lastTrackedUpdateMessageIndex = i;
+                        lastTrackedUpdateAiFloor = trackedFloor;
+                    }
                 }
                 if (latestDataMessageIndex !== -1 && lastTrackedUpdateMessageIndex !== -1) {
                     break;
@@ -18266,9 +19919,9 @@ $CONTENT
             latestDataMessageIndex,
             lastTrackedUpdateMessageIndex,
             latestDataAiFloor: countAiMessagesUpToIndex_ACU(chat, latestDataMessageIndex),
-            lastTrackedUpdateAiFloor: countAiMessagesUpToIndex_ACU(chat, lastTrackedUpdateMessageIndex),
+            lastTrackedUpdateAiFloor,
             hasAnyData: latestDataMessageIndex !== -1,
-            hasTrackedUpdate: lastTrackedUpdateMessageIndex !== -1,
+            hasTrackedUpdate: lastTrackedUpdateAiFloor > 0,
         };
     }
 
@@ -20868,6 +22521,64 @@ $CONTENT
             return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
         });
     }
+    function collectIsolationKeysWithV2Frames_ACU(chat) {
+        const keys = new Set();
+        for (const msg of chat) {
+            if (!msg || msg.is_user)
+                continue;
+            const isolatedData = msg.TavernDB_ACU_IsolatedData;
+            if (!isolatedData || typeof isolatedData !== 'object' || Array.isArray(isolatedData))
+                continue;
+            for (const [isolationKey, tagData] of Object.entries(isolatedData)) {
+                if (isV2TagData_ACU(tagData)) {
+                    keys.add(isolationKey);
+                }
+            }
+        }
+        return [...keys];
+    }
+    async function writeV2BoundaryCheckpointBeforePurge_ACU(chat, anchorIndex) {
+        if (anchorIndex < 0 || !chat[anchorIndex] || chat[anchorIndex].is_user)
+            return false;
+        let changed = false;
+        const isolationConfig = {
+            enabled: settings_ACU.dataIsolationEnabled,
+            code: settings_ACU.dataIsolationCode,
+        };
+        for (const isolationKey of collectIsolationKeysWithV2Frames_ACU(chat)) {
+            const strategy = resolveTableStorageStrategy_ACU(chat, isolationKey, isolationConfig);
+            if (strategy.mode !== 'v2')
+                continue;
+            const data = await loadTableStateFromFramesV2_ACU(chat, isolationKey, { maxMessageIndex: anchorIndex });
+            if (!data)
+                continue;
+            const anchorMsg = chat[anchorIndex];
+            if (!anchorMsg.TavernDB_ACU_IsolatedData || typeof anchorMsg.TavernDB_ACU_IsolatedData !== 'object' || Array.isArray(anchorMsg.TavernDB_ACU_IsolatedData)) {
+                anchorMsg.TavernDB_ACU_IsolatedData = {};
+            }
+            const existingTagData = anchorMsg.TavernDB_ACU_IsolatedData[isolationKey];
+            const frame = {
+                version: 2,
+                checkpoint: {
+                    kind: 'full',
+                    createdAt: Date.now(),
+                    reason: 'compaction',
+                    data,
+                    scheduleSummary: collectScheduleSummaryFromFramesV2_ACU(chat, isolationKey, { maxMessageIndex: anchorIndex }),
+                },
+                logEntries: [],
+            };
+            anchorMsg.TavernDB_ACU_IsolatedData[isolationKey] = {
+                ...(existingTagData?.summaryVectorIndexState !== undefined ? { summaryVectorIndexState: existingTagData.summaryVectorIndexState } : {}),
+                ...(existingTagData?.summaryVectorIndexManifest !== undefined ? { summaryVectorIndexManifest: existingTagData.summaryVectorIndexManifest } : {}),
+                storageFrame: frame,
+                _acu_storage_version: 2,
+            };
+            changed = true;
+            logDebug_ACU(`[V2 Compaction] 已在边界楼层 #${anchorIndex} 写入 isolationKey=[${isolationKey || '无标签'}] 的 full checkpoint。`);
+        }
+        return changed;
+    }
     /**
      * 替换聊天消息内容（正文优化核心逻辑）
      * 从 presentation/components/optimization-ui/optimization-ui-exec.ts 搬迁
@@ -20975,12 +22686,26 @@ $CONTENT
                 logWarn_ACU('saveCurrentDataForTable_ACU: No AI message available for persistence.');
                 return;
             }
-            await persistTablesToChatMessage_ACU({
+            const commitResult = await runTableUpdateCommit_ACU({
+                source: 'system',
+                reason: 'saveCurrentDataForTable',
+                isolationKey: getCurrentIsolationKey_ACU(),
+                writeSet: [{ kind: 'sheet', sheetKey }],
+                revisionWriteSet: [{ kind: 'sheet', sheetKey }],
+                initialData: currentJsonTableData_ACU,
                 targetMessageIndex,
                 targetSheetKeys: [sheetKey],
                 updateGroupKeys: null,
+                trackingSheetKeys: [sheetKey],
                 trackAsUpdate: history.latestDataMessageIndex === -1,
-            });
+                operations: [{ kind: 'sheet_replace', sheetKey, sheet: currentJsonTableData_ACU[sheetKey], reason: 'system' }],
+            }, () => ({
+                success: true,
+                tableData: currentJsonTableData_ACU,
+            }));
+            if (!commitResult.success) {
+                logWarn_ACU(`saveCurrentDataForTable_ACU: commit failed: ${commitResult.error || 'unknown error'}`);
+            }
         }
         catch (e) {
             logError_ACU('saveCurrentDataForTable_ACU failed:', e);
@@ -20993,7 +22718,7 @@ $CONTENT
      * 按消息计数，仅保留最近N层的数据，更早楼层的 TavernDB_ACU_* 和 qrf_plot 字段将被删除。
      * 不会删除聊天第一层的"空白指导表"（TavernDB_ACU_InternalSheetGuide）。
      */
-    async function purgeOldLayerData_ACU() {
+    async function purgeOldLayerDataCore_ACU() {
         const retainCount = settings_ACU.retainRecentLayers || 0;
         if (retainCount <= 0) {
             logDebug_ACU('[数据清理] retainRecentLayers 为 0 或未设置，跳过清理。');
@@ -21023,8 +22748,20 @@ $CONTENT
             return;
         }
         logDebug_ACU(`[数据清理] 将清理 ${indicesToPurge.length} 层消息的本地数据（保留最近 ${retainCount} 层）...`);
-        // ── [兜底快照] 在删除旧楼层之前，迁移冷表数据到边界保留楼层 ──
+        // ── [V2 边界 checkpoint] 在删除旧 frame 前，先把恢复锚点压缩到边界保留楼层 ──
         const anchorIndex = dataMessageIndices[cutoffIndex];
+        if (anchorIndex !== undefined && anchorIndex >= 1 && chat[anchorIndex]) {
+            try {
+                if (await writeV2BoundaryCheckpointBeforePurge_ACU(chat, anchorIndex)) {
+                    await saveChatToHost_ACU();
+                }
+            }
+            catch (error) {
+                logError_ACU('[V2 Compaction] 写入边界 checkpoint 失败，已中止本次清理以避免恢复链断裂:', error);
+                return;
+            }
+        }
+        // ── [兜底快照] 在删除旧楼层之前，迁移冷表数据到边界保留楼层 ──
         const retainedSet = new Set(dataMessageIndices.slice(cutoffIndex));
         // 确认边界楼层有效且不是 chat[0]
         if (anchorIndex !== undefined && anchorIndex >= 1 && chat[anchorIndex]) {
@@ -21067,6 +22804,14 @@ $CONTENT
                     anchorMsg.TavernDB_ACU_IsolatedData = {};
                 }
                 for (const [isoKey, sheetMap] of orphanedData) {
+                    const strategy = resolveTableStorageStrategy_ACU(chat, isoKey, {
+                        enabled: settings_ACU.dataIsolationEnabled,
+                        code: settings_ACU.dataIsolationCode,
+                    });
+                    if (strategy.mode !== 'legacy-v1') {
+                        logDebug_ACU(`[数据清理] isolationKey=[${isoKey || '无标签'}] 未确认为 legacy-v1，跳过 V1 兜底快照写入。`);
+                        continue;
+                    }
                     // 初始化该 isolationKey 槽（如果不存在）
                     if (!anchorMsg.TavernDB_ACU_IsolatedData[isoKey]) {
                         anchorMsg.TavernDB_ACU_IsolatedData[isoKey] = {
@@ -21144,6 +22889,15 @@ $CONTENT
         else {
             logDebug_ACU('[数据清理] 目标楼层中未发现需要清理的数据字段。');
         }
+    }
+    async function purgeOldLayerData_ACU() {
+        return runTableWriteTransaction_ACU({
+            source: 'system_cleanup',
+            reason: 'purgeOldLayerData',
+            isolationKey: getCurrentIsolationKey_ACU(),
+            writeSet: [{ kind: 'all' }],
+            maintenanceMode: 'exclusive',
+        }, () => purgeOldLayerDataCore_ACU());
     }
     /**
      * 检查指定表是否在任何保留楼层中存在数据。
@@ -21265,7 +23019,7 @@ $CONTENT
      * 只负责数据操作（遍历 chat 删除字段 + saveChatToHost），不涉及 UI（toast/status display）。
      * @returns 删除的消息数量
      */
-    async function deleteLocalDataInChatCore_ACU(mode = 'current', startFloor = null, endFloor = null) {
+    async function deleteLocalDataInChatCoreInner_ACU(mode = 'current', startFloor = null, endFloor = null) {
         const chat = getChatArray_ACU();
         if (!chat || chat.length === 0) {
             return 0;
@@ -21357,6 +23111,15 @@ $CONTENT
         }
         return deletedCount;
     }
+    async function deleteLocalDataInChatCore_ACU(mode = 'current', startFloor = null, endFloor = null) {
+        return runTableWriteTransaction_ACU({
+            source: 'system_cleanup',
+            reason: 'deleteLocalDataInChat',
+            isolationKey: getCurrentIsolationKey_ACU(),
+            writeSet: [{ kind: 'all' }],
+            maintenanceMode: 'exclusive',
+        }, () => deleteLocalDataInChatCoreInner_ACU(mode, startFloor, endFloor));
+    }
     /**
      * 使用模板覆盖最新层的表格数据（核心业务逻辑）
      * 从 presentation/triggers/data-admin-ui.ts 的 overrideLatestLayerWithTemplate_ACU 中提取
@@ -21382,19 +23145,7 @@ $CONTENT
         if (latestAiIndex === -1) {
             return 0;
         }
-        const latestMessage = chat[latestAiIndex];
-        let modifiedCount = 0;
-        // 初始化或获取按标签分组的数据结构
-        if (!latestMessage.TavernDB_ACU_IsolatedData) {
-            latestMessage.TavernDB_ACU_IsolatedData = {};
-        }
-        if (!latestMessage.TavernDB_ACU_IsolatedData[currentIsolationKey]) {
-            latestMessage.TavernDB_ACU_IsolatedData[currentIsolationKey] = {};
-        }
-        const tagData = latestMessage.TavernDB_ACU_IsolatedData[currentIsolationKey];
-        if (!tagData.independentData) {
-            tagData.independentData = {};
-        }
+        const overrideSheets = {};
         // 遍历模板中的所有表格，使用模板数据覆盖本地数据
         Object.keys(templateData).forEach(sheetKey => {
             if (!sheetKey.startsWith('sheet_'))
@@ -21407,21 +23158,49 @@ $CONTENT
             if (overrideTable.content && overrideTable.content.length > 1) {
                 overrideTable.content = [overrideTable.content[0]]; // 只保留表头
             }
-            // 覆盖本地数据
-            tagData.independentData[sheetKey] = overrideTable;
-            modifiedCount++;
+            overrideSheets[sheetKey] = sanitizeSheetForStorage_ACU(overrideTable);
             logDebug_ACU(`Overrode table "${templateTable.name}" (${sheetKey}) in latest layer with template data.`);
         });
-        if (modifiedCount > 0) {
-            // 更新修改标记
-            tagData.modifiedKeys = Object.keys(tagData.independentData);
-            tagData.updateGroupKeys = tagData.modifiedKeys;
-            tagData._acu_storage_mode = 'checkpoint';
-            tagData._acu_storage_version = 1;
-            // 保存聊天记录
-            await saveChatToHost_ACU();
+        const modifiedSheetKeys = Object.keys(overrideSheets);
+        if (modifiedSheetKeys.length === 0) {
+            return 0;
         }
-        return modifiedCount;
+        const nextTableData = JSON.parse(JSON.stringify(currentJsonTableData_ACU || {}));
+        if (!nextTableData.mate && templateData?.mate) {
+            nextTableData.mate = JSON.parse(JSON.stringify(templateData.mate));
+        }
+        for (const sheetKey of modifiedSheetKeys) {
+            nextTableData[sheetKey] = overrideSheets[sheetKey];
+        }
+        const operations = modifiedSheetKeys.map(sheetKey => ({
+            kind: 'sheet_replace',
+            sheetKey,
+            sheet: overrideSheets[sheetKey],
+            reason: 'system',
+        }));
+        const commitResult = await runTableUpdateCommit_ACU({
+            source: 'system',
+            reason: 'overrideLatestLayerWithTemplate',
+            isolationKey: currentIsolationKey,
+            writeSet: modifiedSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey })),
+            revisionWriteSet: modifiedSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey })),
+            initialData: currentJsonTableData_ACU,
+            targetMessageIndex: latestAiIndex,
+            targetSheetKeys: modifiedSheetKeys,
+            updateGroupKeys: modifiedSheetKeys,
+            trackingSheetKeys: modifiedSheetKeys,
+            trackAsUpdate: true,
+            operations,
+        }, () => ({
+            success: true,
+            value: modifiedSheetKeys.length,
+            tableData: nextTableData,
+        }));
+        if (!commitResult.success) {
+            logWarn_ACU(`[模板覆盖] 公共提交失败：${commitResult.error || 'unknown error'}`);
+            return 0;
+        }
+        return commitResult.value || 0;
     }
     /**
      * 按消息索引列表清空指定 AI 楼层上的当前隔离标签表格数据，并保存聊天。
@@ -21436,7 +23215,7 @@ $CONTENT
      * @param targetMessageIndices 需要清空的目标 AI 消息物理索引列表（已去重）
      * @returns 实际被清空的消息数量
      */
-    async function clearTableDataAtFloors_ACU(targetMessageIndices, targetSheetKeys = null) {
+    async function clearTableDataAtFloorsCore_ACU(targetMessageIndices, targetSheetKeys = null) {
         if (!targetMessageIndices || targetMessageIndices.length === 0)
             return 0;
         const chat = getChatArray_ACU();
@@ -21478,12 +23257,31 @@ $CONTENT
         }
         return clearedCount;
     }
+    async function clearTableDataAtFloors_ACU(targetMessageIndices, targetSheetKeys = null) {
+        const writeSet = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0
+            ? targetSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }))
+            : [{ kind: 'all' }];
+        return runTableWriteTransaction_ACU({
+            source: 'system_cleanup',
+            reason: 'clearTableDataAtFloors',
+            isolationKey: getCurrentIsolationKey_ACU(),
+            writeSet,
+            maintenanceMode: 'exclusive',
+        }, () => clearTableDataAtFloorsCore_ACU(targetMessageIndices, targetSheetKeys));
+    }
     function purgeTargetSheetKeysFromMessage_ACU(msg, targetSheetKeys) {
         if (!msg || !Array.isArray(targetSheetKeys) || targetSheetKeys.length === 0)
             return false;
         let changed = false;
         const isolationKey = getCurrentIsolationKey_ACU();
         const tagData = msg?.TavernDB_ACU_IsolatedData?.[isolationKey];
+        if (isV2TagData_ACU(tagData)) {
+            delete msg.TavernDB_ACU_IsolatedData[isolationKey];
+            if (Object.keys(msg.TavernDB_ACU_IsolatedData).length === 0) {
+                delete msg.TavernDB_ACU_IsolatedData;
+            }
+            return true;
+        }
         if (tagData && typeof tagData === 'object') {
             if (tagData.independentData && typeof tagData.independentData === 'object') {
                 targetSheetKeys.forEach(sheetKey => {
@@ -22787,6 +24585,46 @@ $CONTENT
         const normalizedRows = clonedContent.slice(1).map(normalizeSeedRow_ACU);
         return [headerRow, ...assignMissingStableRowIds_ACU(normalizedRows)];
     }
+    function messageHasTableData_ACU(message, isolationKey) {
+        try {
+            if (!message || message.is_user)
+                return false;
+            const tagData = readIsolatedTagData_ACU(message, isolationKey);
+            if (tagData?.independentData && Object.keys(tagData.independentData).some(k => k.startsWith('sheet_')))
+                return true;
+            if (isLegacyMatchForIsolation_ACU(message, { enabled: settings_ACU.dataIsolationEnabled, code: settings_ACU.dataIsolationCode })) {
+                const legacyIndependent = readLegacyIndependentData_ACU(message);
+                if (legacyIndependent && Object.keys(legacyIndependent).some(k => k.startsWith('sheet_')))
+                    return true;
+                const legacyStandard = readLegacyStandardData_ACU(message);
+                if (legacyStandard && Object.keys(legacyStandard).some(k => k.startsWith('sheet_')))
+                    return true;
+                const legacySummary = readLegacySummaryData_ACU(message);
+                if (legacySummary && Object.keys(legacySummary).some(k => k.startsWith('sheet_')))
+                    return true;
+            }
+        }
+        catch (_) { }
+        return false;
+    }
+    function shouldUseInitialSeedRows_ACU() {
+        try {
+            const chat = getChatArray_ACU();
+            if (!Array.isArray(chat) || chat.length === 0)
+                return false;
+            const userCount = chat.filter(m => m && m.is_user).length;
+            if (userCount !== 1)
+                return false;
+            const isolationKey = String(getCurrentIsolationKey_ACU() ?? '');
+            return !chat.some(message => messageHasTableData_ACU(message, isolationKey));
+        }
+        catch (_) {
+            return false;
+        }
+    }
+    function shouldUseOpeningSeedRows_ACU() {
+        return shouldUseInitialSeedRows_ACU();
+    }
     function materializeDataFromSheetGuide_ACU(guideData, { includeSeedRows = true } = {}) {
         const normalized = normalizeGuideData_ACU(guideData);
         if (!normalized)
@@ -23210,6 +25048,8 @@ $CONTENT
     function getEffectiveSeedRowsForSheet_ACU(sheetKey, { guideData = null, allowTemplateFallback = true } = {}) {
         try {
             if (!sheetKey || !String(sheetKey).startsWith('sheet_'))
+                return [];
+            if (!shouldUseInitialSeedRows_ACU())
                 return [];
             const direct = currentJsonTableData_ACU?.[sheetKey]?.[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU];
             if (Array.isArray(direct) && direct.length > 0)
@@ -25648,7 +27488,25 @@ $CONTENT
             }
         });
         const keysToSave = [summaryKey];
-        await saveIndependentTableToChatHistory_ACU(getLastMessageIndex_ACU(), keysToSave, keysToSave);
+        const writeSet = keysToSave.map(sheetKey => ({ kind: 'sheet', sheetKey }));
+        await runTableUpdateCommit_ACU({
+            source: 'merge_summary',
+            reason: 'auto_merge_summary',
+            writeSet,
+            revisionWriteSet: writeSet,
+            initialData: currentJsonTableData_ACU,
+            targetMessageIndex: getLastMessageIndex_ACU(),
+            targetSheetKeys: keysToSave,
+            updateGroupKeys: keysToSave,
+            trackingSheetKeys: keysToSave,
+            trackAsUpdate: true,
+            operations: [{ kind: 'sheet_replace', sheetKey: summaryKey, sheet: currentJsonTableData_ACU[summaryKey], reason: 'system' }],
+        }, () => ({
+            success: true,
+            value: null,
+            tableData: currentJsonTableData_ACU,
+            mutationResult: { changes: keysToSave.length, errors: [] },
+        }));
         await updateReadableLorebookEntry_ACU(true);
         return { mergedRows: accumulatedSummary.length };
     }
@@ -28871,893 +30729,6 @@ $CONTENT
     }
 
     /**
-     * presentation/pages/popup-helpers.ts — 主弹窗辅助函数
-     * 从 main-popup.ts 拆出（原 openAutoCardPopup_ACU 内嵌函数）
-     */
-    // --- [剧情推进] 辅助函数 ---
-    /**
-     * 加载剧情推进设置到UI
-     */
-    function loadPlotSettingsToUI_ACU(plotSettingsOverride = null) {
-        if (!$popupInstance_ACU)
-            return;
-        _assignUIPlaceholders_ACU({
-            $plotPromptSegmentsContainer_ACU: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-prompt-segments-container`),
-            $plotTaskListContainer_ACU: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-task-list`),
-        });
-        const plotSettings = setActivePlotEditorSettings_ACU(plotSettingsOverride || settings_ACU.plotSettings);
-        if (!plotSettings)
-            return;
-        // 功能开关是全局状态，不属于剧情预设/聊天快照。UI 回填必须以 settings_ACU.plotSettings 为权威，
-        // 否则切换预设或新开对话时会被局部 snapshot.enabled 覆盖成“每次自动打开”。
-        const globalPlotEnabled = settings_ACU.plotSettings?.enabled === true;
-        plotSettings.enabled = globalPlotEnabled;
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-enabled`).prop('checked', globalPlotEnabled);
-        renderPlotTaskList_ACU(plotSettings);
-        loadCurrentPlotTaskToUI_ACU(plotSettings);
-        // 最终注入指令
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-final-directive`).val(getPlotPromptContentByIdFromSettings_ACU(plotSettings, 'finalSystemDirective'));
-        // 匹配替换速率
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-main`).val(plotSettings.rateMain);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-personal`).val(plotSettings.ratePersonal);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-erotic`).val(plotSettings.rateErotic);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-cuckold`).val(plotSettings.rateCuckold);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-recall-count`).val(plotSettings.recallCount ?? 20);
-        // 循环设置
-        ensureLoopPromptsArray_ACU(plotSettings);
-        const loopSettings = plotSettings.loopSettings;
-        // 循环提示词现在使用数组，通过 renderLoopPromptsList_ACU 渲染
-        renderLoopPromptsList_ACU(plotSettings);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-tags`).val(loopSettings.loopTags || '');
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-delay`).val(loopSettings.loopDelay);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-total-duration`).val(loopSettings.loopTotalDuration);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-max-retries`).val(loopSettings.maxRetries);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-turn-count`).val(plotSettings.contextTurnCount);
-        renderExcludeRuleRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-extract-rules`, normalizeExtractRules_ACU(plotSettings.contextExtractRules, plotSettings.contextExtractTags || ''), {
-            startPlaceholder: '开始词（例如：<think）',
-            endPlaceholder: '结束词（例如：</think>）',
-            fallbackRules: getDefaultPlotContextExtractRules_ACU(),
-        });
-        renderExcludeRuleRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-exclude-rules`, normalizeExcludeRules_ACU(plotSettings.contextExcludeRules, plotSettings.contextExcludeTags || ''), {
-            startPlaceholder: '开始词（例如：<thinking）',
-            endPlaceholder: '结束词（例如：</thinking>）',
-            fallbackRules: getDefaultPlotContextExcludeRules_ACU(),
-        });
-        // 循环状态
-        updatePlotLoopStatusUI_ACU();
-        // 预设选择器
-        loadPlotPresetSelect_ACU();
-    }
-    /**
-     * 加载正文替换预设选择器
-     */
-    function loadOptimizationPresetSelect_ACU() {
-        if (!$popupInstance_ACU)
-            return;
-        const $select = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-preset-select`);
-        const $deleteBtn = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-delete-preset`);
-        if (!$select.length)
-            return;
-        const presets = settings_ACU.contentOptimizationSettings?.promptPresets || [];
-        const currentValue = $select.val();
-        $select.find('option:not(:first)').remove();
-        presets.forEach((preset) => {
-            if (preset && preset.name) {
-                $select.append(renderOption_ACU(preset.name, preset.name));
-            }
-        });
-        // 恢复之前选中的值（如果还存在）
-        if (currentValue && presets.find((p) => p.name === currentValue)) {
-            $select.val(currentValue);
-            if ($deleteBtn.length)
-                $deleteBtn.show();
-        }
-        else {
-            $select.val('');
-            if ($deleteBtn.length)
-                $deleteBtn.hide();
-        }
-    }
-    /**
-     * 另存为新的正文替换预设
-     */
-    function saveOptimizationPresetAsNew_ACU() {
-        const presetName = prompt('请输入新预设的名称：');
-        if (!presetName || !presetName.trim()) {
-            showToastr_ACU('warning', '预设名称不能为空。');
-            return;
-        }
-        const name = presetName.trim();
-        const presets = settings_ACU.contentOptimizationSettings.promptPresets || [];
-        const existingIndex = presets.findIndex((p) => p.name === name);
-        if (existingIndex !== -1) {
-            if (!confirm(`预设 "${name}" 已存在。是否覆盖？`)) {
-                return;
-            }
-            presets[existingIndex] = {
-                name: name,
-                promptGroup: getOptimizationPromptGroupFromUI_ACU()
-            };
-            showToastr_ACU('success', `预设 "${name}" 已被覆盖。`);
-        }
-        else {
-            presets.push({
-                name: name,
-                promptGroup: getOptimizationPromptGroupFromUI_ACU()
-            });
-            showToastr_ACU('success', `预设 "${name}" 已成功创建。`);
-        }
-        settings_ACU.contentOptimizationSettings.promptPresets = presets;
-        saveSettingsAndNotify_ACU();
-        loadOptimizationPresetSelect_ACU();
-        // 选中新创建的预设
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-preset-select`).val(name);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-delete-preset`).show();
-    }
-    /**
-     * 加载正文替换设置到UI
-     */
-    function loadOptimizationSettingsToUI_ACU() {
-        if (!$popupInstance_ACU)
-            return;
-        const config = settings_ACU.contentOptimizationSettings || {};
-        // [隐藏功能] 只有当剧情推进最大重试次数为49时才显示正文替换子标签
-        const plotMaxRetries = settings_ACU.plotSettings?.loopSettings?.maxRetries ?? 3;
-        const $optimizationSubtab = $popupInstance_ACU.find('.acu-subtab-button[data-subtab="advanced-optimization"]');
-        if ($optimizationSubtab.length) {
-            if (plotMaxRetries === 49) {
-                $optimizationSubtab.show();
-                // 同时显示对应的子内容区
-                $popupInstance_ACU.find('#acu-subtab-advanced-optimization').show();
-            }
-            else {
-                $optimizationSubtab.hide();
-                $popupInstance_ACU.find('#acu-subtab-advanced-optimization').hide();
-                // 如果当前激活的是optimization子标签，切到log子标签
-                if ($optimizationSubtab.hasClass('active')) {
-                    $optimizationSubtab.removeClass('active');
-                    const $logSubtab = $popupInstance_ACU.find('.acu-subtab-button[data-subtab="advanced-log"]');
-                    if ($logSubtab.length) {
-                        $logSubtab.addClass('active');
-                        $popupInstance_ACU.find('#acu-subtab-advanced-log').addClass('active');
-                    }
-                }
-            }
-        }
-        // 功能开关
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-enabled`).prop('checked', !!config.enabled);
-        // API预设
-        const $apiPreset = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-api-preset`);
-        if ($apiPreset.length) {
-            $apiPreset.val(config.apiPreset || '');
-        }
-        // 基础设置
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-min-length`).val(config.minLength || 100);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-max-items`).val(config.maxOptimizations || 10);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-loop-count`).val(config.loopCount || 1);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-retry-count`).val(config.retryCount || 3);
-        // 优化模式
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-seamless-mode`).prop('checked', config.seamlessMode !== false);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-auto-apply`).prop('checked', config.autoApply !== false);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-show-diff`).prop('checked', config.showDiff !== false);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-parallel-mode`).prop('checked', config.parallelMode === true);
-        // 标签筛选设置
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-extract-tags`).val(config.extractTags || '');
-        // 加载标签提取规则
-        renderExcludeRuleRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-optimization-extract-rules`, config.extractRules || [], {
-            startPlaceholder: '开始词（例如：<think）',
-            endPlaceholder: '结束词（例如：</think）',
-        });
-        // 加载标签排除规则
-        renderExcludeRuleRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-optimization-exclude-rules`, config.excludeRules || [], {
-            startPlaceholder: '开始词（例如：<think）',
-            endPlaceholder: '结束词（例如：</think）',
-        });
-        // 加载预设选择器
-        loadOptimizationPresetSelect_ACU();
-        // 提示词组
-        const promptGroup = config.promptGroup && config.promptGroup.length > 0
-            ? config.promptGroup
-            : DEFAULT_CONTENT_OPTIMIZATION_PROMPT_GROUP_ACU;
-        renderOptimizationPromptSegments_ACU(promptGroup);
-    }
-    /**
-     * 渲染正文优化提示词段落
-     */
-    function renderOptimizationPromptSegments_ACU(segments) {
-        if (!$popupInstance_ACU)
-            return;
-        const $container = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-prompt-segments-container`);
-        if (!$container.length)
-            return;
-        $container.empty();
-        if (!Array.isArray(segments))
-            return;
-        segments.forEach((segment, index) => {
-            const isMain = segment.isMain || segment.mainSlot === 'A';
-            const isMain2 = segment.isMain2 || segment.mainSlot === 'B';
-            const deletable = segment.deletable !== false;
-            const segmentHtml = `
-          <div class="optimization-prompt-segment" data-index="${index}" style="
-            margin-bottom: 15px;
-            padding: 15px;
-            background: var(--background_default);
-            border-radius: 8px;
-            border: 1px solid var(--border_color_light);
-            ${isMain ? 'border-left: 3px solid var(--blue);' : ''}
-            ${isMain2 ? 'border-left: 3px solid var(--purple);' : ''}
-          ">
-            <div style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center;">
-              <select class="optimization-prompt-segment-role text_pole" data-index="${index}" style="width: 120px;">
-                <option value="SYSTEM" ${segment.role === 'SYSTEM' ? 'selected' : ''}>SYSTEM</option>
-                <option value="USER" ${segment.role === 'USER' ? 'selected' : ''}>USER</option>
-                <option value="assistant" ${segment.role === 'assistant' ? 'selected' : ''}>assistant</option>
-              </select>
-              ${deletable ? `
-                <button type="button" class="optimization-prompt-segment-delete-btn button" data-index="${index}" style="margin-left: auto; padding: 4px 8px; font-size: 0.85em;">
-                  <i class="fa-solid fa-trash"></i>
-                </button>
-              ` : ''}
-            </div>
-            <textarea class="optimization-prompt-segment-content text_pole" data-index="${index}" rows="6" placeholder="输入提示词内容..." style="resize: vertical; width: 100%;">${escapeHtml_ACU$1(segment.content || '')}</textarea>
-          </div>
-        `;
-            $container.append(segmentHtml);
-        });
-        // 绑定输入事件
-        $container.find('.optimization-prompt-segment-role').on('change', function () {
-            const idx = parseInt(jQuery_API_ACU(this).data('index'), 10);
-            const segments = getOptimizationPromptGroupFromUI_ACU();
-            if (segments[idx]) {
-                segments[idx].role = jQuery_API_ACU(this).val();
-                settings_ACU.contentOptimizationSettings.promptGroup = segments;
-                saveSettingsAndNotify_ACU();
-            }
-        });
-        $container.find('.optimization-prompt-segment-content').on('input change', function () {
-            const idx = parseInt(jQuery_API_ACU(this).data('index'), 10);
-            const segments = getOptimizationPromptGroupFromUI_ACU();
-            if (segments[idx]) {
-                segments[idx].content = jQuery_API_ACU(this).val();
-                settings_ACU.contentOptimizationSettings.promptGroup = segments;
-                saveSettingsAndNotify_ACU();
-            }
-        });
-    }
-    /**
-     * 从UI获取正文优化提示词组
-     */
-    function getOptimizationPromptGroupFromUI_ACU() {
-        if (!$popupInstance_ACU)
-            return [];
-        const segments = [];
-        const $segments = $popupInstance_ACU.find('.optimization-prompt-segment');
-        $segments.each(function () {
-            const $seg = jQuery_API_ACU(this);
-            const index = parseInt($seg.data('index'), 10);
-            const role = $seg.find('.optimization-prompt-segment-role').val();
-            const content = $seg.find('.optimization-prompt-segment-content').val();
-            segments.push({
-                role: role || 'USER',
-                content: content || '',
-                deletable: true
-            });
-        });
-        return segments;
-    }
-    /**
-     * 更新剧情推进循环状态UI
-     */
-    function updatePlotLoopStatusUI_ACU() {
-        if (!$popupInstance_ACU)
-            return;
-        const $statusText = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-status-text`);
-        const $timerDisplay = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-timer-display`);
-        const $startBtn = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-start-loop-btn`);
-        const $stopBtn = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-stop-loop-btn`);
-        if (loopState_ACU.isLooping) {
-            $statusText.text('运行中').css('color', 'var(--green)');
-            $startBtn.hide();
-            $stopBtn.show();
-            $timerDisplay.show();
-        }
-        else {
-            $statusText.text('未运行').css('color', 'var(--red)');
-            $stopBtn.hide();
-            $startBtn.show();
-            $timerDisplay.hide().text('');
-        }
-    }
-    /**
-     * 加载剧情预设选择器
-     */
-    function getPlotPresetDisplayName_ACU(presetName) {
-        const normalizedPresetName = normalizePlotPresetSelectionValue_ACU(presetName);
-        return normalizedPresetName || '默认预设';
-    }
-    function formatPlotScopeUpdatedAt_ACU(updatedAt) {
-        const ts = Number(updatedAt) || 0;
-        if (!ts)
-            return '';
-        try {
-            return new Date(ts).toLocaleString('zh-CN', { hour12: false });
-        }
-        catch (error) {
-            return '';
-        }
-    }
-    function populatePlotPresetSelectOptions_ACU($select, presets, { extraPresetName = '' } = {}) {
-        if (!$select || !$select.length)
-            return;
-        const normalizedExtraPresetName = normalizePlotPresetSelectionValue_ACU(extraPresetName);
-        const normalizedPresetNames = new Set();
-        $select.empty().append(`<option value="${DEFAULT_PRESET_OPTION_VALUE_ACU}">默认预设</option>`);
-        presets.forEach((preset) => {
-            const presetName = normalizePlotPresetSelectionValue_ACU(preset?.name);
-            if (!presetName || normalizedPresetNames.has(presetName))
-                return;
-            normalizedPresetNames.add(presetName);
-            $select.append(renderOption_ACU(presetName, presetName));
-        });
-        if (normalizedExtraPresetName && !normalizedPresetNames.has(normalizedExtraPresetName)) {
-            $select.append(renderOption_ACU(normalizedExtraPresetName, `${normalizedExtraPresetName}（仅当前聊天快照）`));
-        }
-    }
-    function loadPlotPresetSelect_ACU() {
-        if (!$popupInstance_ACU || !settings_ACU?.plotSettings)
-            return;
-        const presets = settings_ACU.plotSettings.promptPresets || [];
-        const globalPresetName = normalizePlotPresetSelectionValue_ACU(settings_ACU.plotSettings.lastUsedPresetName || '');
-        const chatScopeState = getCurrentChatPlotScopeState_ACU();
-        const currentBinding = getPlotPresetBindingForChat_ACU();
-        const effectiveChatPresetName = resolveActivePlotPresetName_ACU({ fallbackToGlobal: true });
-        const explicitChatPresetName = normalizePlotPresetSelectionValue_ACU(currentBinding?.presetName || '');
-        const chatSelectedPresetName = normalizePlotPresetSelectionValue_ACU(explicitChatPresetName || chatScopeState?.presetName || '');
-        const $globalSelect = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-global-preset-select`);
-        const $chatSelect = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-chat-preset-select`);
-        const $globalDeleteBtn = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-global-delete-preset`);
-        const $globalStatus = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-global-scope-status`);
-        const $chatStatus = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-chat-scope-status`);
-        const $chatOriginStatus = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-chat-origin-status`);
-        populatePlotPresetSelectOptions_ACU($globalSelect, presets);
-        populatePlotPresetSelectOptions_ACU($chatSelect, presets, { extraPresetName: chatSelectedPresetName });
-        if ($chatSelect.length) {
-            $chatSelect.find(`option[value="${DEFAULT_PRESET_OPTION_VALUE_ACU}"]`).text('跟随全局');
-        }
-        const hasGlobalPreset = !!globalPresetName && presets.some((p) => normalizePlotPresetSelectionValue_ACU(p?.name) === globalPresetName);
-        const hasChatPreset = !!chatSelectedPresetName && $chatSelect.find(`option[value="${chatSelectedPresetName.replace(/"/g, '\\"')}"]`).length > 0;
-        const hasValidExplicitChatPreset = !!explicitChatPresetName && !!findPlotPresetByName_ACU(explicitChatPresetName);
-        if ($globalSelect.length) {
-            $globalSelect.val(hasGlobalPreset ? globalPresetName : DEFAULT_PRESET_OPTION_VALUE_ACU);
-        }
-        if ($globalDeleteBtn.length) {
-            $globalDeleteBtn.toggle(hasGlobalPreset);
-        }
-        if ($chatSelect.length) {
-            $chatSelect.val(hasChatPreset ? chatSelectedPresetName : DEFAULT_PRESET_OPTION_VALUE_ACU);
-        }
-        if ($globalStatus.length) {
-            $globalStatus.text(`当前全局预设：${getPlotPresetDisplayName_ACU(globalPresetName)}；新聊天会默认继承这里的剧情推进配置。`);
-        }
-        if ($chatStatus.length) {
-            if (chatScopeState?.snapshot) {
-                $chatStatus.text(`当前聊天：历史聊天快照；当前实际预设为 ${getPlotPresetDisplayName_ACU(effectiveChatPresetName)}。`);
-            }
-            else if (hasValidExplicitChatPreset) {
-                $chatStatus.text(`当前聊天：独立预设；当前实际预设为 ${getPlotPresetDisplayName_ACU(explicitChatPresetName)}。`);
-            }
-            else if (chatSelectedPresetName) {
-                $chatStatus.text(`当前聊天：原绑定预设不存在；当前已回退为 ${getPlotPresetDisplayName_ACU(effectiveChatPresetName)}。`);
-            }
-            else {
-                $chatStatus.text(`当前聊天：跟随全局；当前实际预设为 ${getPlotPresetDisplayName_ACU(effectiveChatPresetName)}。`);
-            }
-        }
-        if ($chatOriginStatus.length) {
-            if (chatScopeState?.snapshot) {
-                $chatOriginStatus.text('当前聊天仍在使用旧版聊天快照；重新切换一次当前聊天预设后，将迁移为新的按预设切换模式。');
-            }
-            else if (hasValidExplicitChatPreset) {
-                $chatOriginStatus.text('当前聊天已单独指定剧情推进预设；如需修改预设内容，请在左侧全局预设区操作。');
-            }
-            else if (chatSelectedPresetName) {
-                $chatOriginStatus.text('当前聊天原绑定的剧情推进预设已不存在；当前运行已回退到全局预设，请重新选择一次当前聊天预设。');
-            }
-            else {
-                $chatOriginStatus.text('当前聊天当前未单独指定剧情推进预设，实际会直接跟随全局。');
-            }
-        }
-    }
-    /**
-     * 加载预设到UI
-     */
-    function loadPlotPresetToUI_ACU(preset) {
-        if (!$popupInstance_ACU || !preset)
-            return;
-        const presetName = preset.name || '默认预设';
-        const result = applyGlobalPlotPresetSelectionForEditor_ACU(preset.name || '', {
-            source: 'ui_global_load',
-            save: true,
-        });
-        if (!result)
-            return;
-        showToastr_ACU('success', `已加载全局预设 "${presetName}"。`);
-    }
-    /**
-     * 从UI获取当前剧情设置
-     */
-    function getCurrentPlotSettingsFromUI_ACU() {
-        if (!$popupInstance_ACU)
-            return {};
-        flushCurrentPlotTaskEditorState_ACU({ renderTaskList: true, persist: false });
-        const activeSettings = getActivePlotEditorSettings_ACU();
-        const currentSettings = JSON.parse(JSON.stringify(activeSettings || settings_ACU.plotSettings || {}));
-        ensurePlotTasksCompat_ACU(currentSettings, { syncLegacy: true });
-        delete currentSettings.promptPresets;
-        delete currentSettings.lastUsedPresetName;
-        delete currentSettings.enabled;
-        const promptGroup = getPlotPromptGroupFromSource_ACU(currentSettings);
-        const legacyPromptTexts = getLegacyPromptTextsFromPromptGroup_ACU(promptGroup);
-        currentSettings.promptGroup = promptGroup;
-        currentSettings.finalSystemDirective = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-final-directive`).val() || '';
-        currentSettings.mainPrompt = legacyPromptTexts.mainPrompt || '';
-        currentSettings.systemPrompt = legacyPromptTexts.systemPrompt || '';
-        currentSettings.rateMain = parseFloat($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-main`).val()) || 1.0;
-        currentSettings.ratePersonal = parseFloat($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-personal`).val()) || 1.0;
-        currentSettings.rateErotic = parseFloat($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-erotic`).val()) || 0;
-        currentSettings.rateCuckold = parseFloat($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-cuckold`).val()) || 1.0;
-        currentSettings.recallCount = parseInt($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-recall-count`).val(), 10) || 20;
-        currentSettings.contextExtractRules = readExcludeRulesFromRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-extract-rules`);
-        currentSettings.contextExcludeRules = readExcludeRulesFromRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-exclude-rules`);
-        currentSettings.contextTurnCount = parseInt($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-turn-count`).val(), 10) || 3;
-        currentSettings.loopSettings = {
-            ...(currentSettings.loopSettings || {}),
-            quickReplyContent: (() => {
-                const prompts = [];
-                $popupInstance_ACU.find('.loop-prompt-textarea').each(function () {
-                    const content = String(jQuery_API_ACU(this).val() || '').trim();
-                    if (content)
-                        prompts.push(content);
-                });
-                return prompts;
-            })(),
-            currentPromptIndex: 0,
-            loopTags: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-tags`).val() || '',
-            loopDelay: parseInt($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-delay`).val(), 10) || 5,
-            loopTotalDuration: parseInt($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-total-duration`).val(), 10) || 0,
-            maxRetries: parseInt($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-max-retries`).val(), 10) || 3,
-        };
-        currentSettings.plotTasks = normalizePlotTasks_ACU(currentSettings);
-        ensurePlotPromptsArray_ACU(currentSettings);
-        setPlotPromptContentByIdForSettings_ACU(currentSettings, 'mainPrompt', currentSettings.mainPrompt || '');
-        setPlotPromptContentByIdForSettings_ACU(currentSettings, 'systemPrompt', currentSettings.systemPrompt || '');
-        setPlotPromptContentByIdForSettings_ACU(currentSettings, 'finalSystemDirective', currentSettings.finalSystemDirective || '');
-        ensurePlotTasksCompat_ACU(currentSettings, { syncLegacy: true });
-        currentSettings.finalSystemDirective = getPlotPromptContentByIdFromSettings_ACU(currentSettings, 'finalSystemDirective') || currentSettings.finalSystemDirective || '';
-        return currentSettings;
-    }
-    /**
-     * 另存为新的全局预设
-     */
-    function savePlotPresetAsNew_ACU() {
-        const presetName = prompt('请输入新的全局预设名称：');
-        const name = String(presetName || '').trim();
-        if (!name)
-            return;
-        const presets = settings_ACU.plotSettings.promptPresets || [];
-        const existingIndex = presets.findIndex((p) => p.name === name);
-        const currentSettings = getCurrentPlotSettingsFromUI_ACU();
-        if (!currentSettings || typeof currentSettings !== 'object') {
-            showToastr_ACU('error', '读取当前剧情推进设置失败。');
-            return;
-        }
-        const savedPreset = normalizePlotPresetExcludeRules_ACU({ name, ...currentSettings });
-        if (existingIndex !== -1) {
-            if (!confirm(`名为 "${name}" 的全局预设已存在。是否要覆盖它？`)) {
-                return;
-            }
-            presets[existingIndex] = savedPreset;
-        }
-        else {
-            presets.push(savedPreset);
-        }
-        settings_ACU.plotSettings.promptPresets = presets;
-        const currentRuntimePresetName = getCurrentRuntimePlotPresetName_ACU({ fallbackToGlobal: true });
-        const currentChatBinding = getPlotPresetBindingForChat_ACU();
-        const hasLegacyChatScope = !!getCurrentChatPlotScopeState_ACU();
-        const shouldRefreshCurrentChatRuntime = normalizePlotPresetSelectionValue_ACU(currentRuntimePresetName) === name ||
-            (!currentChatBinding && !hasLegacyChatScope);
-        if (shouldRefreshCurrentChatRuntime) {
-            applyPlotPresetToSettings_ACU(settings_ACU.plotSettings, savedPreset);
-        }
-        setCurrentEditablePlotPresetState_ACU(name, {
-            scope: 'global',
-            source: 'ui_global_save_as_new',
-        });
-        persistPlotPresetSelectionState_ACU(name, { source: 'ui_global_save_as_new', updateGlobal: true, save: false });
-        saveSettingsAndNotify_ACU();
-        loadPlotPresetSelect_ACU();
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-global-preset-select`).val(name);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-global-delete-preset`).show();
-        showToastr_ACU('success', `新全局预设 "${name}" 已保存。`);
-    }
-
-    /**
-     * presentation/components/template-preset-ui.ts — 模板预设 UI 函数（纯 DOM 操作）
-     *
-     * 纯业务逻辑函数已搬到 service/template/template-preset-service.ts。
-     * 本文件只保留操作 DOM 的 UI 函数。
-     */
-    // ═══ 纯 DOM 操作函数 ═══
-    function getTemplatePresetSelectJQ_ACU() {
-        try {
-            if (!$popupInstance_ACU || !$popupInstance_ACU.length)
-                return null;
-            const $sel = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-template-preset-select`);
-            return $sel && $sel.length ? $sel : null;
-        }
-        catch (e) {
-            return null;
-        }
-    }
-    function getTemplateChatPresetSelectJQ_ACU() {
-        try {
-            if (!$popupInstance_ACU || !$popupInstance_ACU.length)
-                return null;
-            const $sel = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-template-chat-preset-select`);
-            return $sel && $sel.length ? $sel : null;
-        }
-        catch (e) {
-            return null;
-        }
-    }
-    function populateTemplatePresetSelectOptions_ACU($select, { extraPresetName = '', extraLabelSuffix = '（仅当前聊天快照）', extraOptions = [] } = {}) {
-        if (!$select || !$select.length)
-            return;
-        const normalizedExtraPresetName = normalizeTemplatePresetSelectionValue_ACU(extraPresetName);
-        const presetNames = listTemplatePresetNames_ACU();
-        const renderedNames = new Set();
-        $select.empty().append(jQuery_API_ACU('<option/>').val(DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU).text('默认预设'));
-        presetNames.forEach(name => {
-            const normalizedName = normalizeTemplatePresetSelectionValue_ACU(name);
-            if (!normalizedName || renderedNames.has(normalizedName))
-                return;
-            renderedNames.add(normalizedName);
-            $select.append(jQuery_API_ACU('<option/>').val(normalizedName).text(normalizedName));
-        });
-        if (normalizedExtraPresetName && !renderedNames.has(normalizedExtraPresetName)) {
-            renderedNames.add(normalizedExtraPresetName);
-            $select.append(jQuery_API_ACU('<option/>').val(normalizedExtraPresetName).text(`${normalizedExtraPresetName}${extraLabelSuffix}`));
-        }
-        (Array.isArray(extraOptions) ? extraOptions : []).forEach(option => {
-            const value = String(option?.value || '').trim();
-            if (!value || renderedNames.has(value))
-                return;
-            renderedNames.add(value);
-            const label = String(option?.label || value).trim() || value;
-            $select.append(jQuery_API_ACU('<option/>').val(value).text(label));
-        });
-    }
-    function hasOptionValue_ACU($select, value) {
-        if (!$select || !$select.length)
-            return false;
-        const normalizedValue = String(value ?? '');
-        return $select.find('option').toArray().some((option) => String(jQuery_API_ACU(option).val() ?? '') === normalizedValue);
-    }
-    function loadTemplatePresetSelect_ACU({ globalSelectName = null, keepGlobalValue = false } = {}) {
-        if (!$popupInstance_ACU || !$popupInstance_ACU.length)
-            return;
-        const presetNames = listTemplatePresetNames_ACU();
-        const globalPresetName = normalizeTemplatePresetSelectionValue_ACU(getCurrentTemplatePresetName_ACU(settings_ACU, { requireExisting: false }));
-        const chatScopeState = getCurrentChatTemplateScopeState_ACU() || migrateLegacyTemplateScopeForCurrentChat_ACU();
-        const normalizedChatMode = normalizeTemplateScopeMode_ACU(chatScopeState?.mode);
-        const effectiveChatPresetName = resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true });
-        const chatSelectedPresetName = normalizeTemplatePresetSelectionValue_ACU(chatScopeState?.presetName || effectiveChatPresetName || '');
-        const chatPresetEntries = listChatTemplatePresetEntries_ACU();
-        const localOnlyOptions = chatPresetEntries
-            .filter(entry => {
-            const entryName = normalizeTemplatePresetSelectionValue_ACU(entry?.presetName || '');
-            return !!entryName && !presetNames.includes(entryName);
-        })
-            .map(entry => {
-            const entryName = normalizeTemplatePresetSelectionValue_ACU(entry?.presetName || '');
-            const updatedAtText = (typeof formatPlotScopeUpdatedAt_ACU === 'function')
-                ? formatPlotScopeUpdatedAt_ACU(entry?.updatedAt || entry?.archivedAt)
-                : '';
-            return {
-                value: entryName,
-                label: updatedAtText
-                    ? `${getTemplatePresetDisplayName_ACU(entryName)}（当前聊天快照，${updatedAtText}）`
-                    : `${getTemplatePresetDisplayName_ACU(entryName)}（当前聊天快照）`,
-            };
-        });
-        const chatPresetEntryCount = chatPresetEntries.length;
-        const chatExtraPresetName = (() => {
-            if (!chatSelectedPresetName)
-                return '';
-            if (presetNames.includes(chatSelectedPresetName))
-                return '';
-            if (localOnlyOptions.some(option => option.value === chatSelectedPresetName))
-                return '';
-            return chatSelectedPresetName;
-        })();
-        const $globalSelect = getTemplatePresetSelectJQ_ACU();
-        const $chatSelect = getTemplateChatPresetSelectJQ_ACU();
-        const $globalStatus = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-template-global-scope-status`);
-        const $chatStatus = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-template-chat-scope-status`);
-        const $chatOriginStatus = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-template-chat-origin-status`);
-        const $globalDeleteBtn = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-template-preset-delete`);
-        const hasGlobalPreset = !!globalPresetName && presetNames.includes(globalPresetName);
-        populateTemplatePresetSelectOptions_ACU($globalSelect, {
-            extraPresetName: hasGlobalPreset ? '' : globalPresetName,
-            extraLabelSuffix: '（仅当前全局模板快照）',
-        });
-        populateTemplatePresetSelectOptions_ACU($chatSelect, {
-            extraPresetName: chatExtraPresetName,
-            extraLabelSuffix: normalizedChatMode === 'preset_link' ? '（当前聊天引用）' : '（当前聊天专属预设）',
-            extraOptions: localOnlyOptions,
-        });
-        if ($globalSelect && $globalSelect.length) {
-            let resolvedGlobalValue = globalPresetName;
-            if (globalSelectName !== null && typeof globalSelectName !== 'undefined') {
-                resolvedGlobalValue = normalizeTemplatePresetSelectionValue_ACU(globalSelectName);
-            }
-            else if (keepGlobalValue) {
-                resolvedGlobalValue = normalizeTemplatePresetSelectionValue_ACU($globalSelect.val());
-            }
-            const finalGlobalValue = resolvedGlobalValue && hasOptionValue_ACU($globalSelect, resolvedGlobalValue)
-                ? resolvedGlobalValue
-                : (hasGlobalPreset || (!!globalPresetName && hasOptionValue_ACU($globalSelect, globalPresetName))
-                    ? globalPresetName
-                    : DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU);
-            $globalSelect.val(finalGlobalValue || DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU);
-        }
-        if ($globalDeleteBtn && $globalDeleteBtn.length) {
-            $globalDeleteBtn.toggle(!!globalPresetName && presetNames.includes(globalPresetName));
-        }
-        if ($chatSelect && $chatSelect.length) {
-            const finalChatValue = chatSelectedPresetName && hasOptionValue_ACU($chatSelect, chatSelectedPresetName)
-                ? chatSelectedPresetName
-                : DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU;
-            $chatSelect.val(finalChatValue || DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU);
-        }
-        if ($globalStatus && $globalStatus.length) {
-            if (globalPresetName && !hasGlobalPreset) {
-                $globalStatus.text(`当前全局模板：${globalPresetName}（预设库已不存在，但当前 profile 仍保留这份模板快照）。`);
-            }
-            else {
-                $globalStatus.text(`当前全局模板：${getTemplatePresetDisplayName_ACU(globalPresetName)}；新聊天会默认继承这里的表格模板。`);
-            }
-        }
-        if ($chatStatus && $chatStatus.length) {
-            if (normalizedChatMode === 'chat_override') {
-                let scopeLabel = '当前聊天专属预设';
-                if (chatScopeState.source === 'legacy_frozen') {
-                    scopeLabel = '旧版聊天冻结模板（已迁移）';
-                }
-                else if (chatScopeState.source === 'legacy_history_frozen') {
-                    scopeLabel = '旧对话历史模板快照（已迁移）';
-                }
-                else if (chatScopeState.source === 'legacy_header_frozen') {
-                    scopeLabel = '旧版表头冻结模板（已迁移）';
-                }
-                $chatStatus.text(`当前聊天：${scopeLabel}；当前实际模板预设为 ${getTemplatePresetDisplayName_ACU(chatSelectedPresetName)}。`);
-            }
-            else if (normalizedChatMode === 'preset_link') {
-                $chatStatus.text(`当前聊天：引用全局预设 ${getTemplatePresetDisplayName_ACU(chatSelectedPresetName)}；打开聊天时会继续沿用这个预设。`);
-            }
-            else {
-                $chatStatus.text(`当前聊天：跟随当前全局；当前实际模板预设为 ${getTemplatePresetDisplayName_ACU(effectiveChatPresetName)}。`);
-            }
-        }
-        if ($chatOriginStatus && $chatOriginStatus.length) {
-            if (normalizedChatMode === 'chat_override') {
-                const detailParts = [];
-                if (chatScopeState.source === 'legacy_frozen') {
-                    detailParts.push('来源语义：从旧版聊天冻结模板迁移');
-                }
-                else if (chatScopeState.source === 'legacy_history_frozen') {
-                    detailParts.push('来源语义：从旧对话实际表格结构迁移');
-                }
-                else if (chatScopeState.source === 'legacy_header_frozen') {
-                    detailParts.push('来源语义：从旧版表头冻结模板迁移');
-                }
-                else {
-                    detailParts.push('来源语义：当前聊天已保存本地模板预设快照');
-                }
-                if (chatScopeState.originGlobalName) {
-                    detailParts.push(`来源全局模板：${getTemplatePresetDisplayName_ACU(chatScopeState.originGlobalName)}`);
-                }
-                if (Number.isFinite(chatScopeState.originGlobalRevision) && chatScopeState.originGlobalRevision > 0) {
-                    detailParts.push(`来源全局版本：v${chatScopeState.originGlobalRevision}`);
-                }
-                const updatedAtText = (typeof formatPlotScopeUpdatedAt_ACU === 'function') ? formatPlotScopeUpdatedAt_ACU(chatScopeState.updatedAt) : '';
-                if (updatedAtText) {
-                    detailParts.push(`更新时间：${updatedAtText}`);
-                }
-                if (chatScopeState.source) {
-                    detailParts.push(`写入来源：${chatScopeState.source}`);
-                }
-                if (chatPresetEntryCount > 0) {
-                    detailParts.push(`当前聊天已登记 ${chatPresetEntryCount} 个本地模板预设`);
-                }
-                $chatOriginStatus.text(detailParts.join('；') || '当前聊天正在使用聊天级模板预设快照。');
-            }
-            else if (normalizedChatMode === 'preset_link') {
-                const detailParts = [
-                    '来源语义：当前聊天仅记录预设引用，未保存本地模板快照',
-                    `引用预设：${getTemplatePresetDisplayName_ACU(chatSelectedPresetName)}`,
-                ];
-                const updatedAtText = (typeof formatPlotScopeUpdatedAt_ACU === 'function') ? formatPlotScopeUpdatedAt_ACU(chatScopeState?.updatedAt) : '';
-                if (updatedAtText) {
-                    detailParts.push(`更新时间：${updatedAtText}`);
-                }
-                if (chatScopeState?.source) {
-                    detailParts.push(`写入来源：${chatScopeState.source}`);
-                }
-                if (chatPresetEntryCount > 0) {
-                    detailParts.push(`当前聊天可切换/覆盖 ${chatPresetEntryCount} 个本地模板预设`);
-                }
-                $chatOriginStatus.text(detailParts.join('；'));
-            }
-            else if (chatPresetEntryCount > 0) {
-                $chatOriginStatus.text(`当前聊天尚未保存本地模板快照，实际会跟随当前全局模板；但当前聊天已经拥有 ${chatPresetEntryCount} 个可直接切换的本地模板预设。`);
-            }
-            else {
-                $chatOriginStatus.text('当前聊天尚未保存本地模板快照，实际会直接跟随当前全局表格模板。');
-            }
-        }
-    }
-    function refreshTemplatePresetSelectInUI_ACU({ selectName = null, keepValue = false } = {}) {
-        if ($popupInstance_ACU && $popupInstance_ACU.length) {
-            loadTemplatePresetSelect_ACU({ globalSelectName: selectName, keepGlobalValue: !!keepValue });
-            return;
-        }
-        const $sel = getTemplatePresetSelectJQ_ACU();
-        if (!$sel || !$sel.length)
-            return;
-        renderTemplatePresetSelect_ACU($sel, { keepValue: !!keepValue });
-        if (selectName === null || typeof selectName === 'undefined')
-            return;
-        const normalizedName = normalizeTemplatePresetSelectionValue_ACU(selectName);
-        $sel.val(normalizedName || DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU);
-    }
-    function renderTemplatePresetSelect_ACU($select, { keepValue = true } = {}) {
-        try {
-            if (!$select || !$select.length)
-                return;
-            const prev = keepValue ? normalizeTemplatePresetSelectionValue_ACU($select.val()) : '';
-            const names = listTemplatePresetNames_ACU();
-            const persistedName = getCurrentTemplatePresetName_ACU(settings_ACU, { requireExisting: true, getTemplatePresetFn: getTemplatePreset_ACU });
-            $select.empty();
-            $select.append(jQuery_API_ACU('<option/>').val(DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU).text('默认预设'));
-            names.forEach(n => {
-                $select.append(jQuery_API_ACU('<option/>').val(String(n)).text(String(n)));
-            });
-            let resolvedValue = DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU;
-            if (keepValue) {
-                if (isDefaultTemplatePresetSelection_ACU(prev)) {
-                    resolvedValue = DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU;
-                }
-                else if (names.includes(prev)) {
-                    resolvedValue = prev;
-                }
-            }
-            if (resolvedValue === DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU && persistedName && names.includes(persistedName)) {
-                resolvedValue = persistedName;
-            }
-            $select.val(resolvedValue);
-        }
-        catch (e) { }
-    }
-
-    /**
-     * presentation/components/pipeline-ui-helpers.ts
-     * 包装 service 层的 pipeline 函数，在调用后自动刷新 UI
-     *
-     * 同时提供统一的预设切换后 UI 同步入口 refreshPresetUIAfterSwitch_ACU，
-     * 供模板预设 / 剧情推进预设的手工切换与 API 切换复用。
-     */
-    /**
-     * 刷新合并数据后自动通知前端 + 刷新可视化编辑器 + 刷新 UI 选择器和状态面板
-     * presentation 层唯一入口：所有需要"刷新数据+刷新UI"的地方都调这个。
-     */
-    async function refreshMergedDataAndNotifyWithUI_ACU({ skipNotify = false } = {}) {
-        const result = await refreshMergedDataAndNotify_ACU();
-        // 1. 通知前端 (iframe context)
-        try {
-            if (!skipNotify && topLevelWindow_ACU.AutoCardUpdaterAPI) {
-                topLevelWindow_ACU.AutoCardUpdaterAPI._notifyTableUpdate();
-                logDebug_ACU('Notified frontend to refresh UI after data merge.');
-            }
-            else if (skipNotify) {
-                logDebug_ACU('Skipped frontend table update notification after data merge.');
-            }
-        }
-        catch (_) { }
-        // 2. 刷新可视化编辑器
-        setTimeout(() => {
-            try {
-                if (typeof window.ACU_Visualizer_Refresh === 'function') {
-                    window.ACU_Visualizer_Refresh();
-                    logDebug_ACU('Triggered global visualizer refresh.');
-                }
-            }
-            catch (_) { }
-        }, 200);
-        // 3. UI 选择器刷新
-        if ($manualTableSelector_ACU) {
-            try {
-                renderManualTableSelector_ACU();
-            }
-            catch (_) { }
-        }
-        if ($importTableSelector_ACU) {
-            try {
-                renderImportTableSelector_ACU();
-            }
-            catch (_) { }
-        }
-        if (typeof updateCardUpdateStatusDisplay_ACU === 'function') {
-            updateCardUpdateStatusDisplay_ACU();
-        }
-        // 4. 等待前端完成数据读取（保持原有 800ms 等待行为）
-        await new Promise(resolve => setTimeout(resolve, 800));
-        return result;
-    }
-    /**
-     * 预设切换后统一刷新当前已挂载的 UI
-     *
-     * 在模板预设或剧情推进预设切换成功后调用，确保所有已打开的界面立即同步：
-     *   1. 模板预设下拉框与状态文案
-     *   2. 剧情推进编辑区全量重载（任务列表、任务参数、提示词、速率、循环设置、排除规则、预设选择器）
-     *   3. 数据库状态卡片（含"当前生效模板预设"）
-     *   4. 独立数据库编辑器窗口（顶部模板标识 + 编辑区数据）
-     *
-     * 各子刷新函数内部已做 DOM 存在性检查，弹窗/窗口未打开时静默跳过，
-     * 不会因 DOM 缺失而抛错中断后续刷新。
-     *
-     * @param options.templateGlobalSelectName 传入则覆盖模板全局 select 选中值；null 则按当前运行态自动解析
-     * @param options.keepTemplateGlobalValue   为 true 时保留模板全局 select 当前选中值不变
-     */
-    function refreshPresetUIAfterSwitch_ACU({ templateGlobalSelectName = null, keepTemplateGlobalValue = false } = {}) {
-        // 1. 模板预设 UI（全局/当前聊天下拉框 + 各类状态文案）
-        try {
-            loadTemplatePresetSelect_ACU({
-                globalSelectName: templateGlobalSelectName,
-                keepGlobalValue: keepTemplateGlobalValue,
-            });
-        }
-        catch (e) {
-            logDebug_ACU('[refreshPresetUI] 模板预设 UI 刷新失败:', e);
-        }
-        // 2. 剧情推进编辑区全量重载（任务列表 + 参数 + 提示词 + 速率 + 循环 + 排除规则 + 预设选择器）
-        //    loadPlotSettingsToUI_ACU 内部会调用 loadPlotPresetSelect_ACU，无需再单独调
-        try {
-            loadPlotSettingsToUI_ACU();
-        }
-        catch (e) {
-            logDebug_ACU('[refreshPresetUI] 剧情推进编辑区刷新失败:', e);
-        }
-        // 3. 数据库状态卡片（含"当前生效模板预设"显示）
-        try {
-            updateCardUpdateStatusDisplay_ACU();
-        }
-        catch (e) {
-            logDebug_ACU('[refreshPresetUI] 数据库状态卡片刷新失败:', e);
-        }
-        // 4. 独立数据库编辑器窗口：顶部模板标识
-        try {
-            if (typeof window.ACU_Visualizer_Refresh === 'function') {
-                window.ACU_Visualizer_Refresh();
-            }
-        }
-        catch (e) {
-            logDebug_ACU('[refreshPresetUI] 可视化编辑器刷新失败:', e);
-        }
-    }
-
-    /**
      * service/table/update-scheduler.ts — 自动更新调度核心逻辑
      * 从 presentation/triggers/settings-ui-sync/settings-ui-trigger.ts 的 triggerAutomaticUpdateIfNeeded_ACU 中提取
      *
@@ -30683,16 +31654,23 @@ $CONTENT
             updateGroupKeys: [],
         };
         const nextIsolatedData = cloneIsolatedData_ACU(message);
+        const existingStorageFrame = existingTagData.storageFrame;
+        const existingTagDataIsV2 = !!existingStorageFrame;
         const nextTagData = {
-            independentData: existingTagData.independentData || {},
-            modifiedKeys: Array.isArray(existingTagData.modifiedKeys) ? [...existingTagData.modifiedKeys] : [],
-            updateGroupKeys: Array.isArray(existingTagData.updateGroupKeys) ? [...existingTagData.updateGroupKeys] : [],
+            ...(existingTagDataIsV2
+                ? { storageFrame: existingStorageFrame, _acu_storage_version: 2 }
+                : {
+                    independentData: existingTagData.independentData || {},
+                    modifiedKeys: Array.isArray(existingTagData.modifiedKeys) ? [...existingTagData.modifiedKeys] : [],
+                    updateGroupKeys: Array.isArray(existingTagData.updateGroupKeys) ? [...existingTagData.updateGroupKeys] : [],
+                    ...(existingTagData.incrementalData ? { incrementalData: existingTagData.incrementalData } : {}),
+                    ...(existingTagData._acu_storage_mode ? { _acu_storage_mode: existingTagData._acu_storage_mode } : {}),
+                    ...(existingTagData._acu_storage_version != null ? { _acu_storage_version: existingTagData._acu_storage_version } : {}),
+                }),
             ...(existingTagData.vectorMemoryState ? { vectorMemoryState: existingTagData.vectorMemoryState } : {}),
             ...(existingTagData._acu_base_state ? { _acu_base_state: existingTagData._acu_base_state } : {}),
-            ...(existingTagData.incrementalData ? { incrementalData: existingTagData.incrementalData } : {}),
-            ...(existingTagData._acu_storage_mode ? { _acu_storage_mode: existingTagData._acu_storage_mode } : {}),
-            ...(existingTagData._acu_storage_version != null ? { _acu_storage_version: existingTagData._acu_storage_version } : {}),
         };
+        const shouldWriteLegacyCompat = !existingTagDataIsV2 && isLegacyV1TagData_ACU(existingTagData);
         if (nextState) {
             const previousManifest = existingTagData.summaryVectorIndexManifest || previousState?.manifest || null;
             const persisted = await persistSummaryVectorIndexSnapshot_ACU({
@@ -30732,7 +31710,9 @@ $CONTENT
             enabled: settings_ACU.dataIsolationEnabled,
             code: settings_ACU.dataIsolationCode,
         });
-        writeLegacyCompatData_ACU(message, nextTagData.independentData || {}, nextTagData.modifiedKeys || [], nextTagData.updateGroupKeys || []);
+        if (shouldWriteLegacyCompat) {
+            writeLegacyCompatData_ACU(message, nextTagData.independentData || {}, nextTagData.modifiedKeys || [], nextTagData.updateGroupKeys || [], { legacyConfirmed: true });
+        }
         if (options.saveChatAfterWrite !== false) {
             await saveChatToHost_ACU();
         }
@@ -30750,16 +31730,23 @@ $CONTENT
         if (!existingTagData?.summaryVectorIndexState && !existingTagData?.summaryVectorIndexManifest)
             return !!manifest;
         const nextIsolatedData = cloneIsolatedData_ACU(message);
+        const existingStorageFrame = existingTagData.storageFrame;
+        const existingTagDataIsV2 = !!existingStorageFrame;
         const nextTagData = {
-            independentData: existingTagData.independentData || {},
-            modifiedKeys: Array.isArray(existingTagData.modifiedKeys) ? [...existingTagData.modifiedKeys] : [],
-            updateGroupKeys: Array.isArray(existingTagData.updateGroupKeys) ? [...existingTagData.updateGroupKeys] : [],
+            ...(existingTagDataIsV2
+                ? { storageFrame: existingStorageFrame, _acu_storage_version: 2 }
+                : {
+                    independentData: existingTagData.independentData || {},
+                    modifiedKeys: Array.isArray(existingTagData.modifiedKeys) ? [...existingTagData.modifiedKeys] : [],
+                    updateGroupKeys: Array.isArray(existingTagData.updateGroupKeys) ? [...existingTagData.updateGroupKeys] : [],
+                    ...(existingTagData.incrementalData ? { incrementalData: existingTagData.incrementalData } : {}),
+                    ...(existingTagData._acu_storage_mode ? { _acu_storage_mode: existingTagData._acu_storage_mode } : {}),
+                    ...(existingTagData._acu_storage_version != null ? { _acu_storage_version: existingTagData._acu_storage_version } : {}),
+                }),
             ...(existingTagData.vectorMemoryState ? { vectorMemoryState: existingTagData.vectorMemoryState } : {}),
             ...(existingTagData._acu_base_state ? { _acu_base_state: existingTagData._acu_base_state } : {}),
-            ...(existingTagData.incrementalData ? { incrementalData: existingTagData.incrementalData } : {}),
-            ...(existingTagData._acu_storage_mode ? { _acu_storage_mode: existingTagData._acu_storage_mode } : {}),
-            ...(existingTagData._acu_storage_version != null ? { _acu_storage_version: existingTagData._acu_storage_version } : {}),
         };
+        const shouldWriteLegacyCompat = !existingTagDataIsV2 && isLegacyV1TagData_ACU(existingTagData);
         assignSummaryVectorIndexStateToTagData_ACU(nextTagData, null);
         nextIsolatedData[isolationKey] = nextTagData;
         message.TavernDB_ACU_IsolatedData = nextIsolatedData;
@@ -30768,7 +31755,9 @@ $CONTENT
             enabled: settings_ACU.dataIsolationEnabled,
             code: settings_ACU.dataIsolationCode,
         });
-        writeLegacyCompatData_ACU(message, nextTagData.independentData || {}, nextTagData.modifiedKeys || [], nextTagData.updateGroupKeys || []);
+        if (shouldWriteLegacyCompat) {
+            writeLegacyCompatData_ACU(message, nextTagData.independentData || {}, nextTagData.modifiedKeys || [], nextTagData.updateGroupKeys || [], { legacyConfirmed: true });
+        }
         await saveChatToHost_ACU();
         logDebug_ACU(`[纪要向量索引] 当前纪要表无有效条目，已清理目标楼层交火索引 manifest: messageIndex=${params.targetMessageIndex}`);
         return true;
@@ -30869,16 +31858,23 @@ $CONTENT
             sourceMessageIndex: latestLayer.messageIndex,
         });
         const nextIsolatedData = cloneIsolatedData_ACU(message);
+        const existingStorageFrame = existingTagData.storageFrame;
+        const existingTagDataIsV2 = !!existingStorageFrame;
         const nextTagData = {
-            independentData: existingTagData.independentData || {},
-            modifiedKeys: Array.isArray(existingTagData.modifiedKeys) ? [...existingTagData.modifiedKeys] : [],
-            updateGroupKeys: Array.isArray(existingTagData.updateGroupKeys) ? [...existingTagData.updateGroupKeys] : [],
+            ...(existingTagDataIsV2
+                ? { storageFrame: existingStorageFrame, _acu_storage_version: 2 }
+                : {
+                    independentData: existingTagData.independentData || {},
+                    modifiedKeys: Array.isArray(existingTagData.modifiedKeys) ? [...existingTagData.modifiedKeys] : [],
+                    updateGroupKeys: Array.isArray(existingTagData.updateGroupKeys) ? [...existingTagData.updateGroupKeys] : [],
+                    ...(existingTagData.incrementalData ? { incrementalData: existingTagData.incrementalData } : {}),
+                    ...(existingTagData._acu_storage_mode ? { _acu_storage_mode: existingTagData._acu_storage_mode } : {}),
+                    ...(existingTagData._acu_storage_version != null ? { _acu_storage_version: existingTagData._acu_storage_version } : {}),
+                }),
             ...(existingTagData.vectorMemoryState ? { vectorMemoryState: existingTagData.vectorMemoryState } : {}),
             ...(existingTagData._acu_base_state ? { _acu_base_state: existingTagData._acu_base_state } : {}),
-            ...(existingTagData.incrementalData ? { incrementalData: existingTagData.incrementalData } : {}),
-            ...(existingTagData._acu_storage_mode ? { _acu_storage_mode: existingTagData._acu_storage_mode } : {}),
-            ...(existingTagData._acu_storage_version != null ? { _acu_storage_version: existingTagData._acu_storage_version } : {}),
         };
+        const shouldWriteLegacyCompat = !existingTagDataIsV2 && isLegacyV1TagData_ACU(existingTagData);
         assignSummaryVectorIndexStateToTagData_ACU(nextTagData, persisted.state, persisted.manifest);
         nextIsolatedData[isolationKey] = nextTagData;
         message.TavernDB_ACU_IsolatedData = nextIsolatedData;
@@ -30887,7 +31883,9 @@ $CONTENT
             enabled: settings_ACU.dataIsolationEnabled,
             code: settings_ACU.dataIsolationCode,
         });
-        writeLegacyCompatData_ACU(message, nextTagData.independentData || {}, nextTagData.modifiedKeys || [], nextTagData.updateGroupKeys || []);
+        if (shouldWriteLegacyCompat) {
+            writeLegacyCompatData_ACU(message, nextTagData.independentData || {}, nextTagData.modifiedKeys || [], nextTagData.updateGroupKeys || [], { legacyConfirmed: true });
+        }
         if (options.saveChatAfterWrite !== false) {
             await saveChatToHost_ACU();
         }
@@ -31519,8 +32517,91 @@ $CONTENT
      * 构建批次合并基底数据
      * 纯业务逻辑，不涉及任何 UI 操作
      */
+    function cloneTableDataSnapshot_ACU(data) {
+        if (!data || typeof data !== 'object')
+            return null;
+        return JSON.parse(JSON.stringify(data));
+    }
+    function hasUsableRuntimeTableData_ACU(data) {
+        if (!data || typeof data !== 'object')
+            return false;
+        return Object.keys(data).some(k => k.startsWith('sheet_') && Array.isArray(data[k]?.content));
+    }
+    function buildWriteSetForSheetKeys_ACU(sheetKeys, fallbackData) {
+        const keys = Array.isArray(sheetKeys) && sheetKeys.length > 0
+            ? sheetKeys
+            : getSortedSheetKeys_ACU(fallbackData || currentJsonTableData_ACU || {});
+        const normalized = [...new Set(keys.filter(sheetKey => typeof sheetKey === 'string' && sheetKey.startsWith('sheet_')))].sort();
+        return normalized.length > 0
+            ? normalized.map(sheetKey => ({ kind: 'sheet', sheetKey }))
+            : [{ kind: 'all' }];
+    }
+    function buildSqlBatchOperationsFromText_ACU(sqlText) {
+        const statements = normalizeSqlStatementsForRuntimeLog_ACU(sqlText);
+        return statements.length > 0 ? [{ kind: 'sql_batch', statements }] : [];
+    }
+    function getTouchedSheetKeysFromSqlText_ACU(sqlText, tableData) {
+        const statements = normalizeSqlStatementsForRuntimeLog_ACU(sqlText);
+        if (statements.length === 0)
+            return [];
+        const tableNames = extractTableNamesFromStatements(statements);
+        return mapSqlTableNamesToSheetKeys_ACU(tableData, tableNames);
+    }
+    function findSqlFailureGroupKey_ACU(sqlTexts, responses, errorMessage) {
+        const match = String(errorMessage || '').match(/第\s*(\d+)\s*条语句失败/);
+        const failedIndex = match ? Number.parseInt(match[1], 10) : NaN;
+        if (!Number.isFinite(failedIndex) || failedIndex <= 0)
+            return null;
+        let cursor = 0;
+        for (let i = 0; i < sqlTexts.length; i += 1) {
+            const count = normalizeSqlStatementsForRuntimeLog_ACU(sqlTexts[i]).length;
+            if (failedIndex > cursor && failedIndex <= cursor + count) {
+                return responses[i]?.job?.groupKey || null;
+            }
+            cursor += count;
+        }
+        return null;
+    }
+    function createRuntimeRollbackSnapshot_ACU(provider) {
+        return typeof provider?.createRuntimeSnapshot === 'function' ? provider.createRuntimeSnapshot() : null;
+    }
+    async function restoreRuntimeRollbackSnapshot_ACU(provider, snapshot, reason) {
+        if (!snapshot || typeof provider?.restoreRuntimeSnapshot !== 'function')
+            return;
+        try {
+            await provider.restoreRuntimeSnapshot(snapshot);
+            logDebug_ACU(`[RuntimeRollback] 已恢复运行时 DB 快照: ${reason}`);
+        }
+        catch (error) {
+            logWarn_ACU(`[RuntimeRollback] 恢复运行时 DB 快照失败，尝试 reload: ${reason}`, error);
+            await reloadStorageProvider();
+        }
+    }
+    function getRuntimeTableDataSnapshot_ACU(fallbackData = null) {
+        const explicitFallback = cloneTableDataSnapshot_ACU(fallbackData || null);
+        if (hasUsableRuntimeTableData_ACU(explicitFallback))
+            return explicitFallback;
+        try {
+            const providerData = getStorageProvider().getCurrentData();
+            const cloned = cloneTableDataSnapshot_ACU(providerData);
+            if (hasUsableRuntimeTableData_ACU(cloned))
+                return cloned;
+        }
+        catch (error) {
+            logWarn_ACU('[RuntimeSnapshot] 无法从运行时存储导出当前表格快照，改用内存快照兜底。', error);
+        }
+        const fallback = cloneTableDataSnapshot_ACU(currentJsonTableData_ACU || null);
+        if (hasUsableRuntimeTableData_ACU(fallback))
+            return fallback;
+        return null;
+    }
     function buildBatchMergeBase_ACU(batchNumber) {
         try {
+            const runtimeData = getRuntimeTableDataSnapshot_ACU();
+            if (runtimeData) {
+                logDebug_ACU(`[Batch ${batchNumber}] Using runtime storage snapshot as merge base.`);
+                return { data: runtimeData, error: null };
+            }
             const batchIsoKey = getCurrentIsolationKey_ACU();
             const sheetGuideForBatch = getChatSheetGuideDataForIsolationKey_ACU(batchIsoKey);
             if (sheetGuideForBatch && typeof sheetGuideForBatch === 'object' && Object.keys(sheetGuideForBatch).some(k => k.startsWith('sheet_'))) {
@@ -31724,8 +32805,11 @@ $CONTENT
                 targetSheet.content[0] = JSON.parse(JSON.stringify(headerRow));
                 sheetChanged = true;
             }
-            if (Array.isArray(targetSheet.content) && targetSheet.content.length <= 1) {
-                const seedRows = getEffectiveSeedRowsForSheet_ACU(sheetKey, { guideData, allowTemplateFallback: true });
+            if (shouldUseInitialSeedRows_ACU() && Array.isArray(targetSheet.content) && targetSheet.content.length <= 1) {
+                let seedRows = getEffectiveSeedRowsForSheet_ACU(sheetKey, { guideData, allowTemplateFallback: true });
+                if ((!Array.isArray(seedRows) || seedRows.length === 0) && Array.isArray(sourceSheet?.content) && sourceSheet.content.length > 1) {
+                    seedRows = JSON.parse(JSON.stringify(sourceSheet.content.slice(1)));
+                }
                 if (Array.isArray(seedRows) && seedRows.length > 0) {
                     targetSheet.content = [targetSheet.content[0] || [], ...JSON.parse(JSON.stringify(seedRows))];
                     targetSheet.content = ensureStableRowIdsForSheetContent_ACU(targetSheet.content);
@@ -31766,23 +32850,128 @@ $CONTENT
                 allTargetSheetKeySet.add(sheetKey);
             }
         }
+        const allResponsesAreRuntimeSql = isSqliteMode()
+            && sortedResponses.every(response => typeof response.tableEditText === 'string' && isSqlContent(response.tableEditText));
+        if (allResponsesAreRuntimeSql) {
+            const operations = [];
+            const sqlTexts = [];
+            for (const response of sortedResponses) {
+                const sqlText = response.tableEditText || '';
+                const touchedKeys = getTouchedSheetKeysFromSqlText_ACU(sqlText, baseSnapshot);
+                if (Array.isArray(response.job.targetSheetKeys) && response.job.targetSheetKeys.length > 0) {
+                    const allowedSheetKeys = new Set(response.job.targetSheetKeys);
+                    const unauthorizedKeys = touchedKeys.filter((sheetKey) => !allowedSheetKeys.has(sheetKey));
+                    if (unauthorizedKeys.length > 0) {
+                        return {
+                            success: false,
+                            modifiedKeys: [],
+                            error: `统一提交失败：group ${response.job.groupKey} 越权修改了非目标表 (${unauthorizedKeys.join(', ')})。`,
+                        };
+                    }
+                }
+                sqlTexts.push(sqlText);
+                operations.push(...buildSqlBatchOperationsFromText_ACU(sqlText));
+            }
+            const commitResult = await runTableUpdateCommit_ACU({
+                source: 'group_fill',
+                reason: 'applyUnifiedGroupFillResponses:runtime_sql',
+                isolationKey: getCurrentIsolationKey_ACU(),
+                writeSet: buildWriteSetForSheetKeys_ACU([...allTargetSheetKeySet], baseSnapshot),
+                baseRevision: options.baseRevision,
+                initialData: baseSnapshot,
+                targetMessageIndex: options.saveTargetIndex,
+                targetSheetKeys: null,
+                updateGroupKeys: null,
+                trackingSheetKeys: null,
+                trackAsUpdate: true,
+                skipChatSave: options.isImportMode,
+            }, async () => {
+                const provider = await ensureStorageProviderReady_ACU();
+                let parseResult;
+                try {
+                    parseResult = typeof provider.applyEditsBatch === 'function'
+                        ? provider.applyEditsBatch(sqlTexts, options.updateMode)
+                        : provider.applyEdits(sqlTexts.join('\n'), options.updateMode);
+                }
+                catch (error) {
+                    const rawErrorMessage = error?.message || String(error);
+                    const failedGroupKey = findSqlFailureGroupKey_ACU(sqlTexts, sortedResponses, rawErrorMessage);
+                    return {
+                        success: false,
+                        error: failedGroupKey
+                            ? `统一提交失败：group ${failedGroupKey} SQL 执行失败。${rawErrorMessage}`
+                            : `统一提交失败：SQL 执行失败。${rawErrorMessage}`,
+                    };
+                }
+                if (!parseResult?.success) {
+                    return {
+                        success: false,
+                        error: parseResult?.error ? `统一提交失败：SQL 执行失败。${parseResult.error}` : '统一提交失败：SQL 执行失败。',
+                    };
+                }
+                const runtimeData = provider.getCurrentData() || currentJsonTableData_ACU || baseSnapshot;
+                const parsedModifiedKeys = Array.isArray(parseResult.modifiedKeys)
+                    ? parseResult.modifiedKeys.filter((key) => typeof key === 'string')
+                    : [];
+                const modifiedKeys = Array.from(new Set(parsedModifiedKeys)).sort();
+                const isFirstTimeInit = await checkIfFirstTimeInit_ACU();
+                const allRuntimeSheetKeys = getSortedSheetKeys_ACU(runtimeData);
+                const initializedKeys = [...allTargetSheetKeySet]
+                    .filter(sheetKey => Boolean(runtimeData?.[sheetKey]) && !Boolean(baseSnapshot?.[sheetKey]))
+                    .sort();
+                const keysToSave = isFirstTimeInit
+                    ? allRuntimeSheetKeys
+                    : [...new Set([...modifiedKeys, ...initializedKeys])].sort();
+                const keysToTrack = [...new Set([...modifiedKeys, ...initializedKeys])].sort();
+                const fillAttemptKeys = [...allTargetSheetKeySet]
+                    .filter(sheetKey => Boolean(runtimeData?.[sheetKey]))
+                    .sort();
+                const revisionWriteSet = modifiedKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
+                return {
+                    success: true,
+                    value: { modifiedKeys },
+                    tableData: runtimeData,
+                    mutationResult: { changes: parseResult.appliedEdits || 0, errors: [] },
+                    persist: {
+                        targetSheetKeys: keysToSave,
+                        updateGroupKeys: fillAttemptKeys,
+                        trackingSheetKeys: keysToTrack,
+                        trackAsUpdate: true,
+                        operations,
+                        revisionWriteSet,
+                    },
+                };
+            });
+            if (!commitResult.success || !commitResult.value) {
+                return { success: false, modifiedKeys: [], error: commitResult.error || '统一提交失败。' };
+            }
+            if (!options.isImportMode && commitResult.tableData) {
+                await updateReadableLorebookEntry_ACU(true, false, null, commitResult.tableData);
+            }
+            return { success: true, modifiedKeys: commitResult.value.modifiedKeys };
+        }
         const sqlInitialization = isSqliteMode()
             ? buildSqlInitializationBase_ACU(baseSnapshot, [...allTargetSheetKeySet])
             : { workingTableData: JSON.parse(JSON.stringify(baseSnapshot)), initializedSheetKeys: new Set() };
         let workingTableData = sqlInitialization.workingTableData;
         const initializedSheetKeys = sqlInitialization.initializedSheetKeys;
         const modifiedKeySet = new Set();
-        const trackingKeySet = new Set();
+        const operations = [];
         for (const response of sortedResponses) {
             let parseResult;
             if (isSqliteMode() && typeof response.tableEditText === 'string' && isSqlContent(response.tableEditText)) {
                 parseResult = await applySqlEditsToTableDataSnapshot_ACU(response.tableEditText, workingTableData, options.updateMode);
                 if (parseResult?.success && parseResult.workingData) {
                     workingTableData = parseResult.workingData;
+                    if (Array.isArray(parseResult.operations))
+                        operations.push(...parseResult.operations);
                 }
             }
             else {
                 parseResult = parseAndApplyTableEditsToData_ACU(response.aiResponse, workingTableData, options.updateMode, options.isImportMode);
+                if (parseResult && typeof parseResult === 'object' && parseResult.success !== false && response.tableEditText) {
+                    operations.push({ kind: 'table_edit_dsl', text: response.tableEditText, updateMode: options.updateMode });
+                }
             }
             const parseResultObject = typeof parseResult === 'object' && parseResult !== null ? parseResult : null;
             const parseSuccess = parseResultObject ? parseResultObject.success : !!parseResult;
@@ -31813,11 +33002,6 @@ $CONTENT
                     };
                 }
             }
-            for (const sheetKey of (response.job?.targetSheetKeys || [])) {
-                if (workingTableData && workingTableData[sheetKey]) {
-                    trackingKeySet.add(sheetKey);
-                }
-            }
             parsedKeys.forEach((sheetKey) => modifiedKeySet.add(sheetKey));
         }
         applySpecialIndexSequenceToSummaryTables_ACU(workingTableData);
@@ -31829,21 +33013,34 @@ $CONTENT
             const keysToSave = isFirstTimeInit
                 ? allUnifiedSheetKeys
                 : [...new Set([...modifiedKeys, ...initializedKeys])].sort();
-            const keysToTrack = isFirstTimeInit
-                ? allUnifiedSheetKeys
-                : [...new Set([...trackingKeySet, ...initializedKeys])].sort();
-            const saveResult = await persistTablesToChatMessage_ACU({
+            const keysToTrack = [...new Set([...modifiedKeys, ...initializedKeys])].sort();
+            const fillAttemptKeys = [...allTargetSheetKeySet]
+                .filter(sheetKey => Boolean(workingTableData?.[sheetKey]))
+                .sort();
+            const revisionWriteSet = modifiedKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
+            const commitResult = await runTableUpdateCommit_ACU({
+                source: 'group_fill',
+                reason: 'applyUnifiedGroupFillResponses:snapshot',
+                isolationKey: getCurrentIsolationKey_ACU(),
+                writeSet: buildWriteSetForSheetKeys_ACU([...allTargetSheetKeySet], baseSnapshot),
+                revisionWriteSet,
+                baseRevision: options.baseRevision,
+                initialData: baseSnapshot,
                 targetMessageIndex: options.saveTargetIndex,
                 targetSheetKeys: keysToSave,
-                updateGroupKeys: keysToTrack,
+                updateGroupKeys: fillAttemptKeys,
                 trackingSheetKeys: keysToTrack,
-                tableData: workingTableData,
                 trackAsUpdate: true,
-            });
-            if (!saveResult.saved) {
-                return { success: false, modifiedKeys, error: saveResult.error || '统一提交失败：保存聊天记录失败。' };
+                operations,
+            }, () => ({
+                success: true,
+                value: { modifiedKeys },
+                tableData: workingTableData,
+            }));
+            if (!commitResult.success) {
+                return { success: false, modifiedKeys, error: commitResult.error || '统一提交失败：保存聊天记录失败。' };
             }
-            await updateReadableLorebookEntry_ACU(true);
+            await updateReadableLorebookEntry_ACU(true, false, null, workingTableData);
             if (getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
                 await enqueueSummaryVectorIndexFlush_ACU({ targetMessageIndex: options.saveTargetIndex, mode: 'sync', reason: 'unified_group_fill_complete' });
             }
@@ -31909,7 +33106,6 @@ $CONTENT
             let bucketSucceeded = false;
             for (let bucketAttempt = 1; bucketAttempt <= maxBucketRetries; bucketAttempt++) {
                 const chatHistory = getChatArray_ACU();
-                const basePlan = bucket.plannedJobs[0];
                 const baseResult = buildBatchMergeBase_ACU(bucket.batchNumber);
                 if (!baseResult.data) {
                     bucket.plannedJobs.forEach(job => failedGroups.add(job.group.key));
@@ -31917,11 +33113,10 @@ $CONTENT
                     break;
                 }
                 const mergedBatchData = baseResult.data;
-                const batchSheetKeys = getSortedSheetKeys_ACU(mergedBatchData);
-                const batchIsolationKey = getCurrentIsolationKey_ACU();
-                loadBatchBaseData_ACU(chatHistory, basePlan.firstMessageIndexOfBatch, batchIsolationKey, batchSheetKeys, mergedBatchData);
                 _set_currentJsonTableData_ACU(mergedBatchData);
                 const baseSnapshot = JSON.parse(JSON.stringify(mergedBatchData));
+                const bucketSheetKeys = [...new Set(bucket.plannedJobs.flatMap(job => job.group.sheetKeys || []))].sort();
+                const baseRevision = captureTableRuntimeRevisionForWriteSet_ACU(buildWriteSetForSheetKeys_ACU(bucketSheetKeys, baseSnapshot));
                 const jobs = [];
                 for (const plannedJob of bucket.plannedJobs) {
                     const isAutoUpdateMode = mode && mode.startsWith('auto');
@@ -31955,6 +33150,7 @@ $CONTENT
                         updateMode: plannedJob.updateMode,
                         requestOptions: effectiveRequestOptions,
                         baseSnapshot,
+                        baseRevision,
                         isImportMode: options.isImportMode === true,
                     });
                 }
@@ -31992,6 +33188,7 @@ $CONTENT
                     saveTargetIndex: bucket.saveTargetIndex,
                     updateMode: bucket.updateMode,
                     isImportMode: options.isImportMode === true,
+                    baseRevision,
                 });
                 if (applyResult.success) {
                     emitBucketProgress(bucketIndex, { phase: 'complete' });
@@ -32053,6 +33250,8 @@ $CONTENT
             let lastSqlError = null;
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
                 try {
+                    const rawBaseSnapshot = getRuntimeTableDataSnapshot_ACU(progressContext?.batchBaseSnapshot || null) || {};
+                    const baseRevision = captureTableRuntimeRevisionForWriteSet_ACU(buildWriteSetForSheetKeys_ACU(targetSheetKeys, rawBaseSnapshot));
                     const collectResult = await collectGroupFillResponse_ACU({
                         groupKey: `legacy_execute_${saveTargetIndex}`,
                         groupId: 0,
@@ -32062,7 +33261,8 @@ $CONTENT
                         saveTargetIndex,
                         updateMode,
                         requestOptions,
-                        baseSnapshot: JSON.parse(JSON.stringify(progressContext?.batchBaseSnapshot || currentJsonTableData_ACU || {})),
+                        baseSnapshot: rawBaseSnapshot,
+                        baseRevision,
                         isImportMode,
                     }, { lastSqlError }, abortController, { onProgress: emitProgress, maxRetriesOverride: 1 });
                     if (collectResult.aborted) {
@@ -32073,16 +33273,140 @@ $CONTENT
                     }
                     emitProgress({ phase: 'parsing' });
                     const aiResponse = collectResult.aiResponse;
-                    const applyScopeKey = buildTableUpdateApplyScopeKey_ACU({
-                        chatKey: currentChatFileIdentifier_ACU,
-                        isolationKey: getCurrentIsolationKey_ACU(),
-                        targetMessageIndex: saveTargetIndex,
-                    });
-                    const updateOutcome = await runTableUpdateApplyWithScopeLock_ACU(applyScopeKey, async () => {
-                        if (progressContext?.batchBaseSnapshot) {
-                            _set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(progressContext.batchBaseSnapshot)));
+                    const isSqlTableEdit = isSqliteMode() && typeof collectResult.tableEditText === 'string' && isSqlContent(collectResult.tableEditText);
+                    if (isSqlTableEdit) {
+                        const operations = buildSqlBatchOperationsFromText_ACU(collectResult.tableEditText || '');
+                        const writeSet = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0
+                            ? targetSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }))
+                            : [{ kind: 'all' }];
+                        const commitResult = await runTableUpdateCommit_ACU({
+                            source: 'group_fill',
+                            reason: 'executeCardUpdateCore',
+                            isolationKey: getCurrentIsolationKey_ACU(),
+                            writeSet,
+                            baseRevision,
+                            initialData: rawBaseSnapshot,
+                            targetMessageIndex: saveTargetIndex,
+                            targetSheetKeys: null,
+                            updateGroupKeys: null,
+                            trackingSheetKeys: null,
+                            trackAsUpdate: true,
+                            skipChatSave: isImportMode,
+                        }, async () => {
+                            const provider = await ensureStorageProviderReady_ACU();
+                            let parseResult;
+                            try {
+                                parseResult = provider.applyEdits(collectResult.tableEditText || '', updateMode);
+                            }
+                            catch (error) {
+                                return { success: false, error: error?.message || String(error) };
+                            }
+                            const parseSuccess = !!parseResult?.success;
+                            const parsedKeys = Array.isArray(parseResult?.modifiedKeys) ? parseResult.modifiedKeys : [];
+                            if (!parseSuccess) {
+                                return { success: false, error: parseResult?.error || '解析或应用AI更新时出错' };
+                            }
+                            const runtimeData = (provider.getCurrentData() || currentJsonTableData_ACU || rawBaseSnapshot);
+                            applySpecialIndexSequenceToSummaryTables_ACU(runtimeData);
+                            if (isImportMode) {
+                                emitProgress({ phase: 'chunk_done' });
+                                logDebug_ACU('Import mode: skipping save to chat history for this chunk.');
+                                return {
+                                    success: true,
+                                    value: { success: true, modifiedKeys: parsedKeys },
+                                    tableData: runtimeData,
+                                    mutationResult: { changes: parseResult.appliedEdits || 0, errors: [] },
+                                    persist: { revisionWriteSet: parsedKeys.map(sheetKey => ({ kind: 'sheet', sheetKey })) },
+                                };
+                            }
+                            emitProgress({ phase: 'saving' });
+                            let keysToPersist = parsedKeys;
+                            if (targetSheetKeys && Array.isArray(targetSheetKeys)) {
+                                keysToPersist = keysToPersist.filter((k) => targetSheetKeys.includes(k));
+                            }
+                            const isFirstTimeInit = await checkIfFirstTimeInit_ACU();
+                            const hasTargetSheetTracking = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0;
+                            const allSheetKeys = getSortedSheetKeys_ACU(runtimeData);
+                            const targetTrackingKeys = hasTargetSheetTracking
+                                ? targetSheetKeys.filter((sheetKey) => Boolean(runtimeData?.[sheetKey]))
+                                : [];
+                            let keysToActuallySave = keysToPersist;
+                            if (isFirstTimeInit) {
+                                keysToActuallySave = allSheetKeys;
+                                const fullTemplate = parseTableTemplateJson_ACU({ stripSeedRows: false });
+                                if (fullTemplate) {
+                                    allSheetKeys.forEach(sheetKey => {
+                                        if (!keysToPersist.includes(sheetKey) && fullTemplate[sheetKey]) {
+                                            runtimeData[sheetKey] = JSON.parse(JSON.stringify(fullTemplate[sheetKey]));
+                                            logDebug_ACU(`[Init] Table ${sheetKey} not modified by AI, using template data (may include seed rows).`);
+                                        }
+                                    });
+                                }
+                                logDebug_ACU('[Init] First time initialization detected. Saving complete template structure with all tables.');
+                            }
+                            const keysToTrackAsUpdated = hasTargetSheetTracking
+                                ? keysToPersist.filter((sheetKey) => targetTrackingKeys.includes(sheetKey))
+                                : keysToPersist.filter((sheetKey) => keysToActuallySave.includes(sheetKey));
+                            const fillAttemptKeys = hasTargetSheetTracking
+                                ? targetTrackingKeys
+                                : keysToPersist;
+                            const updateGroupKeysToUse = Array.isArray(fillAttemptKeys)
+                                ? fillAttemptKeys.filter(sheetKey => {
+                                    const table = runtimeData?.[sheetKey];
+                                    if (!table || !isSummaryOrOutlineTable_ACU(table.name))
+                                        return true;
+                                    return keysToTrackAsUpdated.includes(sheetKey);
+                                })
+                                : fillAttemptKeys;
+                            const revisionWriteSet = parsedKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
+                            return {
+                                success: true,
+                                value: { success: true, modifiedKeys: parsedKeys },
+                                tableData: runtimeData,
+                                mutationResult: { changes: parseResult.appliedEdits || 0, errors: [] },
+                                persist: {
+                                    targetSheetKeys: keysToActuallySave,
+                                    updateGroupKeys: updateGroupKeysToUse,
+                                    trackingSheetKeys: keysToTrackAsUpdated,
+                                    trackAsUpdate: true,
+                                    operations,
+                                    revisionWriteSet,
+                                },
+                            };
+                        });
+                        if (!commitResult.success || !commitResult.value) {
+                            throw new Error(commitResult.error || '解析或应用AI更新时出错');
                         }
-                        const parseResult = parseAndApplyTableEdits_ACU(aiResponse, updateMode, isImportMode);
+                        modifiedKeys = commitResult.value.modifiedKeys;
+                        if (!isImportMode && commitResult.tableData) {
+                            await updateReadableLorebookEntry_ACU(true, false, null, commitResult.tableData);
+                        }
+                        success = true;
+                        break;
+                    }
+                    const writeSet = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0
+                        ? targetSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }))
+                        : [{ kind: 'all' }];
+                    const updateOutcome = await runTableUpdateCommit_ACU({
+                        source: 'group_fill',
+                        reason: 'executeCardUpdateCore:snapshot',
+                        isolationKey: getCurrentIsolationKey_ACU(),
+                        writeSet,
+                        baseRevision,
+                        initialData: rawBaseSnapshot,
+                        targetMessageIndex: saveTargetIndex,
+                        targetSheetKeys: null,
+                        updateGroupKeys: null,
+                        trackingSheetKeys: null,
+                        trackAsUpdate: true,
+                        skipChatSave: isImportMode,
+                    }, async ({ workingData }) => {
+                        let workingTableData = (workingData || {});
+                        const operations = [];
+                        const parseResult = parseAndApplyTableEditsToData_ACU(aiResponse, workingTableData, updateMode, isImportMode);
+                        if (typeof collectResult.tableEditText === 'string' && collectResult.tableEditText.trim()) {
+                            operations.push({ kind: 'table_edit_dsl', text: collectResult.tableEditText, updateMode });
+                        }
                         let parseSuccess = false;
                         let parsedKeys = [];
                         if (typeof parseResult === 'object' && parseResult !== null) {
@@ -32094,73 +33418,88 @@ $CONTENT
                             parsedKeys = targetSheetKeys || [];
                         }
                         if (!parseSuccess) {
-                            throw new Error('解析或应用AI更新时出错');
+                            return { success: false, error: parseResult?.error || '解析或应用AI更新时出错' };
                         }
-                        // [spv3.6.5] 填表完成后统一强制应用编码索引列特殊锁定（AM序列）
-                        // 无论 SQL 模式还是原生模式，都在这里兜底确保编码索引列被强制修正
-                        applySpecialIndexSequenceToSummaryTables_ACU(currentJsonTableData_ACU);
-                        if (!isImportMode) {
-                            emitProgress({ phase: 'saving' });
-                            let keysToPersist = parsedKeys;
-                            if (targetSheetKeys && Array.isArray(targetSheetKeys)) {
-                                keysToPersist = keysToPersist.filter((k) => targetSheetKeys.includes(k));
-                            }
-                            const isFirstTimeInit = await checkIfFirstTimeInit_ACU();
-                            const hasTargetSheetTracking = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0;
-                            const allSheetKeys = getSortedSheetKeys_ACU(currentJsonTableData_ACU);
-                            const targetTrackingKeys = hasTargetSheetTracking
-                                ? targetSheetKeys.filter((sheetKey) => Boolean(currentJsonTableData_ACU?.[sheetKey]))
-                                : [];
-                            if (keysToPersist.length > 0 || isFirstTimeInit || hasTargetSheetTracking) {
-                                let keysToActuallySave = keysToPersist;
-                                if (isFirstTimeInit) {
-                                    keysToActuallySave = allSheetKeys;
-                                    const fullTemplate = parseTableTemplateJson_ACU({ stripSeedRows: false });
-                                    if (fullTemplate) {
-                                        allSheetKeys.forEach(sheetKey => {
-                                            if (!keysToPersist.includes(sheetKey) && fullTemplate[sheetKey]) {
-                                                currentJsonTableData_ACU[sheetKey] = JSON.parse(JSON.stringify(fullTemplate[sheetKey]));
-                                                logDebug_ACU(`[Init] Table ${sheetKey} not modified by AI, using template data (may include seed rows).`);
-                                            }
-                                        });
-                                    }
-                                    logDebug_ACU('[Init] First time initialization detected. Saving complete template structure with all tables.');
-                                }
-                                const keysToTrackAsUpdated = isFirstTimeInit
-                                    ? [...allSheetKeys]
-                                    : (hasTargetSheetTracking
-                                        ? [...targetTrackingKeys]
-                                        : keysToPersist.filter((sheetKey) => keysToActuallySave.includes(sheetKey)));
-                                const updateGroupKeysRaw = isFirstTimeInit
-                                    ? [...allSheetKeys]
-                                    : (hasTargetSheetTracking ? [...targetTrackingKeys] : targetSheetKeys);
-                                const updateGroupKeysToUse = Array.isArray(updateGroupKeysRaw)
-                                    ? updateGroupKeysRaw.filter(sheetKey => {
-                                        const table = currentJsonTableData_ACU?.[sheetKey];
-                                        if (!table || !isSummaryOrOutlineTable_ACU(table.name))
-                                            return true;
-                                        return keysToTrackAsUpdated.includes(sheetKey);
-                                    })
-                                    : updateGroupKeysRaw;
-                                const saveResult = await saveIndependentTableToChatHistoryWithinScopeLock_ACU(saveTargetIndex, keysToActuallySave, updateGroupKeysToUse, false, keysToTrackAsUpdated);
-                                if (!saveResult.saved) {
-                                    return { success: false, modifiedKeys: parsedKeys, error: '无法将更新后的数据库保存到聊天记录。' };
-                                }
-                            }
-                            else {
-                                logDebug_ACU("No tables were modified by AI, skipping save to chat history.");
-                            }
-                            await updateReadableLorebookEntry_ACU(true);
-                        }
-                        else {
+                        applySpecialIndexSequenceToSummaryTables_ACU(workingTableData);
+                        const revisionWriteSet = parsedKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
+                        if (isImportMode) {
                             emitProgress({ phase: 'chunk_done' });
                             logDebug_ACU("Import mode: skipping save to chat history for this chunk.");
+                            return {
+                                success: true,
+                                value: { success: true, modifiedKeys: parsedKeys },
+                                tableData: workingTableData,
+                                persist: { revisionWriteSet },
+                            };
                         }
-                        return { success: true, modifiedKeys: parsedKeys };
+                        emitProgress({ phase: 'saving' });
+                        let keysToPersist = parsedKeys;
+                        if (targetSheetKeys && Array.isArray(targetSheetKeys)) {
+                            keysToPersist = keysToPersist.filter((k) => targetSheetKeys.includes(k));
+                        }
+                        const isFirstTimeInit = await checkIfFirstTimeInit_ACU();
+                        const hasTargetSheetTracking = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0;
+                        const allSheetKeys = getSortedSheetKeys_ACU(workingTableData);
+                        const targetTrackingKeys = hasTargetSheetTracking
+                            ? targetSheetKeys.filter((sheetKey) => Boolean(workingTableData?.[sheetKey]))
+                            : [];
+                        let keysToActuallySave = keysToPersist;
+                        if (isFirstTimeInit) {
+                            keysToActuallySave = allSheetKeys;
+                            const fullTemplate = parseTableTemplateJson_ACU({ stripSeedRows: false });
+                            if (fullTemplate) {
+                                allSheetKeys.forEach(sheetKey => {
+                                    if (!keysToPersist.includes(sheetKey) && fullTemplate[sheetKey]) {
+                                        workingTableData[sheetKey] = JSON.parse(JSON.stringify(fullTemplate[sheetKey]));
+                                        logDebug_ACU(`[Init] Table ${sheetKey} not modified by AI, using template data (may include seed rows).`);
+                                    }
+                                });
+                            }
+                            logDebug_ACU('[Init] First time initialization detected. Saving complete template structure with all tables.');
+                        }
+                        if (keysToPersist.length === 0 && !isFirstTimeInit && !hasTargetSheetTracking) {
+                            logDebug_ACU("No tables were modified by AI and no target sheets are known; committing runtime view without chat persistence.");
+                            return {
+                                success: true,
+                                value: { success: true, modifiedKeys: parsedKeys },
+                                tableData: workingTableData,
+                                persist: { targetSheetKeys: [], updateGroupKeys: [], trackingSheetKeys: [], trackAsUpdate: false, operations, revisionWriteSet },
+                            };
+                        }
+                        const keysToTrackAsUpdated = hasTargetSheetTracking
+                            ? keysToPersist.filter((sheetKey) => targetTrackingKeys.includes(sheetKey))
+                            : keysToPersist.filter((sheetKey) => keysToActuallySave.includes(sheetKey));
+                        const fillAttemptKeys = hasTargetSheetTracking
+                            ? targetTrackingKeys
+                            : keysToPersist;
+                        const updateGroupKeysToUse = Array.isArray(fillAttemptKeys)
+                            ? fillAttemptKeys.filter(sheetKey => {
+                                const table = workingTableData?.[sheetKey];
+                                if (!table || !isSummaryOrOutlineTable_ACU(table.name))
+                                    return true;
+                                return keysToTrackAsUpdated.includes(sheetKey);
+                            })
+                            : fillAttemptKeys;
+                        return {
+                            success: true,
+                            value: { success: true, modifiedKeys: parsedKeys },
+                            tableData: workingTableData,
+                            persist: {
+                                targetSheetKeys: keysToActuallySave,
+                                updateGroupKeys: updateGroupKeysToUse,
+                                trackingSheetKeys: keysToTrackAsUpdated,
+                                trackAsUpdate: true,
+                                operations,
+                                revisionWriteSet,
+                            },
+                        };
                     });
-                    modifiedKeys = updateOutcome.modifiedKeys;
-                    if (!updateOutcome.success) {
-                        return updateOutcome;
+                    if (!updateOutcome.success || !updateOutcome.value) {
+                        return { success: false, modifiedKeys: [], error: updateOutcome.error || '无法将更新后的数据库保存到聊天记录。' };
+                    }
+                    modifiedKeys = updateOutcome.value.modifiedKeys;
+                    if (!isImportMode && updateOutcome.tableData) {
+                        await updateReadableLorebookEntry_ACU(true, false, null, updateOutcome.tableData);
                     }
                     success = true;
                     break;
@@ -32459,10 +33798,9 @@ $CONTENT
                         failedGroups.push({ key, error: chunkResult.error || '手动更新失败或被终止。' });
                     });
                 }
-                // 并发组内禁止每组单独刷新：多组同时写聊天记录时，提前刷新会制造中间态覆盖风险。
-                // 每个并发 chunk 结束后统一刷新一次，确保后续 chunk 基于已落盘的最新状态继续执行。
+                // 并发组内禁止每组单独刷新；填表保存后 currentJsonTableData_ACU 已由本轮 workingTableData 更新。
+                // 这里只同步聊天数组，避免刚保存完又通过 refreshData 触发历史回放/重建。
                 await loadAllChatMessages_ACU();
-                await refreshData();
                 if (failedGroups.length > 0) {
                     break;
                 }
@@ -32552,6 +33890,16 @@ $CONTENT
             toastr_API_ACU.clear(loadingToast);
         }
     }
+    async function refreshRuntimeDataAndNotifyAfterAutoUpdate_ACU() {
+        const data = getStorageProvider().getCurrentData() || currentJsonTableData_ACU;
+        if (data) {
+            await updateReadableLorebookEntry_ACU(true, false, null, data);
+        }
+        try {
+            topLevelWindow_ACU.AutoCardUpdaterAPI?._notifyTableUpdate?.();
+        }
+        catch (_) { }
+    }
     function handleAutoGroupedProgressEvent_ACU(event, loadingToast) {
         const message = buildAutoUpdateProgressMessage_ACU(event);
         updateAutoUpdateToastMessage_ACU(loadingToast, message);
@@ -32567,108 +33915,119 @@ $CONTENT
                 break;
         }
     }
+    let autoUpdateTriggerInFlight_ACU = false;
     async function triggerAutomaticUpdateIfNeeded_ACU() {
         logDebug_ACU('ACU Auto-Trigger: Starting independent check...');
-        // [重构] 调用 service 层前置检查
-        const preCheck = checkAutoUpdatePreConditions_ACU(settings_ACU, coreApisAreReady_ACU, isAutoUpdatingCard_ACU, currentJsonTableData_ACU, allChatMessages_ACU.length);
-        if (!preCheck.canProceed) {
-            logDebug_ACU(`ACU Auto-Trigger: ${preCheck.reason} Skipping.`);
+        if (autoUpdateTriggerInFlight_ACU) {
+            logDebug_ACU('ACU Auto-Trigger: trigger already in flight. Skipping.');
             return;
         }
-        let liveChat = getChatArray_ACU();
-        if (!liveChat || liveChat.length === 0)
-            return;
-        let totalAiMessages = liveChat.filter(m => !m.is_user).length;
-        // [重构] 调用 service 层楼层增加延迟逻辑
-        const delayResult = await handleFloorIncreaseDelay_ACU(totalAiMessages, lastTotalAiMessages_ACU, AUTO_UPDATE_FLOOR_INCREASE_DELAY_ACU, getChatArray_ACU, _set_lastTotalAiMessages_ACU);
-        if (delayResult === null)
-            return; // chat 为空
-        if (delayResult) {
-            liveChat = delayResult.liveChat;
-            totalAiMessages = delayResult.totalAiMessages;
-        }
-        // [重构] 调用 service 层构建更新计划
-        const triggerIsolationKey = getCurrentIsolationKey_ACU();
-        const plan = buildAutoUpdatePlan_ACU(liveChat, currentJsonTableData_ACU, settings_ACU, triggerIsolationKey);
-        if (plan.tablesToUpdate.length === 0)
-            return;
-        // UI：显示开始 toast
-        const totalGroups = Object.keys(plan.updateGroups).length;
-        const maxConcurrentGroups = Math.max(1, settings_ACU.maxConcurrentGroups || 1);
-        const useGroupedAutoUpdates = !isSqliteMode();
-        if (totalGroups > maxConcurrentGroups) {
-            showToastr_ACU('info', `检测到 ${plan.tablesToUpdate.length} 个表格需要更新，将分批并发处理 ${totalGroups} 组（每批最多 ${maxConcurrentGroups} 组）。`);
-        }
-        else {
-            showToastr_ACU('info', `检测到 ${plan.tablesToUpdate.length} 个表格需要更新，将并发处理 ${totalGroups} 组。`);
-        }
-        const autoGroupedAbortController = new AbortController();
-        let autoProgressToast = null;
-        if (useGroupedAutoUpdates && !settings_ACU.toastMuteEnabled) {
-            const stopButtonId = `acu-stop-auto-update-btn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            const stopButtonHtml = renderStopButton_ACU(stopButtonId, '终止');
-            const initialMessage = '自动填表正在准备，请稍候...';
-            const toastMessage = `<div><span class="acu-toast-progress-message">${initialMessage}</span>${stopButtonHtml}</div>`;
-            autoProgressToast = showToastr_ACU('info', toastMessage, {
-                timeOut: 0,
-                extendedTimeOut: 0,
-                tapToDismiss: false,
-                acuToastCategory: ACU_TOAST_CATEGORY_ACU.MANUAL_TABLE,
-                onShown: function () {
-                    if (typeof bindTableFillStopButton_ACU === 'function') {
-                        bindTableFillStopButton_ACU(stopButtonId, () => {
-                            _set_wasStoppedByUser_ACU$1(true);
-                            autoGroupedAbortController.abort();
-                            abortAllActiveRequests_ACU$1();
-                            _set_isAutoUpdatingCard_ACU(false);
-                            updateAutoUpdateToastMessage_ACU(autoProgressToast, '填表任务已终止，正在停止当前任务与后续批次...');
-                            showToastr_ACU('warning', '填表任务已由用户终止，当前任务与后续批次将立即停止。');
-                        });
-                    }
-                }
-            });
-        }
-        // 调用 service 层执行更新计划，传入纯业务操作委托（不含 UI 操作）
-        let result;
+        autoUpdateTriggerInFlight_ACU = true;
         try {
-            result = await executeAutoUpdatePlan_ACU(plan, settings_ACU, _set_isAutoUpdatingCard_ACU, {
-                processUpdates: (indices, mode, options) => processUpdates_ACU(indices, mode, options),
-                ...(useGroupedAutoUpdates
-                    ? {
-                        processGroupedUpdates: (groups, mode, options) => {
-                            const upstreamProgress = options?.onProgress;
-                            return processGroupedRuntimeChunk_ACU(groups, mode, {
-                                ...options,
-                                abortController: autoGroupedAbortController,
-                                onProgress: event => {
-                                    upstreamProgress?.(event);
-                                    handleAutoGroupedProgressEvent_ACU(event, autoProgressToast);
-                                },
+            // [重构] 调用 service 层前置检查
+            const preCheck = checkAutoUpdatePreConditions_ACU(settings_ACU, coreApisAreReady_ACU, isAutoUpdatingCard_ACU, currentJsonTableData_ACU, allChatMessages_ACU.length);
+            if (!preCheck.canProceed) {
+                logDebug_ACU(`ACU Auto-Trigger: ${preCheck.reason} Skipping.`);
+                return;
+            }
+            let liveChat = getChatArray_ACU();
+            if (!liveChat || liveChat.length === 0)
+                return;
+            let totalAiMessages = liveChat.filter(m => !m.is_user).length;
+            // [重构] 调用 service 层楼层增加延迟逻辑
+            const delayResult = await handleFloorIncreaseDelay_ACU(totalAiMessages, lastTotalAiMessages_ACU, AUTO_UPDATE_FLOOR_INCREASE_DELAY_ACU, getChatArray_ACU, _set_lastTotalAiMessages_ACU);
+            if (delayResult === null)
+                return; // chat 为空
+            if (delayResult) {
+                liveChat = delayResult.liveChat;
+                totalAiMessages = delayResult.totalAiMessages;
+            }
+            // [重构] 调用 service 层构建更新计划
+            const triggerIsolationKey = getCurrentIsolationKey_ACU();
+            const plan = buildAutoUpdatePlan_ACU(liveChat, currentJsonTableData_ACU, settings_ACU, triggerIsolationKey);
+            if (plan.tablesToUpdate.length === 0)
+                return;
+            // UI：显示开始 toast
+            const totalGroups = Object.keys(plan.updateGroups).length;
+            const maxConcurrentGroups = Math.max(1, settings_ACU.maxConcurrentGroups || 1);
+            const useGroupedAutoUpdates = !isSqliteMode();
+            if (totalGroups > maxConcurrentGroups) {
+                showToastr_ACU('info', `检测到 ${plan.tablesToUpdate.length} 个表格需要更新，将分批并发处理 ${totalGroups} 组（每批最多 ${maxConcurrentGroups} 组）。`);
+            }
+            else {
+                showToastr_ACU('info', `检测到 ${plan.tablesToUpdate.length} 个表格需要更新，将并发处理 ${totalGroups} 组。`);
+            }
+            const autoGroupedAbortController = new AbortController();
+            let autoProgressToast = null;
+            if (useGroupedAutoUpdates && !settings_ACU.toastMuteEnabled) {
+                const stopButtonId = `acu-stop-auto-update-btn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                const stopButtonHtml = renderStopButton_ACU(stopButtonId, '终止');
+                const initialMessage = '自动填表正在准备，请稍候...';
+                const toastMessage = `<div><span class="acu-toast-progress-message">${initialMessage}</span>${stopButtonHtml}</div>`;
+                autoProgressToast = showToastr_ACU('info', toastMessage, {
+                    timeOut: 0,
+                    extendedTimeOut: 0,
+                    tapToDismiss: false,
+                    acuToastCategory: ACU_TOAST_CATEGORY_ACU.MANUAL_TABLE,
+                    onShown: function () {
+                        if (typeof bindTableFillStopButton_ACU === 'function') {
+                            bindTableFillStopButton_ACU(stopButtonId, () => {
+                                _set_wasStoppedByUser_ACU$1(true);
+                                autoGroupedAbortController.abort();
+                                abortAllActiveRequests_ACU$1();
+                                _set_isAutoUpdatingCard_ACU(false);
+                                updateAutoUpdateToastMessage_ACU(autoProgressToast, '填表任务已终止，正在停止当前任务与后续批次...');
+                                showToastr_ACU('warning', '填表任务已由用户终止，当前任务与后续批次将立即停止。');
                             });
-                        },
+                        }
                     }
-                    : {}),
-                refreshData: () => refreshMergedDataAndNotifyWithUI_ACU(),
-                loadAllChatMessages: () => loadAllChatMessages_ACU(),
-                purgeOldLayerData: () => purgeOldLayerData_ACU(),
-            });
+                });
+            }
+            // 调用 service 层执行更新计划，传入纯业务操作委托（不含 UI 操作）
+            let result;
+            try {
+                result = await executeAutoUpdatePlan_ACU(plan, settings_ACU, _set_isAutoUpdatingCard_ACU, {
+                    processUpdates: (indices, mode, options) => processUpdates_ACU(indices, mode, options),
+                    ...(useGroupedAutoUpdates
+                        ? {
+                            processGroupedUpdates: (groups, mode, options) => {
+                                const upstreamProgress = options?.onProgress;
+                                return processGroupedRuntimeChunk_ACU(groups, mode, {
+                                    ...options,
+                                    abortController: autoGroupedAbortController,
+                                    onProgress: event => {
+                                        upstreamProgress?.(event);
+                                        handleAutoGroupedProgressEvent_ACU(event, autoProgressToast);
+                                    },
+                                });
+                            },
+                        }
+                        : {}),
+                    refreshData: () => refreshRuntimeDataAndNotifyAfterAutoUpdate_ACU(),
+                    loadAllChatMessages: () => loadAllChatMessages_ACU(),
+                    purgeOldLayerData: () => purgeOldLayerData_ACU(),
+                });
+            }
+            finally {
+                clearAutoUpdateToast_ACU(autoProgressToast);
+            }
+            // UI：根据返回值显示结果
+            if (result.failedGroups > 0) {
+                showToastr_ACU('warning', `并发分组更新有 ${result.failedGroups} 组失败，请查看日志。`);
+            }
+            if (result.autoMergeTriggered && result.autoMergeSuccess) {
+                showToastr_ACU('success', '自动合并纪要完成！');
+                try {
+                    topLevelWindow_ACU.AutoCardUpdaterAPI._notifyTableUpdate();
+                }
+                catch (_) { }
+            }
+            if (typeof updateCardUpdateStatusDisplay_ACU === 'function')
+                updateCardUpdateStatusDisplay_ACU();
         }
         finally {
-            clearAutoUpdateToast_ACU(autoProgressToast);
+            autoUpdateTriggerInFlight_ACU = false;
         }
-        // UI：根据返回值显示结果
-        if (result.failedGroups > 0) {
-            showToastr_ACU('warning', `并发分组更新有 ${result.failedGroups} 组失败，请查看日志。`);
-        }
-        if (result.autoMergeTriggered && result.autoMergeSuccess) {
-            showToastr_ACU('success', '自动合并纪要完成！');
-            try {
-                topLevelWindow_ACU.AutoCardUpdaterAPI._notifyTableUpdate();
-            }
-            catch (_) { }
-        }
-        if (typeof updateCardUpdateStatusDisplay_ACU === 'function')
-            updateCardUpdateStatusDisplay_ACU();
     }
     function collectManualExtraHint_ACU() {
         _set_manualExtraHint_ACU$1('');
@@ -34628,6 +35987,893 @@ $CONTENT
         const div = targetDoc.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    }
+
+    /**
+     * presentation/pages/popup-helpers.ts — 主弹窗辅助函数
+     * 从 main-popup.ts 拆出（原 openAutoCardPopup_ACU 内嵌函数）
+     */
+    // --- [剧情推进] 辅助函数 ---
+    /**
+     * 加载剧情推进设置到UI
+     */
+    function loadPlotSettingsToUI_ACU(plotSettingsOverride = null) {
+        if (!$popupInstance_ACU)
+            return;
+        _assignUIPlaceholders_ACU({
+            $plotPromptSegmentsContainer_ACU: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-prompt-segments-container`),
+            $plotTaskListContainer_ACU: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-task-list`),
+        });
+        const plotSettings = setActivePlotEditorSettings_ACU(plotSettingsOverride || settings_ACU.plotSettings);
+        if (!plotSettings)
+            return;
+        // 功能开关是全局状态，不属于剧情预设/聊天快照。UI 回填必须以 settings_ACU.plotSettings 为权威，
+        // 否则切换预设或新开对话时会被局部 snapshot.enabled 覆盖成“每次自动打开”。
+        const globalPlotEnabled = settings_ACU.plotSettings?.enabled === true;
+        plotSettings.enabled = globalPlotEnabled;
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-enabled`).prop('checked', globalPlotEnabled);
+        renderPlotTaskList_ACU(plotSettings);
+        loadCurrentPlotTaskToUI_ACU(plotSettings);
+        // 最终注入指令
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-final-directive`).val(getPlotPromptContentByIdFromSettings_ACU(plotSettings, 'finalSystemDirective'));
+        // 匹配替换速率
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-main`).val(plotSettings.rateMain);
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-personal`).val(plotSettings.ratePersonal);
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-erotic`).val(plotSettings.rateErotic);
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-cuckold`).val(plotSettings.rateCuckold);
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-recall-count`).val(plotSettings.recallCount ?? 20);
+        // 循环设置
+        ensureLoopPromptsArray_ACU(plotSettings);
+        const loopSettings = plotSettings.loopSettings;
+        // 循环提示词现在使用数组，通过 renderLoopPromptsList_ACU 渲染
+        renderLoopPromptsList_ACU(plotSettings);
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-tags`).val(loopSettings.loopTags || '');
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-delay`).val(loopSettings.loopDelay);
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-total-duration`).val(loopSettings.loopTotalDuration);
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-max-retries`).val(loopSettings.maxRetries);
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-turn-count`).val(plotSettings.contextTurnCount);
+        renderExcludeRuleRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-extract-rules`, normalizeExtractRules_ACU(plotSettings.contextExtractRules, plotSettings.contextExtractTags || ''), {
+            startPlaceholder: '开始词（例如：<think）',
+            endPlaceholder: '结束词（例如：</think>）',
+            fallbackRules: getDefaultPlotContextExtractRules_ACU(),
+        });
+        renderExcludeRuleRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-exclude-rules`, normalizeExcludeRules_ACU(plotSettings.contextExcludeRules, plotSettings.contextExcludeTags || ''), {
+            startPlaceholder: '开始词（例如：<thinking）',
+            endPlaceholder: '结束词（例如：</thinking>）',
+            fallbackRules: getDefaultPlotContextExcludeRules_ACU(),
+        });
+        // 循环状态
+        updatePlotLoopStatusUI_ACU();
+        // 预设选择器
+        loadPlotPresetSelect_ACU();
+    }
+    /**
+     * 加载正文替换预设选择器
+     */
+    function loadOptimizationPresetSelect_ACU() {
+        if (!$popupInstance_ACU)
+            return;
+        const $select = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-preset-select`);
+        const $deleteBtn = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-delete-preset`);
+        if (!$select.length)
+            return;
+        const presets = settings_ACU.contentOptimizationSettings?.promptPresets || [];
+        const currentValue = $select.val();
+        $select.find('option:not(:first)').remove();
+        presets.forEach((preset) => {
+            if (preset && preset.name) {
+                $select.append(renderOption_ACU(preset.name, preset.name));
+            }
+        });
+        // 恢复之前选中的值（如果还存在）
+        if (currentValue && presets.find((p) => p.name === currentValue)) {
+            $select.val(currentValue);
+            if ($deleteBtn.length)
+                $deleteBtn.show();
+        }
+        else {
+            $select.val('');
+            if ($deleteBtn.length)
+                $deleteBtn.hide();
+        }
+    }
+    /**
+     * 另存为新的正文替换预设
+     */
+    function saveOptimizationPresetAsNew_ACU() {
+        const presetName = prompt('请输入新预设的名称：');
+        if (!presetName || !presetName.trim()) {
+            showToastr_ACU('warning', '预设名称不能为空。');
+            return;
+        }
+        const name = presetName.trim();
+        const presets = settings_ACU.contentOptimizationSettings.promptPresets || [];
+        const existingIndex = presets.findIndex((p) => p.name === name);
+        if (existingIndex !== -1) {
+            if (!confirm(`预设 "${name}" 已存在。是否覆盖？`)) {
+                return;
+            }
+            presets[existingIndex] = {
+                name: name,
+                promptGroup: getOptimizationPromptGroupFromUI_ACU()
+            };
+            showToastr_ACU('success', `预设 "${name}" 已被覆盖。`);
+        }
+        else {
+            presets.push({
+                name: name,
+                promptGroup: getOptimizationPromptGroupFromUI_ACU()
+            });
+            showToastr_ACU('success', `预设 "${name}" 已成功创建。`);
+        }
+        settings_ACU.contentOptimizationSettings.promptPresets = presets;
+        saveSettingsAndNotify_ACU();
+        loadOptimizationPresetSelect_ACU();
+        // 选中新创建的预设
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-preset-select`).val(name);
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-delete-preset`).show();
+    }
+    /**
+     * 加载正文替换设置到UI
+     */
+    function loadOptimizationSettingsToUI_ACU() {
+        if (!$popupInstance_ACU)
+            return;
+        const config = settings_ACU.contentOptimizationSettings || {};
+        // [隐藏功能] 只有当剧情推进最大重试次数为49时才显示正文替换子标签
+        const plotMaxRetries = settings_ACU.plotSettings?.loopSettings?.maxRetries ?? 3;
+        const $optimizationSubtab = $popupInstance_ACU.find('.acu-subtab-button[data-subtab="advanced-optimization"]');
+        if ($optimizationSubtab.length) {
+            if (plotMaxRetries === 49) {
+                $optimizationSubtab.show();
+                // 同时显示对应的子内容区
+                $popupInstance_ACU.find('#acu-subtab-advanced-optimization').show();
+            }
+            else {
+                $optimizationSubtab.hide();
+                $popupInstance_ACU.find('#acu-subtab-advanced-optimization').hide();
+                // 如果当前激活的是optimization子标签，切到log子标签
+                if ($optimizationSubtab.hasClass('active')) {
+                    $optimizationSubtab.removeClass('active');
+                    const $logSubtab = $popupInstance_ACU.find('.acu-subtab-button[data-subtab="advanced-log"]');
+                    if ($logSubtab.length) {
+                        $logSubtab.addClass('active');
+                        $popupInstance_ACU.find('#acu-subtab-advanced-log').addClass('active');
+                    }
+                }
+            }
+        }
+        // 功能开关
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-enabled`).prop('checked', !!config.enabled);
+        // API预设
+        const $apiPreset = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-api-preset`);
+        if ($apiPreset.length) {
+            $apiPreset.val(config.apiPreset || '');
+        }
+        // 基础设置
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-min-length`).val(config.minLength || 100);
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-max-items`).val(config.maxOptimizations || 10);
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-loop-count`).val(config.loopCount || 1);
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-retry-count`).val(config.retryCount || 3);
+        // 优化模式
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-seamless-mode`).prop('checked', config.seamlessMode !== false);
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-auto-apply`).prop('checked', config.autoApply !== false);
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-show-diff`).prop('checked', config.showDiff !== false);
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-parallel-mode`).prop('checked', config.parallelMode === true);
+        // 标签筛选设置
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-extract-tags`).val(config.extractTags || '');
+        // 加载标签提取规则
+        renderExcludeRuleRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-optimization-extract-rules`, config.extractRules || [], {
+            startPlaceholder: '开始词（例如：<think）',
+            endPlaceholder: '结束词（例如：</think）',
+        });
+        // 加载标签排除规则
+        renderExcludeRuleRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-optimization-exclude-rules`, config.excludeRules || [], {
+            startPlaceholder: '开始词（例如：<think）',
+            endPlaceholder: '结束词（例如：</think）',
+        });
+        // 加载预设选择器
+        loadOptimizationPresetSelect_ACU();
+        // 提示词组
+        const promptGroup = config.promptGroup && config.promptGroup.length > 0
+            ? config.promptGroup
+            : DEFAULT_CONTENT_OPTIMIZATION_PROMPT_GROUP_ACU;
+        renderOptimizationPromptSegments_ACU(promptGroup);
+    }
+    /**
+     * 渲染正文优化提示词段落
+     */
+    function renderOptimizationPromptSegments_ACU(segments) {
+        if (!$popupInstance_ACU)
+            return;
+        const $container = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-prompt-segments-container`);
+        if (!$container.length)
+            return;
+        $container.empty();
+        if (!Array.isArray(segments))
+            return;
+        segments.forEach((segment, index) => {
+            const isMain = segment.isMain || segment.mainSlot === 'A';
+            const isMain2 = segment.isMain2 || segment.mainSlot === 'B';
+            const deletable = segment.deletable !== false;
+            const segmentHtml = `
+          <div class="optimization-prompt-segment" data-index="${index}" style="
+            margin-bottom: 15px;
+            padding: 15px;
+            background: var(--background_default);
+            border-radius: 8px;
+            border: 1px solid var(--border_color_light);
+            ${isMain ? 'border-left: 3px solid var(--blue);' : ''}
+            ${isMain2 ? 'border-left: 3px solid var(--purple);' : ''}
+          ">
+            <div style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center;">
+              <select class="optimization-prompt-segment-role text_pole" data-index="${index}" style="width: 120px;">
+                <option value="SYSTEM" ${segment.role === 'SYSTEM' ? 'selected' : ''}>SYSTEM</option>
+                <option value="USER" ${segment.role === 'USER' ? 'selected' : ''}>USER</option>
+                <option value="assistant" ${segment.role === 'assistant' ? 'selected' : ''}>assistant</option>
+              </select>
+              ${deletable ? `
+                <button type="button" class="optimization-prompt-segment-delete-btn button" data-index="${index}" style="margin-left: auto; padding: 4px 8px; font-size: 0.85em;">
+                  <i class="fa-solid fa-trash"></i>
+                </button>
+              ` : ''}
+            </div>
+            <textarea class="optimization-prompt-segment-content text_pole" data-index="${index}" rows="6" placeholder="输入提示词内容..." style="resize: vertical; width: 100%;">${escapeHtml_ACU$1(segment.content || '')}</textarea>
+          </div>
+        `;
+            $container.append(segmentHtml);
+        });
+        // 绑定输入事件
+        $container.find('.optimization-prompt-segment-role').on('change', function () {
+            const idx = parseInt(jQuery_API_ACU(this).data('index'), 10);
+            const segments = getOptimizationPromptGroupFromUI_ACU();
+            if (segments[idx]) {
+                segments[idx].role = jQuery_API_ACU(this).val();
+                settings_ACU.contentOptimizationSettings.promptGroup = segments;
+                saveSettingsAndNotify_ACU();
+            }
+        });
+        $container.find('.optimization-prompt-segment-content').on('input change', function () {
+            const idx = parseInt(jQuery_API_ACU(this).data('index'), 10);
+            const segments = getOptimizationPromptGroupFromUI_ACU();
+            if (segments[idx]) {
+                segments[idx].content = jQuery_API_ACU(this).val();
+                settings_ACU.contentOptimizationSettings.promptGroup = segments;
+                saveSettingsAndNotify_ACU();
+            }
+        });
+    }
+    /**
+     * 从UI获取正文优化提示词组
+     */
+    function getOptimizationPromptGroupFromUI_ACU() {
+        if (!$popupInstance_ACU)
+            return [];
+        const segments = [];
+        const $segments = $popupInstance_ACU.find('.optimization-prompt-segment');
+        $segments.each(function () {
+            const $seg = jQuery_API_ACU(this);
+            const index = parseInt($seg.data('index'), 10);
+            const role = $seg.find('.optimization-prompt-segment-role').val();
+            const content = $seg.find('.optimization-prompt-segment-content').val();
+            segments.push({
+                role: role || 'USER',
+                content: content || '',
+                deletable: true
+            });
+        });
+        return segments;
+    }
+    /**
+     * 更新剧情推进循环状态UI
+     */
+    function updatePlotLoopStatusUI_ACU() {
+        if (!$popupInstance_ACU)
+            return;
+        const $statusText = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-status-text`);
+        const $timerDisplay = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-timer-display`);
+        const $startBtn = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-start-loop-btn`);
+        const $stopBtn = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-stop-loop-btn`);
+        if (loopState_ACU.isLooping) {
+            $statusText.text('运行中').css('color', 'var(--green)');
+            $startBtn.hide();
+            $stopBtn.show();
+            $timerDisplay.show();
+        }
+        else {
+            $statusText.text('未运行').css('color', 'var(--red)');
+            $stopBtn.hide();
+            $startBtn.show();
+            $timerDisplay.hide().text('');
+        }
+    }
+    /**
+     * 加载剧情预设选择器
+     */
+    function getPlotPresetDisplayName_ACU(presetName) {
+        const normalizedPresetName = normalizePlotPresetSelectionValue_ACU(presetName);
+        return normalizedPresetName || '默认预设';
+    }
+    function formatPlotScopeUpdatedAt_ACU(updatedAt) {
+        const ts = Number(updatedAt) || 0;
+        if (!ts)
+            return '';
+        try {
+            return new Date(ts).toLocaleString('zh-CN', { hour12: false });
+        }
+        catch (error) {
+            return '';
+        }
+    }
+    function populatePlotPresetSelectOptions_ACU($select, presets, { extraPresetName = '' } = {}) {
+        if (!$select || !$select.length)
+            return;
+        const normalizedExtraPresetName = normalizePlotPresetSelectionValue_ACU(extraPresetName);
+        const normalizedPresetNames = new Set();
+        $select.empty().append(`<option value="${DEFAULT_PRESET_OPTION_VALUE_ACU}">默认预设</option>`);
+        presets.forEach((preset) => {
+            const presetName = normalizePlotPresetSelectionValue_ACU(preset?.name);
+            if (!presetName || normalizedPresetNames.has(presetName))
+                return;
+            normalizedPresetNames.add(presetName);
+            $select.append(renderOption_ACU(presetName, presetName));
+        });
+        if (normalizedExtraPresetName && !normalizedPresetNames.has(normalizedExtraPresetName)) {
+            $select.append(renderOption_ACU(normalizedExtraPresetName, `${normalizedExtraPresetName}（仅当前聊天快照）`));
+        }
+    }
+    function loadPlotPresetSelect_ACU() {
+        if (!$popupInstance_ACU || !settings_ACU?.plotSettings)
+            return;
+        const presets = settings_ACU.plotSettings.promptPresets || [];
+        const globalPresetName = normalizePlotPresetSelectionValue_ACU(settings_ACU.plotSettings.lastUsedPresetName || '');
+        const chatScopeState = getCurrentChatPlotScopeState_ACU();
+        const currentBinding = getPlotPresetBindingForChat_ACU();
+        const effectiveChatPresetName = resolveActivePlotPresetName_ACU({ fallbackToGlobal: true });
+        const explicitChatPresetName = normalizePlotPresetSelectionValue_ACU(currentBinding?.presetName || '');
+        const chatSelectedPresetName = normalizePlotPresetSelectionValue_ACU(explicitChatPresetName || chatScopeState?.presetName || '');
+        const $globalSelect = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-global-preset-select`);
+        const $chatSelect = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-chat-preset-select`);
+        const $globalDeleteBtn = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-global-delete-preset`);
+        const $globalStatus = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-global-scope-status`);
+        const $chatStatus = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-chat-scope-status`);
+        const $chatOriginStatus = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-chat-origin-status`);
+        populatePlotPresetSelectOptions_ACU($globalSelect, presets);
+        populatePlotPresetSelectOptions_ACU($chatSelect, presets, { extraPresetName: chatSelectedPresetName });
+        if ($chatSelect.length) {
+            $chatSelect.find(`option[value="${DEFAULT_PRESET_OPTION_VALUE_ACU}"]`).text('跟随全局');
+        }
+        const hasGlobalPreset = !!globalPresetName && presets.some((p) => normalizePlotPresetSelectionValue_ACU(p?.name) === globalPresetName);
+        const hasChatPreset = !!chatSelectedPresetName && $chatSelect.find(`option[value="${chatSelectedPresetName.replace(/"/g, '\\"')}"]`).length > 0;
+        const hasValidExplicitChatPreset = !!explicitChatPresetName && !!findPlotPresetByName_ACU(explicitChatPresetName);
+        if ($globalSelect.length) {
+            $globalSelect.val(hasGlobalPreset ? globalPresetName : DEFAULT_PRESET_OPTION_VALUE_ACU);
+        }
+        if ($globalDeleteBtn.length) {
+            $globalDeleteBtn.toggle(hasGlobalPreset);
+        }
+        if ($chatSelect.length) {
+            $chatSelect.val(hasChatPreset ? chatSelectedPresetName : DEFAULT_PRESET_OPTION_VALUE_ACU);
+        }
+        if ($globalStatus.length) {
+            $globalStatus.text(`当前全局预设：${getPlotPresetDisplayName_ACU(globalPresetName)}；新聊天会默认继承这里的剧情推进配置。`);
+        }
+        if ($chatStatus.length) {
+            if (chatScopeState?.snapshot) {
+                $chatStatus.text(`当前聊天：历史聊天快照；当前实际预设为 ${getPlotPresetDisplayName_ACU(effectiveChatPresetName)}。`);
+            }
+            else if (hasValidExplicitChatPreset) {
+                $chatStatus.text(`当前聊天：独立预设；当前实际预设为 ${getPlotPresetDisplayName_ACU(explicitChatPresetName)}。`);
+            }
+            else if (chatSelectedPresetName) {
+                $chatStatus.text(`当前聊天：原绑定预设不存在；当前已回退为 ${getPlotPresetDisplayName_ACU(effectiveChatPresetName)}。`);
+            }
+            else {
+                $chatStatus.text(`当前聊天：跟随全局；当前实际预设为 ${getPlotPresetDisplayName_ACU(effectiveChatPresetName)}。`);
+            }
+        }
+        if ($chatOriginStatus.length) {
+            if (chatScopeState?.snapshot) {
+                $chatOriginStatus.text('当前聊天仍在使用旧版聊天快照；重新切换一次当前聊天预设后，将迁移为新的按预设切换模式。');
+            }
+            else if (hasValidExplicitChatPreset) {
+                $chatOriginStatus.text('当前聊天已单独指定剧情推进预设；如需修改预设内容，请在左侧全局预设区操作。');
+            }
+            else if (chatSelectedPresetName) {
+                $chatOriginStatus.text('当前聊天原绑定的剧情推进预设已不存在；当前运行已回退到全局预设，请重新选择一次当前聊天预设。');
+            }
+            else {
+                $chatOriginStatus.text('当前聊天当前未单独指定剧情推进预设，实际会直接跟随全局。');
+            }
+        }
+    }
+    /**
+     * 加载预设到UI
+     */
+    function loadPlotPresetToUI_ACU(preset) {
+        if (!$popupInstance_ACU || !preset)
+            return;
+        const presetName = preset.name || '默认预设';
+        const result = applyGlobalPlotPresetSelectionForEditor_ACU(preset.name || '', {
+            source: 'ui_global_load',
+            save: true,
+        });
+        if (!result)
+            return;
+        showToastr_ACU('success', `已加载全局预设 "${presetName}"。`);
+    }
+    /**
+     * 从UI获取当前剧情设置
+     */
+    function getCurrentPlotSettingsFromUI_ACU() {
+        if (!$popupInstance_ACU)
+            return {};
+        flushCurrentPlotTaskEditorState_ACU({ renderTaskList: true, persist: false });
+        const activeSettings = getActivePlotEditorSettings_ACU();
+        const currentSettings = JSON.parse(JSON.stringify(activeSettings || settings_ACU.plotSettings || {}));
+        ensurePlotTasksCompat_ACU(currentSettings, { syncLegacy: true });
+        delete currentSettings.promptPresets;
+        delete currentSettings.lastUsedPresetName;
+        delete currentSettings.enabled;
+        const promptGroup = getPlotPromptGroupFromSource_ACU(currentSettings);
+        const legacyPromptTexts = getLegacyPromptTextsFromPromptGroup_ACU(promptGroup);
+        currentSettings.promptGroup = promptGroup;
+        currentSettings.finalSystemDirective = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-final-directive`).val() || '';
+        currentSettings.mainPrompt = legacyPromptTexts.mainPrompt || '';
+        currentSettings.systemPrompt = legacyPromptTexts.systemPrompt || '';
+        currentSettings.rateMain = parseFloat($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-main`).val()) || 1.0;
+        currentSettings.ratePersonal = parseFloat($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-personal`).val()) || 1.0;
+        currentSettings.rateErotic = parseFloat($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-erotic`).val()) || 0;
+        currentSettings.rateCuckold = parseFloat($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-cuckold`).val()) || 1.0;
+        currentSettings.recallCount = parseInt($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-recall-count`).val(), 10) || 20;
+        currentSettings.contextExtractRules = readExcludeRulesFromRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-extract-rules`);
+        currentSettings.contextExcludeRules = readExcludeRulesFromRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-exclude-rules`);
+        currentSettings.contextTurnCount = parseInt($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-turn-count`).val(), 10) || 3;
+        currentSettings.loopSettings = {
+            ...(currentSettings.loopSettings || {}),
+            quickReplyContent: (() => {
+                const prompts = [];
+                $popupInstance_ACU.find('.loop-prompt-textarea').each(function () {
+                    const content = String(jQuery_API_ACU(this).val() || '').trim();
+                    if (content)
+                        prompts.push(content);
+                });
+                return prompts;
+            })(),
+            currentPromptIndex: 0,
+            loopTags: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-tags`).val() || '',
+            loopDelay: parseInt($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-delay`).val(), 10) || 5,
+            loopTotalDuration: parseInt($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-total-duration`).val(), 10) || 0,
+            maxRetries: parseInt($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-max-retries`).val(), 10) || 3,
+        };
+        currentSettings.plotTasks = normalizePlotTasks_ACU(currentSettings);
+        ensurePlotPromptsArray_ACU(currentSettings);
+        setPlotPromptContentByIdForSettings_ACU(currentSettings, 'mainPrompt', currentSettings.mainPrompt || '');
+        setPlotPromptContentByIdForSettings_ACU(currentSettings, 'systemPrompt', currentSettings.systemPrompt || '');
+        setPlotPromptContentByIdForSettings_ACU(currentSettings, 'finalSystemDirective', currentSettings.finalSystemDirective || '');
+        ensurePlotTasksCompat_ACU(currentSettings, { syncLegacy: true });
+        currentSettings.finalSystemDirective = getPlotPromptContentByIdFromSettings_ACU(currentSettings, 'finalSystemDirective') || currentSettings.finalSystemDirective || '';
+        return currentSettings;
+    }
+    /**
+     * 另存为新的全局预设
+     */
+    function savePlotPresetAsNew_ACU() {
+        const presetName = prompt('请输入新的全局预设名称：');
+        const name = String(presetName || '').trim();
+        if (!name)
+            return;
+        const presets = settings_ACU.plotSettings.promptPresets || [];
+        const existingIndex = presets.findIndex((p) => p.name === name);
+        const currentSettings = getCurrentPlotSettingsFromUI_ACU();
+        if (!currentSettings || typeof currentSettings !== 'object') {
+            showToastr_ACU('error', '读取当前剧情推进设置失败。');
+            return;
+        }
+        const savedPreset = normalizePlotPresetExcludeRules_ACU({ name, ...currentSettings });
+        if (existingIndex !== -1) {
+            if (!confirm(`名为 "${name}" 的全局预设已存在。是否要覆盖它？`)) {
+                return;
+            }
+            presets[existingIndex] = savedPreset;
+        }
+        else {
+            presets.push(savedPreset);
+        }
+        settings_ACU.plotSettings.promptPresets = presets;
+        const currentRuntimePresetName = getCurrentRuntimePlotPresetName_ACU({ fallbackToGlobal: true });
+        const currentChatBinding = getPlotPresetBindingForChat_ACU();
+        const hasLegacyChatScope = !!getCurrentChatPlotScopeState_ACU();
+        const shouldRefreshCurrentChatRuntime = normalizePlotPresetSelectionValue_ACU(currentRuntimePresetName) === name ||
+            (!currentChatBinding && !hasLegacyChatScope);
+        if (shouldRefreshCurrentChatRuntime) {
+            applyPlotPresetToSettings_ACU(settings_ACU.plotSettings, savedPreset);
+        }
+        setCurrentEditablePlotPresetState_ACU(name, {
+            scope: 'global',
+            source: 'ui_global_save_as_new',
+        });
+        persistPlotPresetSelectionState_ACU(name, { source: 'ui_global_save_as_new', updateGlobal: true, save: false });
+        saveSettingsAndNotify_ACU();
+        loadPlotPresetSelect_ACU();
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-global-preset-select`).val(name);
+        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-global-delete-preset`).show();
+        showToastr_ACU('success', `新全局预设 "${name}" 已保存。`);
+    }
+
+    /**
+     * presentation/components/template-preset-ui.ts — 模板预设 UI 函数（纯 DOM 操作）
+     *
+     * 纯业务逻辑函数已搬到 service/template/template-preset-service.ts。
+     * 本文件只保留操作 DOM 的 UI 函数。
+     */
+    // ═══ 纯 DOM 操作函数 ═══
+    function getTemplatePresetSelectJQ_ACU() {
+        try {
+            if (!$popupInstance_ACU || !$popupInstance_ACU.length)
+                return null;
+            const $sel = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-template-preset-select`);
+            return $sel && $sel.length ? $sel : null;
+        }
+        catch (e) {
+            return null;
+        }
+    }
+    function getTemplateChatPresetSelectJQ_ACU() {
+        try {
+            if (!$popupInstance_ACU || !$popupInstance_ACU.length)
+                return null;
+            const $sel = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-template-chat-preset-select`);
+            return $sel && $sel.length ? $sel : null;
+        }
+        catch (e) {
+            return null;
+        }
+    }
+    function populateTemplatePresetSelectOptions_ACU($select, { extraPresetName = '', extraLabelSuffix = '（仅当前聊天快照）', extraOptions = [] } = {}) {
+        if (!$select || !$select.length)
+            return;
+        const normalizedExtraPresetName = normalizeTemplatePresetSelectionValue_ACU(extraPresetName);
+        const presetNames = listTemplatePresetNames_ACU();
+        const renderedNames = new Set();
+        $select.empty().append(jQuery_API_ACU('<option/>').val(DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU).text('默认预设'));
+        presetNames.forEach(name => {
+            const normalizedName = normalizeTemplatePresetSelectionValue_ACU(name);
+            if (!normalizedName || renderedNames.has(normalizedName))
+                return;
+            renderedNames.add(normalizedName);
+            $select.append(jQuery_API_ACU('<option/>').val(normalizedName).text(normalizedName));
+        });
+        if (normalizedExtraPresetName && !renderedNames.has(normalizedExtraPresetName)) {
+            renderedNames.add(normalizedExtraPresetName);
+            $select.append(jQuery_API_ACU('<option/>').val(normalizedExtraPresetName).text(`${normalizedExtraPresetName}${extraLabelSuffix}`));
+        }
+        (Array.isArray(extraOptions) ? extraOptions : []).forEach(option => {
+            const value = String(option?.value || '').trim();
+            if (!value || renderedNames.has(value))
+                return;
+            renderedNames.add(value);
+            const label = String(option?.label || value).trim() || value;
+            $select.append(jQuery_API_ACU('<option/>').val(value).text(label));
+        });
+    }
+    function hasOptionValue_ACU($select, value) {
+        if (!$select || !$select.length)
+            return false;
+        const normalizedValue = String(value ?? '');
+        return $select.find('option').toArray().some((option) => String(jQuery_API_ACU(option).val() ?? '') === normalizedValue);
+    }
+    function loadTemplatePresetSelect_ACU({ globalSelectName = null, keepGlobalValue = false } = {}) {
+        if (!$popupInstance_ACU || !$popupInstance_ACU.length)
+            return;
+        const presetNames = listTemplatePresetNames_ACU();
+        const globalPresetName = normalizeTemplatePresetSelectionValue_ACU(getCurrentTemplatePresetName_ACU(settings_ACU, { requireExisting: false }));
+        const chatScopeState = getCurrentChatTemplateScopeState_ACU() || migrateLegacyTemplateScopeForCurrentChat_ACU();
+        const normalizedChatMode = normalizeTemplateScopeMode_ACU(chatScopeState?.mode);
+        const effectiveChatPresetName = resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true });
+        const chatSelectedPresetName = normalizeTemplatePresetSelectionValue_ACU(chatScopeState?.presetName || effectiveChatPresetName || '');
+        const chatPresetEntries = listChatTemplatePresetEntries_ACU();
+        const localOnlyOptions = chatPresetEntries
+            .filter(entry => {
+            const entryName = normalizeTemplatePresetSelectionValue_ACU(entry?.presetName || '');
+            return !!entryName && !presetNames.includes(entryName);
+        })
+            .map(entry => {
+            const entryName = normalizeTemplatePresetSelectionValue_ACU(entry?.presetName || '');
+            const updatedAtText = (typeof formatPlotScopeUpdatedAt_ACU === 'function')
+                ? formatPlotScopeUpdatedAt_ACU(entry?.updatedAt || entry?.archivedAt)
+                : '';
+            return {
+                value: entryName,
+                label: updatedAtText
+                    ? `${getTemplatePresetDisplayName_ACU(entryName)}（当前聊天快照，${updatedAtText}）`
+                    : `${getTemplatePresetDisplayName_ACU(entryName)}（当前聊天快照）`,
+            };
+        });
+        const chatPresetEntryCount = chatPresetEntries.length;
+        const chatExtraPresetName = (() => {
+            if (!chatSelectedPresetName)
+                return '';
+            if (presetNames.includes(chatSelectedPresetName))
+                return '';
+            if (localOnlyOptions.some(option => option.value === chatSelectedPresetName))
+                return '';
+            return chatSelectedPresetName;
+        })();
+        const $globalSelect = getTemplatePresetSelectJQ_ACU();
+        const $chatSelect = getTemplateChatPresetSelectJQ_ACU();
+        const $globalStatus = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-template-global-scope-status`);
+        const $chatStatus = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-template-chat-scope-status`);
+        const $chatOriginStatus = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-template-chat-origin-status`);
+        const $globalDeleteBtn = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-template-preset-delete`);
+        const hasGlobalPreset = !!globalPresetName && presetNames.includes(globalPresetName);
+        populateTemplatePresetSelectOptions_ACU($globalSelect, {
+            extraPresetName: hasGlobalPreset ? '' : globalPresetName,
+            extraLabelSuffix: '（仅当前全局模板快照）',
+        });
+        populateTemplatePresetSelectOptions_ACU($chatSelect, {
+            extraPresetName: chatExtraPresetName,
+            extraLabelSuffix: normalizedChatMode === 'preset_link' ? '（当前聊天引用）' : '（当前聊天专属预设）',
+            extraOptions: localOnlyOptions,
+        });
+        if ($globalSelect && $globalSelect.length) {
+            let resolvedGlobalValue = globalPresetName;
+            if (globalSelectName !== null && typeof globalSelectName !== 'undefined') {
+                resolvedGlobalValue = normalizeTemplatePresetSelectionValue_ACU(globalSelectName);
+            }
+            else if (keepGlobalValue) {
+                resolvedGlobalValue = normalizeTemplatePresetSelectionValue_ACU($globalSelect.val());
+            }
+            const finalGlobalValue = resolvedGlobalValue && hasOptionValue_ACU($globalSelect, resolvedGlobalValue)
+                ? resolvedGlobalValue
+                : (hasGlobalPreset || (!!globalPresetName && hasOptionValue_ACU($globalSelect, globalPresetName))
+                    ? globalPresetName
+                    : DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU);
+            $globalSelect.val(finalGlobalValue || DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU);
+        }
+        if ($globalDeleteBtn && $globalDeleteBtn.length) {
+            $globalDeleteBtn.toggle(!!globalPresetName && presetNames.includes(globalPresetName));
+        }
+        if ($chatSelect && $chatSelect.length) {
+            const finalChatValue = chatSelectedPresetName && hasOptionValue_ACU($chatSelect, chatSelectedPresetName)
+                ? chatSelectedPresetName
+                : DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU;
+            $chatSelect.val(finalChatValue || DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU);
+        }
+        if ($globalStatus && $globalStatus.length) {
+            if (globalPresetName && !hasGlobalPreset) {
+                $globalStatus.text(`当前全局模板：${globalPresetName}（预设库已不存在，但当前 profile 仍保留这份模板快照）。`);
+            }
+            else {
+                $globalStatus.text(`当前全局模板：${getTemplatePresetDisplayName_ACU(globalPresetName)}；新聊天会默认继承这里的表格模板。`);
+            }
+        }
+        if ($chatStatus && $chatStatus.length) {
+            if (normalizedChatMode === 'chat_override') {
+                let scopeLabel = '当前聊天专属预设';
+                if (chatScopeState.source === 'legacy_frozen') {
+                    scopeLabel = '旧版聊天冻结模板（已迁移）';
+                }
+                else if (chatScopeState.source === 'legacy_history_frozen') {
+                    scopeLabel = '旧对话历史模板快照（已迁移）';
+                }
+                else if (chatScopeState.source === 'legacy_header_frozen') {
+                    scopeLabel = '旧版表头冻结模板（已迁移）';
+                }
+                $chatStatus.text(`当前聊天：${scopeLabel}；当前实际模板预设为 ${getTemplatePresetDisplayName_ACU(chatSelectedPresetName)}。`);
+            }
+            else if (normalizedChatMode === 'preset_link') {
+                $chatStatus.text(`当前聊天：引用全局预设 ${getTemplatePresetDisplayName_ACU(chatSelectedPresetName)}；打开聊天时会继续沿用这个预设。`);
+            }
+            else {
+                $chatStatus.text(`当前聊天：跟随当前全局；当前实际模板预设为 ${getTemplatePresetDisplayName_ACU(effectiveChatPresetName)}。`);
+            }
+        }
+        if ($chatOriginStatus && $chatOriginStatus.length) {
+            if (normalizedChatMode === 'chat_override') {
+                const detailParts = [];
+                if (chatScopeState.source === 'legacy_frozen') {
+                    detailParts.push('来源语义：从旧版聊天冻结模板迁移');
+                }
+                else if (chatScopeState.source === 'legacy_history_frozen') {
+                    detailParts.push('来源语义：从旧对话实际表格结构迁移');
+                }
+                else if (chatScopeState.source === 'legacy_header_frozen') {
+                    detailParts.push('来源语义：从旧版表头冻结模板迁移');
+                }
+                else {
+                    detailParts.push('来源语义：当前聊天已保存本地模板预设快照');
+                }
+                if (chatScopeState.originGlobalName) {
+                    detailParts.push(`来源全局模板：${getTemplatePresetDisplayName_ACU(chatScopeState.originGlobalName)}`);
+                }
+                if (Number.isFinite(chatScopeState.originGlobalRevision) && chatScopeState.originGlobalRevision > 0) {
+                    detailParts.push(`来源全局版本：v${chatScopeState.originGlobalRevision}`);
+                }
+                const updatedAtText = (typeof formatPlotScopeUpdatedAt_ACU === 'function') ? formatPlotScopeUpdatedAt_ACU(chatScopeState.updatedAt) : '';
+                if (updatedAtText) {
+                    detailParts.push(`更新时间：${updatedAtText}`);
+                }
+                if (chatScopeState.source) {
+                    detailParts.push(`写入来源：${chatScopeState.source}`);
+                }
+                if (chatPresetEntryCount > 0) {
+                    detailParts.push(`当前聊天已登记 ${chatPresetEntryCount} 个本地模板预设`);
+                }
+                $chatOriginStatus.text(detailParts.join('；') || '当前聊天正在使用聊天级模板预设快照。');
+            }
+            else if (normalizedChatMode === 'preset_link') {
+                const detailParts = [
+                    '来源语义：当前聊天仅记录预设引用，未保存本地模板快照',
+                    `引用预设：${getTemplatePresetDisplayName_ACU(chatSelectedPresetName)}`,
+                ];
+                const updatedAtText = (typeof formatPlotScopeUpdatedAt_ACU === 'function') ? formatPlotScopeUpdatedAt_ACU(chatScopeState?.updatedAt) : '';
+                if (updatedAtText) {
+                    detailParts.push(`更新时间：${updatedAtText}`);
+                }
+                if (chatScopeState?.source) {
+                    detailParts.push(`写入来源：${chatScopeState.source}`);
+                }
+                if (chatPresetEntryCount > 0) {
+                    detailParts.push(`当前聊天可切换/覆盖 ${chatPresetEntryCount} 个本地模板预设`);
+                }
+                $chatOriginStatus.text(detailParts.join('；'));
+            }
+            else if (chatPresetEntryCount > 0) {
+                $chatOriginStatus.text(`当前聊天尚未保存本地模板快照，实际会跟随当前全局模板；但当前聊天已经拥有 ${chatPresetEntryCount} 个可直接切换的本地模板预设。`);
+            }
+            else {
+                $chatOriginStatus.text('当前聊天尚未保存本地模板快照，实际会直接跟随当前全局表格模板。');
+            }
+        }
+    }
+    function refreshTemplatePresetSelectInUI_ACU({ selectName = null, keepValue = false } = {}) {
+        if ($popupInstance_ACU && $popupInstance_ACU.length) {
+            loadTemplatePresetSelect_ACU({ globalSelectName: selectName, keepGlobalValue: !!keepValue });
+            return;
+        }
+        const $sel = getTemplatePresetSelectJQ_ACU();
+        if (!$sel || !$sel.length)
+            return;
+        renderTemplatePresetSelect_ACU($sel, { keepValue: !!keepValue });
+        if (selectName === null || typeof selectName === 'undefined')
+            return;
+        const normalizedName = normalizeTemplatePresetSelectionValue_ACU(selectName);
+        $sel.val(normalizedName || DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU);
+    }
+    function renderTemplatePresetSelect_ACU($select, { keepValue = true } = {}) {
+        try {
+            if (!$select || !$select.length)
+                return;
+            const prev = keepValue ? normalizeTemplatePresetSelectionValue_ACU($select.val()) : '';
+            const names = listTemplatePresetNames_ACU();
+            const persistedName = getCurrentTemplatePresetName_ACU(settings_ACU, { requireExisting: true, getTemplatePresetFn: getTemplatePreset_ACU });
+            $select.empty();
+            $select.append(jQuery_API_ACU('<option/>').val(DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU).text('默认预设'));
+            names.forEach(n => {
+                $select.append(jQuery_API_ACU('<option/>').val(String(n)).text(String(n)));
+            });
+            let resolvedValue = DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU;
+            if (keepValue) {
+                if (isDefaultTemplatePresetSelection_ACU(prev)) {
+                    resolvedValue = DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU;
+                }
+                else if (names.includes(prev)) {
+                    resolvedValue = prev;
+                }
+            }
+            if (resolvedValue === DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU && persistedName && names.includes(persistedName)) {
+                resolvedValue = persistedName;
+            }
+            $select.val(resolvedValue);
+        }
+        catch (e) { }
+    }
+
+    /**
+     * presentation/components/pipeline-ui-helpers.ts
+     * 包装 service 层的 pipeline 函数，在调用后自动刷新 UI
+     *
+     * 同时提供统一的预设切换后 UI 同步入口 refreshPresetUIAfterSwitch_ACU，
+     * 供模板预设 / 剧情推进预设的手工切换与 API 切换复用。
+     */
+    /**
+     * 刷新合并数据后自动通知前端 + 刷新可视化编辑器 + 刷新 UI 选择器和状态面板
+     * presentation 层唯一入口：所有需要"刷新数据+刷新UI"的地方都调这个。
+     */
+    async function refreshMergedDataAndNotifyWithUI_ACU({ skipNotify = false } = {}) {
+        const result = await refreshMergedDataAndNotify_ACU();
+        // 1. 通知前端 (iframe context)
+        try {
+            if (!skipNotify && topLevelWindow_ACU.AutoCardUpdaterAPI) {
+                topLevelWindow_ACU.AutoCardUpdaterAPI._notifyTableUpdate();
+                logDebug_ACU('Notified frontend to refresh UI after data merge.');
+            }
+            else if (skipNotify) {
+                logDebug_ACU('Skipped frontend table update notification after data merge.');
+            }
+        }
+        catch (_) { }
+        // 2. 刷新可视化编辑器
+        setTimeout(() => {
+            try {
+                if (typeof window.ACU_Visualizer_Refresh === 'function') {
+                    window.ACU_Visualizer_Refresh();
+                    logDebug_ACU('Triggered global visualizer refresh.');
+                }
+            }
+            catch (_) { }
+        }, 200);
+        // 3. UI 选择器刷新
+        if ($manualTableSelector_ACU) {
+            try {
+                renderManualTableSelector_ACU();
+            }
+            catch (_) { }
+        }
+        if ($importTableSelector_ACU) {
+            try {
+                renderImportTableSelector_ACU();
+            }
+            catch (_) { }
+        }
+        if (typeof updateCardUpdateStatusDisplay_ACU === 'function') {
+            updateCardUpdateStatusDisplay_ACU();
+        }
+        // 4. 等待前端完成数据读取（保持原有 800ms 等待行为）
+        await new Promise(resolve => setTimeout(resolve, 800));
+        return result;
+    }
+    /**
+     * 预设切换后统一刷新当前已挂载的 UI
+     *
+     * 在模板预设或剧情推进预设切换成功后调用，确保所有已打开的界面立即同步：
+     *   1. 模板预设下拉框与状态文案
+     *   2. 剧情推进编辑区全量重载（任务列表、任务参数、提示词、速率、循环设置、排除规则、预设选择器）
+     *   3. 数据库状态卡片（含"当前生效模板预设"）
+     *   4. 独立数据库编辑器窗口（顶部模板标识 + 编辑区数据）
+     *
+     * 各子刷新函数内部已做 DOM 存在性检查，弹窗/窗口未打开时静默跳过，
+     * 不会因 DOM 缺失而抛错中断后续刷新。
+     *
+     * @param options.templateGlobalSelectName 传入则覆盖模板全局 select 选中值；null 则按当前运行态自动解析
+     * @param options.keepTemplateGlobalValue   为 true 时保留模板全局 select 当前选中值不变
+     */
+    function refreshPresetUIAfterSwitch_ACU({ templateGlobalSelectName = null, keepTemplateGlobalValue = false } = {}) {
+        // 1. 模板预设 UI（全局/当前聊天下拉框 + 各类状态文案）
+        try {
+            loadTemplatePresetSelect_ACU({
+                globalSelectName: templateGlobalSelectName,
+                keepGlobalValue: keepTemplateGlobalValue,
+            });
+        }
+        catch (e) {
+            logDebug_ACU('[refreshPresetUI] 模板预设 UI 刷新失败:', e);
+        }
+        // 2. 剧情推进编辑区全量重载（任务列表 + 参数 + 提示词 + 速率 + 循环 + 排除规则 + 预设选择器）
+        //    loadPlotSettingsToUI_ACU 内部会调用 loadPlotPresetSelect_ACU，无需再单独调
+        try {
+            loadPlotSettingsToUI_ACU();
+        }
+        catch (e) {
+            logDebug_ACU('[refreshPresetUI] 剧情推进编辑区刷新失败:', e);
+        }
+        // 3. 数据库状态卡片（含"当前生效模板预设"显示）
+        try {
+            updateCardUpdateStatusDisplay_ACU();
+        }
+        catch (e) {
+            logDebug_ACU('[refreshPresetUI] 数据库状态卡片刷新失败:', e);
+        }
+        // 4. 独立数据库编辑器窗口：顶部模板标识
+        try {
+            if (typeof window.ACU_Visualizer_Refresh === 'function') {
+                window.ACU_Visualizer_Refresh();
+            }
+        }
+        catch (e) {
+            logDebug_ACU('[refreshPresetUI] 可视化编辑器刷新失败:', e);
+        }
     }
 
     // update-process.ts — 表格更新 UI 壳（presentation 层：负责 UI 交互）
@@ -39029,7 +41275,32 @@ $CONTENT
                     const idx = parseInt(indexStr, 10);
                     if (Number.isNaN(idx))
                         continue;
-                    await saveIndependentTableToChatHistory_ACU(idx, keys, null, true);
+                    const sheetKeys = keys;
+                    const writeSet = sheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
+                    const commitResult = await runTableUpdateCommit_ACU({
+                        source: 'manual_crud',
+                        reason: 'visualizer_save',
+                        isolationKey,
+                        writeSet,
+                        revisionWriteSet: writeSet,
+                        initialData: currentJsonTableData_ACU,
+                        targetMessageIndex: idx,
+                        targetSheetKeys: sheetKeys,
+                        updateGroupKeys: null,
+                        trackingSheetKeys: [],
+                        trackAsUpdate: false,
+                        operations: sheetKeys
+                            .filter(sheetKey => Boolean(currentJsonTableData_ACU?.[sheetKey]))
+                            .map(sheetKey => ({ kind: 'sheet_replace', sheetKey, sheet: currentJsonTableData_ACU[sheetKey], reason: 'manual_crud' })),
+                    }, () => ({
+                        success: true,
+                        value: null,
+                        tableData: currentJsonTableData_ACU,
+                        mutationResult: { changes: sheetKeys.length, errors: [] },
+                    }));
+                    if (!commitResult.success) {
+                        logWarn_ACU(`[VisualizerSave] 保存楼层 ${idx} 失败: ${commitResult.error || 'unknown error'}`);
+                    }
                 }
                 // 2.4.5 [关键] 如果本次在可视化编辑器删除了表格，则此处追溯整个聊天记录做“硬删除”
                 // 说明：saveIndependentTableToChatHistory_ACU 只会覆盖/追加 keys，不会自动移除旧 keys，因此必须额外做一次全局清理。
@@ -41711,7 +43982,26 @@ $CONTENT
                         return name === '纪要表' || name === '总结表' || name === '总体大纲' || name.includes('纪要') || name.includes('总结');
                     });
                     if (summaryKey) {
-                        await saveIndependentTableToChatHistory_ACU(getLastMessageIndex_ACU(), [summaryKey], [summaryKey]);
+                        const writeSet = [{ kind: 'sheet', sheetKey: summaryKey }];
+                        await runTableUpdateCommit_ACU({
+                            source: 'system',
+                            reason: 'vector_index_rebuild_snapshot',
+                            isolationKey: getCurrentIsolationKey_ACU(),
+                            writeSet,
+                            revisionWriteSet: writeSet,
+                            initialData: currentJsonTableData_ACU,
+                            targetMessageIndex: getLastMessageIndex_ACU(),
+                            targetSheetKeys: [summaryKey],
+                            updateGroupKeys: null,
+                            trackingSheetKeys: [],
+                            trackAsUpdate: false,
+                            operations: [{ kind: 'sheet_replace', sheetKey: summaryKey, sheet: currentJsonTableData_ACU[summaryKey], reason: 'system' }],
+                        }, () => ({
+                            success: true,
+                            value: null,
+                            tableData: currentJsonTableData_ACU,
+                            mutationResult: { changes: 1, errors: [] },
+                        }));
                     }
                     const result = await archiveSummaryVectorIndexNow_ACU({ mode: 'sync' });
                     await refreshVectorIndexStatsPanel_ACU();
@@ -44033,6 +46323,560 @@ $CONTENT
     }
 
     /**
+     * presentation/bootstrap/api-groups/sql-api.ts
+     * 原生 SQL 对外 API — executeSqlQuery / executeSqlMutation / executeSql
+     */
+    function isPlainObjectArg_ACU$1(value) {
+        return value !== null && typeof value === 'object' && !Array.isArray(value);
+    }
+    function firstDefined_ACU$1(...values) {
+        for (const value of values) {
+            if (value !== undefined)
+                return value;
+        }
+        return undefined;
+    }
+    function toBooleanOption_ACU$1(value) {
+        if (value === true)
+            return true;
+        if (typeof value === 'string') {
+            const normalized = value.trim().toLowerCase();
+            return normalized === 'true' || normalized === '1' || normalized === 'yes';
+        }
+        return value === 1;
+    }
+    function normalizeSqlParams_ACU(value, methodName) {
+        if (value === undefined || value === null)
+            return undefined;
+        if (!Array.isArray(value)) {
+            throw new Error(`${methodName}: params must be an array.`);
+        }
+        return value.map((item) => normalizeSqlValue_ACU(item));
+    }
+    function normalizeSqlValue_ACU(value) {
+        if (value === undefined || value === null)
+            return null;
+        if (typeof value === 'number')
+            return Number.isFinite(value) ? value : String(value);
+        if (typeof value === 'boolean')
+            return value ? 1 : 0;
+        return String(value);
+    }
+    function normalizeSheetKeys_ACU(value, methodName, fieldName) {
+        if (value === undefined)
+            return undefined;
+        if (value === null)
+            return null;
+        const rawValues = Array.isArray(value) ? value : [value];
+        const keys = rawValues
+            .map(item => String(item ?? '').trim())
+            .filter(Boolean);
+        if (!Array.isArray(value) && keys.length === 0) {
+            throw new Error(`${methodName}: ${fieldName} must contain at least one sheet key when provided.`);
+        }
+        return [...new Set(keys)];
+    }
+    function parseSqlArgs_ACU(sqlOrOptions, params, options, methodName = 'executeSql') {
+        const objectArgs = isPlainObjectArg_ACU$1(sqlOrOptions) ? sqlOrOptions : null;
+        const sql = String(objectArgs ? firstDefined_ACU$1(objectArgs.sql, objectArgs.statement, objectArgs.query) : sqlOrOptions ?? '').trim();
+        if (!sql) {
+            throw new Error(`${methodName}: sql is required.`);
+        }
+        const optionSource = objectArgs || (isPlainObjectArg_ACU$1(options) ? options : null);
+        return {
+            sql,
+            params: normalizeSqlParams_ACU(objectArgs ? objectArgs.params : params, methodName),
+            skipChatSave: toBooleanOption_ACU$1(firstDefined_ACU$1(optionSource?.skipChatSave, optionSource?.skipSave, optionSource?.isImportMode)),
+            skipNotify: toBooleanOption_ACU$1(firstDefined_ACU$1(optionSource?.skipNotify, optionSource?.silent, optionSource?.isSilent, optionSource?.suppressNotify, optionSource?.suppressNotification)),
+            targetSheetKeys: normalizeSheetKeys_ACU(firstDefined_ACU$1(optionSource?.targetSheetKeys, optionSource?.sheetKeys, optionSource?.targetSheets), methodName, 'targetSheetKeys') ?? null,
+            updateGroupKeys: normalizeSheetKeys_ACU(firstDefined_ACU$1(optionSource?.updateGroupKeys, optionSource?.groupKeys), methodName, 'updateGroupKeys') ?? null,
+            trackingSheetKeys: normalizeSheetKeys_ACU(firstDefined_ACU$1(optionSource?.trackingSheetKeys, optionSource?.trackingKeys), methodName, 'trackingSheetKeys'),
+        };
+    }
+    function stripSqlCommentsAndStrings_ACU(sql) {
+        let output = '';
+        let inString = null;
+        let inLineComment = false;
+        let inBlockComment = false;
+        for (let i = 0; i < sql.length; i += 1) {
+            const char = sql[i];
+            const next = sql[i + 1];
+            if (inLineComment) {
+                if (char === '\n') {
+                    inLineComment = false;
+                    output += ' ';
+                }
+                continue;
+            }
+            if (inBlockComment) {
+                if (char === '*' && next === '/') {
+                    inBlockComment = false;
+                    i += 1;
+                    output += ' ';
+                }
+                continue;
+            }
+            if (inString) {
+                if (char === inString) {
+                    if (next === inString) {
+                        i += 1;
+                    }
+                    else {
+                        inString = null;
+                    }
+                }
+                output += ' ';
+                continue;
+            }
+            if (char === '-' && next === '-') {
+                inLineComment = true;
+                i += 1;
+                output += ' ';
+                continue;
+            }
+            if (char === '/' && next === '*') {
+                inBlockComment = true;
+                i += 1;
+                output += ' ';
+                continue;
+            }
+            if (char === '\'' || char === '"' || char === '`') {
+                inString = char;
+                output += ' ';
+                continue;
+            }
+            output += char;
+        }
+        return output;
+    }
+    function splitTopLevelSqlStatements_ACU(sql) {
+        const statements = [];
+        let current = '';
+        let inString = null;
+        let inLineComment = false;
+        let inBlockComment = false;
+        for (let i = 0; i < sql.length; i += 1) {
+            const char = sql[i];
+            const next = sql[i + 1];
+            if (inLineComment) {
+                current += char;
+                if (char === '\n')
+                    inLineComment = false;
+                continue;
+            }
+            if (inBlockComment) {
+                current += char;
+                if (char === '*' && next === '/') {
+                    current += next;
+                    inBlockComment = false;
+                    i += 1;
+                }
+                continue;
+            }
+            if (inString) {
+                current += char;
+                if (char === inString) {
+                    if (next === inString) {
+                        current += next;
+                        i += 1;
+                    }
+                    else {
+                        inString = null;
+                    }
+                }
+                continue;
+            }
+            if (char === '-' && next === '-') {
+                current += char + next;
+                inLineComment = true;
+                i += 1;
+                continue;
+            }
+            if (char === '/' && next === '*') {
+                current += char + next;
+                inBlockComment = true;
+                i += 1;
+                continue;
+            }
+            if (char === '\'' || char === '"' || char === '`') {
+                inString = char;
+                current += char;
+                continue;
+            }
+            if (char === ';') {
+                const trimmed = current.trim();
+                if (trimmed)
+                    statements.push(trimmed);
+                current = '';
+                continue;
+            }
+            current += char;
+        }
+        const trimmed = current.trim();
+        if (trimmed)
+            statements.push(trimmed);
+        return statements;
+    }
+    function containsWriteKeyword_ACU(sql) {
+        const cleaned = stripSqlCommentsAndStrings_ACU(sql);
+        return /\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|TRUNCATE|VACUUM|ATTACH|DETACH|REINDEX|ANALYZE)\b/i.test(cleaned);
+    }
+    function isSqlReadStatement_ACU(sql) {
+        const statements = splitTopLevelSqlStatements_ACU(sql);
+        if (statements.length !== 1)
+            return false;
+        const statement = statements[0].trim();
+        if (!/^(SELECT|PRAGMA|EXPLAIN|WITH)\b/i.test(statement))
+            return false;
+        if (/^WITH\b/i.test(statement) && containsWriteKeyword_ACU(statement))
+            return false;
+        if (!/^WITH\b/i.test(statement) && /^(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|TRUNCATE|VACUUM|ATTACH|DETACH|REINDEX|ANALYZE)\b/i.test(statement))
+            return false;
+        return true;
+    }
+    function quoteIdentifier_ACU(name) {
+        return `\`${String(name).replace(/`/g, '``')}\``;
+    }
+    function normalizeLimit_ACU(value, fallback) {
+        if (value === undefined || value === null || value === '')
+            return fallback;
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric) || numeric < 0)
+            return fallback;
+        return Math.min(1000, Math.trunc(numeric));
+    }
+    function normalizeOffset_ACU(value) {
+        const numeric = Number(value);
+        return Number.isFinite(numeric) && numeric > 0 ? Math.trunc(numeric) : 0;
+    }
+    function rowsFromSqlResult_ACU(result) {
+        return result.values.map(row => {
+            const obj = {};
+            result.columns.forEach((column, index) => { obj[column] = row[index] ?? null; });
+            return obj;
+        });
+    }
+    function toPublicSqlQueryResult_ACU(result, meta = {}) {
+        return {
+            ...result,
+            rows: rowsFromSqlResult_ACU(result),
+            ...(meta.sql !== undefined ? { sql: meta.sql } : {}),
+            ...(meta.limit !== undefined ? { limit: meta.limit } : {}),
+            ...(meta.offset !== undefined ? { offset: meta.offset } : {}),
+        };
+    }
+    function stripTrailingSqlSemicolon_ACU(sql) {
+        return String(sql || '').trim().replace(/;+\s*$/, '');
+    }
+    function buildLimitedReadSql_ACU(sql, params, limit, offset = 0) {
+        if (limit === undefined)
+            return { sql, params };
+        const trimmed = stripTrailingSqlSemicolon_ACU(sql);
+        if (!/^(SELECT|WITH)\b/i.test(trimmed))
+            return { sql, params };
+        return {
+            sql: `SELECT * FROM (${trimmed}) AS acu_query LIMIT ? OFFSET ?`,
+            params: [...(params || []), limit, offset],
+        };
+    }
+    function getEnglishTableName_ACU(sheet, fallback) {
+        const ddl = sheet?.sourceData?.ddl;
+        if (ddl) {
+            const parsed = parseDDLTableName(ddl);
+            if (parsed)
+                return parsed;
+        }
+        return fallback;
+    }
+    function findQueryTargetSheet_ACU(tableNameOrSheetKey) {
+        const tableData = currentJsonTableData_ACU;
+        const input = String(tableNameOrSheetKey || '').trim();
+        if (!tableData || !input)
+            return null;
+        if (input.startsWith('sheet_') && tableData[input]) {
+            const sheet = tableData[input];
+            return { sheet, sheetKey: input, englishTableName: getEnglishTableName_ACU(sheet, String(sheet?.name || input)) };
+        }
+        const mapper = getNameMapper();
+        const maybeChineseName = mapper.getChineseTableName(input);
+        for (const sheetKey of Object.keys(tableData).filter(key => key.startsWith('sheet_'))) {
+            const sheet = tableData[sheetKey];
+            const english = getEnglishTableName_ACU(sheet, String(sheet?.name || sheetKey));
+            if (sheet?.name === input || sheet?.name === maybeChineseName || english === input) {
+                return { sheet, sheetKey, englishTableName: english };
+            }
+        }
+        return null;
+    }
+    function resolveQueryColumn_ACU(englishTableName, sheet, column) {
+        const raw = String(column || '').trim();
+        if (!raw)
+            throw new Error('queryTableRows: column must not be empty.');
+        if (raw === '*')
+            return raw;
+        if (raw === 'row_id')
+            return raw;
+        const mapper = getNameMapper();
+        const english = mapper.resolveColumnName(englishTableName, raw);
+        const chinese = mapper.getChineseColumnName(englishTableName, english);
+        const headers = Array.isArray(sheet?.content?.[0]) ? sheet.content[0].map((item) => String(item)) : [];
+        if (headers.length > 0 && !headers.includes(raw) && !headers.includes(chinese) && !headers.includes(english)) {
+            throw new Error(`queryTableRows: unknown column ${raw}.`);
+        }
+        return english;
+    }
+    function buildWhereClause_ACU(englishTableName, sheet, where, params) {
+        if (!where || typeof where !== 'object' || Array.isArray(where))
+            return '';
+        const clauses = [];
+        for (const [column, value] of Object.entries(where)) {
+            const sqlColumn = quoteIdentifier_ACU(resolveQueryColumn_ACU(englishTableName, sheet, column));
+            if (Array.isArray(value)) {
+                if (value.length === 0) {
+                    clauses.push('1 = 0');
+                    continue;
+                }
+                clauses.push(`${sqlColumn} IN (${value.map(() => '?').join(', ')})`);
+                params.push(...value.map(item => normalizeSqlValue_ACU(item)));
+            }
+            else if (value === null || value === undefined) {
+                clauses.push(`${sqlColumn} IS NULL`);
+            }
+            else {
+                clauses.push(`${sqlColumn} = ?`);
+                params.push(normalizeSqlValue_ACU(value));
+            }
+        }
+        return clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : '';
+    }
+    function buildOrderClause_ACU(englishTableName, sheet, orderBy) {
+        if (!orderBy)
+            return '';
+        const items = Array.isArray(orderBy) ? orderBy : [orderBy];
+        const parts = items.map(item => {
+            const column = typeof item === 'string' ? item : item?.column;
+            const directionRaw = typeof item === 'string' ? 'ASC' : String(item?.direction || 'ASC').toUpperCase();
+            const direction = directionRaw === 'DESC' ? 'DESC' : 'ASC';
+            return `${quoteIdentifier_ACU(resolveQueryColumn_ACU(englishTableName, sheet, column))} ${direction}`;
+        });
+        return parts.length > 0 ? ` ORDER BY ${parts.join(', ')}` : '';
+    }
+    function buildQueryTableRowsSql_ACU(options) {
+        const targetName = String(options.sheetKey || options.tableName || options.table || '').trim();
+        const target = findQueryTargetSheet_ACU(targetName);
+        if (!target)
+            throw new Error(`queryTableRows: table not found: ${targetName}`);
+        const columnsInput = Array.isArray(options.columns) && options.columns.length > 0 ? options.columns : ['*'];
+        const columns = columnsInput.includes('*')
+            ? '*'
+            : columnsInput.map((column) => quoteIdentifier_ACU(resolveQueryColumn_ACU(target.englishTableName, target.sheet, String(column)))).join(', ');
+        const params = [];
+        const where = buildWhereClause_ACU(target.englishTableName, target.sheet, options.where, params);
+        const order = buildOrderClause_ACU(target.englishTableName, target.sheet, options.orderBy || options.order);
+        const limit = normalizeLimit_ACU(options.limit, 100) ?? 100;
+        const offset = normalizeOffset_ACU(options.offset);
+        const sql = `SELECT ${columns} FROM ${quoteIdentifier_ACU(target.englishTableName)}${where}${order} LIMIT ? OFFSET ?`;
+        params.push(limit, offset);
+        return { sql, params, limit, offset };
+    }
+    function inferRawSqlSheetKeys_ACU(sql) {
+        const tableData = currentJsonTableData_ACU;
+        if (!tableData)
+            return [];
+        const tableNames = extractTableNamesFromStatements(splitSqlStatements(sql));
+        return mapSqlTableNamesToSheetKeys_ACU(tableData, tableNames);
+    }
+    function withInferredRawSqlTargets_ACU(args) {
+        const inferred = inferRawSqlSheetKeys_ACU(args.sql);
+        if (inferred.length === 0)
+            return args;
+        return {
+            ...args,
+            targetSheetKeys: inferred,
+        };
+    }
+    function buildRawSqlWriteSet_ACU(options) {
+        const keys = options.targetSheetKeys;
+        return Array.isArray(keys) && keys.length > 0
+            ? keys.map(sheetKey => ({ kind: 'sheet', sheetKey }))
+            : [{ kind: 'all' }];
+    }
+    function buildRawSqlBatchOperations_ACU(sql) {
+        const statements = splitSqlStatements(String(sql || '').replace(/<!--|-->/g, '').trim());
+        return statements.length > 0 ? [{ kind: 'sql_batch', statements }] : [];
+    }
+    function createSqlApi(ctx) {
+        return {
+            executeSqlQuery: function (sqlOrOptions, params, options) {
+                try {
+                    const args = parseSqlArgs_ACU(sqlOrOptions, params, options, 'executeSqlQuery');
+                    if (!isSqlReadStatement_ACU(args.sql)) {
+                        throw new Error('executeSqlQuery: only SELECT/PRAGMA/EXPLAIN/WITH statements are allowed.');
+                    }
+                    const optionSource = isPlainObjectArg_ACU$1(sqlOrOptions) ? sqlOrOptions : (isPlainObjectArg_ACU$1(options) ? options : null);
+                    const limit = normalizeLimit_ACU(optionSource?.limit);
+                    const offset = normalizeOffset_ACU(optionSource?.offset);
+                    const query = buildLimitedReadSql_ACU(args.sql, args.params, limit, offset);
+                    return toPublicSqlQueryResult_ACU(getStorageProvider().executeQuery(query.sql, query.params), { sql: query.sql, limit, offset });
+                }
+                catch (error) {
+                    logError_ACU('executeSqlQuery failed:', error);
+                    return null;
+                }
+            },
+            querySql: function (sqlOrOptions, params, options) {
+                try {
+                    const args = parseSqlArgs_ACU(sqlOrOptions, params, options, 'querySql');
+                    if (!isSqlReadStatement_ACU(args.sql)) {
+                        throw new Error('querySql: only SELECT/PRAGMA/EXPLAIN/WITH statements are allowed.');
+                    }
+                    const optionSource = isPlainObjectArg_ACU$1(sqlOrOptions) ? sqlOrOptions : (isPlainObjectArg_ACU$1(options) ? options : null);
+                    const limit = normalizeLimit_ACU(optionSource?.limit);
+                    const offset = normalizeOffset_ACU(optionSource?.offset);
+                    const query = buildLimitedReadSql_ACU(args.sql, args.params, limit, offset);
+                    return toPublicSqlQueryResult_ACU(getStorageProvider().executeQuery(query.sql, query.params), { sql: query.sql, limit, offset });
+                }
+                catch (error) {
+                    logError_ACU('querySql failed:', error);
+                    return null;
+                }
+            },
+            queryTableRows: function (options = {}) {
+                try {
+                    if (!isPlainObjectArg_ACU$1(options)) {
+                        throw new Error('queryTableRows: options must be an object.');
+                    }
+                    const query = buildQueryTableRowsSql_ACU(options);
+                    return toPublicSqlQueryResult_ACU(getStorageProvider().executeQuery(query.sql, query.params), {
+                        sql: query.sql,
+                        limit: query.limit,
+                        offset: query.offset,
+                    });
+                }
+                catch (error) {
+                    logError_ACU('queryTableRows failed:', error);
+                    return null;
+                }
+            },
+            executeSqlMutation: async function (sqlOrOptions, params, options) {
+                try {
+                    const args = withInferredRawSqlTargets_ACU(parseSqlArgs_ACU(sqlOrOptions, params, options, 'executeSqlMutation'));
+                    const writeSet = buildRawSqlWriteSet_ACU(args);
+                    const commitResult = await runSqliteRuntimeMutationCommit_ACU({
+                        source: 'raw_sql_mutation',
+                        reason: 'raw_sql_mutation',
+                        isolationKey: getCurrentIsolationKey_ACU(),
+                        writeSet,
+                        revisionWriteSet: writeSet,
+                        initialData: currentJsonTableData_ACU,
+                        targetMessageIndex: -1,
+                        targetSheetKeys: args.targetSheetKeys,
+                        updateGroupKeys: args.updateGroupKeys,
+                        trackingSheetKeys: args.trackingSheetKeys === undefined ? [] : args.trackingSheetKeys,
+                        trackAsUpdate: false,
+                        skipChatSave: args.skipChatSave,
+                        sql: args.sql,
+                        params: args.params,
+                        mapValue: () => null,
+                    });
+                    if (!commitResult.success || !commitResult.mutationResult) {
+                        return { changes: 0, errors: [commitResult.error || 'executeSqlMutation failed'] };
+                    }
+                    if (!args.skipNotify) {
+                        await refreshMergedDataAndNotifyWithUI_ACU({ skipNotify: false });
+                        logDebug_ACU('executeSqlMutation: refreshed merged data after raw SQL mutation.');
+                    }
+                    return args.skipChatSave
+                        ? { ...commitResult.mutationResult }
+                        : { ...commitResult.mutationResult, saved: commitResult.saved, messageIndex: commitResult.messageIndex };
+                }
+                catch (error) {
+                    const message = error?.message || String(error);
+                    logError_ACU('executeSqlMutation failed:', error);
+                    return { changes: 0, errors: [message] };
+                }
+            },
+            executeSqlBatch: async function (sqlOrOptions, options) {
+                try {
+                    const args = withInferredRawSqlTargets_ACU(parseSqlArgs_ACU(sqlOrOptions, undefined, options, 'executeSqlBatch'));
+                    if (args.params && args.params.length > 0) {
+                        throw new Error('executeSqlBatch: params are not supported for batch SQL. Use literal multi-statement SQL or executeSqlMutation for one parameterized statement.');
+                    }
+                    const writeSet = buildRawSqlWriteSet_ACU(args);
+                    const commitResult = await runTableUpdateCommit_ACU({
+                        source: 'raw_sql_batch',
+                        reason: 'raw_sql_batch',
+                        isolationKey: getCurrentIsolationKey_ACU(),
+                        writeSet,
+                        revisionWriteSet: writeSet,
+                        initialData: currentJsonTableData_ACU,
+                        targetMessageIndex: -1,
+                        targetSheetKeys: args.targetSheetKeys,
+                        updateGroupKeys: args.updateGroupKeys,
+                        trackingSheetKeys: args.trackingSheetKeys === undefined ? [] : args.trackingSheetKeys,
+                        trackAsUpdate: false,
+                        operations: buildRawSqlBatchOperations_ACU(args.sql),
+                        skipChatSave: args.skipChatSave,
+                    }, () => {
+                        const batchResult = getStorageProvider().applyEdits(args.sql, 'raw_sql_api');
+                        if (!batchResult.success) {
+                            return { success: false, error: batchResult.error || 'executeSqlBatch failed' };
+                        }
+                        const tableData = getStorageProvider().getCurrentData();
+                        if (!tableData) {
+                            return { success: false, error: 'SQLite runtime data export failed' };
+                        }
+                        return {
+                            success: true,
+                            tableData: tableData,
+                            mutationResult: { changes: batchResult.appliedEdits, errors: [] },
+                            value: {
+                                success: true,
+                                modifiedKeys: batchResult.modifiedKeys,
+                                appliedEdits: batchResult.appliedEdits,
+                                changes: batchResult.appliedEdits,
+                                errors: [],
+                            },
+                        };
+                    });
+                    if (!commitResult.success || !commitResult.value) {
+                        return { success: false, modifiedKeys: [], appliedEdits: 0, changes: 0, errors: [commitResult.error || 'executeSqlBatch failed'] };
+                    }
+                    if (!args.skipNotify) {
+                        await refreshMergedDataAndNotifyWithUI_ACU({ skipNotify: false });
+                        logDebug_ACU('executeSqlBatch: refreshed merged data after raw SQL transaction.');
+                    }
+                    return { ...commitResult.value, saved: commitResult.saved, messageIndex: commitResult.messageIndex };
+                }
+                catch (error) {
+                    const message = error?.message || String(error);
+                    logError_ACU('executeSqlBatch failed:', error);
+                    return { success: false, modifiedKeys: [], appliedEdits: 0, changes: 0, errors: [message] };
+                }
+            },
+            executeSql: async function (sqlOrOptions, params, options) {
+                try {
+                    const args = parseSqlArgs_ACU(sqlOrOptions, params, options, 'executeSql');
+                    if (isSqlReadStatement_ACU(args.sql)) {
+                        const queryResult = getStorageProvider().executeQuery(args.sql, args.params);
+                        return {
+                            type: 'query',
+                            result: toPublicSqlQueryResult_ACU(queryResult, { sql: args.sql }),
+                        };
+                    }
+                    const writeArgs = withInferredRawSqlTargets_ACU(args);
+                    const result = await this.executeSqlMutation(writeArgs);
+                    return { type: 'mutation', result };
+                }
+                catch (error) {
+                    logError_ACU('executeSql failed:', error);
+                    return null;
+                }
+            },
+        };
+    }
+
+    /**
      * presentation/pages/sql-console.ts
      * SQL 控制台标签页 — 输入 SQL、执行、结果展示、历史记录
      */
@@ -44112,7 +46956,7 @@ $CONTENT
                 showToastr_ACU('error', 'SQL 控制台仅在 SQLite 模式下可用');
                 return;
             }
-            executeSql(sql, $resultArea, $execStatus);
+            void executeSql(sql, $resultArea, $execStatus);
         });
         // Ctrl+Enter 快捷键执行
         $sqlInput.on('keydown', function (e) {
@@ -44158,10 +47002,10 @@ $CONTENT
     /**
      * 执行 SQL 并渲染结果
      */
-    function executeSql(sql, $resultArea, $execStatus) {
+    async function executeSql(sql, $resultArea, $execStatus) {
         const startTime = performance.now();
         try {
-            const provider = getStorageProvider();
+            const provider = await ensureStorageProviderReady_ACU();
             const isSelect = isSelectQuery(sql);
             if (isSelect) {
                 // SELECT 查询
@@ -44180,8 +47024,8 @@ $CONTENT
                 logDebug_ACU(`[SQL Console] SELECT 成功: ${result.rowCount} 行, ${elapsed}ms`);
             }
             else {
-                // INSERT/UPDATE/DELETE 变更
-                const result = provider.executeMutation(sql);
+                // INSERT/UPDATE/DELETE 变更：走统一 update+persist 提交模型
+                const result = await createSqlApi({}).executeSqlMutation({ sql, trackingSheetKeys: [] });
                 const elapsed = (performance.now() - startTime).toFixed(1);
                 if (result.errors.length > 0) {
                     addHistory$1(sql, false);
@@ -48954,6 +51798,19 @@ $CONTENT
     // init.ts — 初始化编排（presentation 层：负责事件绑定、UI 初始化、模块串联）
     // 从 05_core_tail.js 迁入
     // [从 state-manager.ts 搬入 presentation 层] 安装发送意图捕捉钩子（DOM 事件绑定）
+    async function ensureInitialSeedCheckpointBeforeGeneration_ACU(reason, { allowPendingFirstUserMessage = true } = {}) {
+        try {
+            const result = await ensureInitialSeedCheckpoint_ACU({ reason, allowPendingFirstUserMessage });
+            if (result?.success && isSqliteMode()) {
+                await reloadStorageProvider();
+            }
+            return result;
+        }
+        catch (error) {
+            logWarn_ACU(`[InitialSeed] ${reason} 初始化 checkpoint 失败，继续生成流程:`, error);
+            return false;
+        }
+    }
     function installSendIntentCaptureHooks_ACU() {
         try {
             const parentDoc = (window.parent || window).document;
@@ -49048,6 +51905,10 @@ $CONTENT
                                 // quiet/automatic_trigger 直接透传
                                 if (isQuietLikeGeneration_ACU('tavernhelper', { quiet_prompt: options.quiet_prompt }) || options.automatic_trigger) {
                                     return window.original_TavernHelper_generate_ACU.apply(this, args);
+                                }
+                                const userInputForInitialSeed = String(options.user_input || options.prompt || getSendTextareaValue_ACU() || '').trim();
+                                if (userInputForInitialSeed) {
+                                    await ensureInitialSeedCheckpointBeforeGeneration_ACU('tavernhelper_generate_before_ai', { allowPendingFirstUserMessage: true });
                                 }
                                 if (shouldProcessSummaryVectorIndexForGeneration_ACU('tavernhelper', { quiet_prompt: options.quiet_prompt, automatic_trigger: options.automatic_trigger }, false)) {
                                     const userInput = String(options.user_input || options.prompt || getSendTextareaValue_ACU() || '').trim();
@@ -49171,6 +52032,14 @@ $CONTENT
                             return;
                         const shouldProcessSummaryVectorIndex = shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun);
                         const shouldProcessPlot = shouldProcessPlotForGeneration_ACU(type, params, dryRun);
+                        const shouldEnsureInitialSeed = !dryRun
+                            && type !== 'regenerate'
+                            && !params?.automatic_trigger
+                            && !isQuietLikeGeneration_ACU(type, params)
+                            && (isRecentUserSendIntent_ACU() || shouldProcessSummaryVectorIndex || shouldProcessPlot);
+                        if (shouldEnsureInitialSeed) {
+                            await ensureInitialSeedCheckpointBeforeGeneration_ACU('generation_after_commands_before_ai', { allowPendingFirstUserMessage: true });
+                        }
                         if (!shouldProcessSummaryVectorIndex && !shouldProcessPlot)
                             return;
                         if (shouldProcessSummaryVectorIndex) {
@@ -49489,6 +52358,71 @@ $CONTENT
         };
     }
 
+    function resolveLatestAiMessageIndex_ACU() {
+        const chat = getChatArray_ACU();
+        if (!Array.isArray(chat) || chat.length === 0)
+            return -1;
+        for (let i = chat.length - 1; i >= 0; i -= 1) {
+            if (chat[i] && !chat[i].is_user)
+                return i;
+        }
+        return -1;
+    }
+    async function importTableJsonThroughCommit_ACU(jsonString) {
+        const newData = JSON.parse(jsonString);
+        if (!newData || !newData.mate || !Object.keys(newData).some(k => k.startsWith('sheet_'))) {
+            return { success: false, error: '导入的JSON缺少关键结构 (mate, sheet_*)。' };
+        }
+        const importedTableData = sanitizeChatSheetsObject_ACU(newData, { ensureMate: true });
+        const sheetKeys = Object.keys(importedTableData).filter(k => k.startsWith('sheet_'));
+        const targetMessageIndex = resolveLatestAiMessageIndex_ACU();
+        const commitResult = await runTableUpdateCommit_ACU({
+            source: 'import',
+            reason: 'importTableAsJson',
+            isolationKey: getCurrentIsolationKey_ACU(),
+            writeSet: [{ kind: 'all' }],
+            revisionWriteSet: [{ kind: 'all' }],
+            initialData: currentJsonTableData_ACU,
+            targetMessageIndex,
+            targetSheetKeys: sheetKeys,
+            updateGroupKeys: sheetKeys,
+            trackingSheetKeys: sheetKeys,
+            trackAsUpdate: true,
+            operations: [{ kind: 'data_replace', data: importedTableData, reason: 'import' }],
+        }, async () => {
+            const provider = getStorageProvider();
+            if (typeof provider.replaceAllData !== 'function') {
+                return { success: false, error: '当前存储 provider 不支持全量替换命令。' };
+            }
+            const replaceResult = await provider.replaceAllData(importedTableData);
+            if (!replaceResult.success) {
+                return { success: false, error: replaceResult.error || '运行时全量替换失败。' };
+            }
+            const runtimeData = provider.getCurrentData() || importedTableData;
+            return {
+                success: true,
+                value: true,
+                tableData: runtimeData,
+            };
+        });
+        if (!commitResult.success || !commitResult.tableData) {
+            return { success: false, error: commitResult.error || '导入数据提交失败。' };
+        }
+        const hasSummaryTables = Object.keys(commitResult.tableData)
+            .filter(k => k.startsWith('sheet_'))
+            .some(k => {
+            const table = commitResult.tableData?.[k];
+            return Boolean(table?.name && isSummaryOrOutlineTable_ACU(table.name));
+        });
+        return {
+            success: true,
+            messageIndex: commitResult.messageIndex ?? targetMessageIndex,
+            tableData: commitResult.tableData,
+            sheetKeys,
+            hasSummaryTables,
+        };
+    }
+
     /**
      * presentation/bootstrap/api-groups/core-data-api.ts
      * 核心数据操作 API — exportTableAsJson / importTableAsJson / triggerUpdate
@@ -49507,108 +52441,12 @@ $CONTENT
                     return false;
                 }
                 try {
-                    const newData = JSON.parse(jsonString);
-                    if (newData && newData.mate && Object.keys(newData).some(k => k.startsWith('sheet_'))) {
-                        _set_currentJsonTableData_ACU(sanitizeChatSheetsObject_ACU(newData, { ensureMate: true }));
-                        logDebug_ACU('Successfully imported new table data into memory.');
-                        let targetMessageIndexForVectorSync = -1;
-                        const chat = SillyTavern_API_ACU.chat;
-                        if (chat && chat.length > 0) {
-                            let targetMessage = null;
-                            let finalIndex = -1;
-                            for (let i = chat.length - 1; i >= 0; i--) {
-                                if (!chat[i].is_user) {
-                                    targetMessage = chat[i];
-                                    finalIndex = i;
-                                    targetMessageIndexForVectorSync = i;
-                                    break;
-                                }
-                            }
-                            if (targetMessage) {
-                                // 同步更新 IsolatedData
-                                try {
-                                    const newIndependentData = {};
-                                    Object.keys(currentJsonTableData_ACU).forEach(k => {
-                                        if (k.startsWith('sheet_')) {
-                                            newIndependentData[k] = sanitizeSheetForStorage_ACU(currentJsonTableData_ACU[k]);
-                                        }
-                                    });
-                                    const currentIsolationKey = getCurrentIsolationKey_ACU();
-                                    let isolatedContainer = targetMessage.TavernDB_ACU_IsolatedData;
-                                    if (typeof isolatedContainer === 'string') {
-                                        try {
-                                            isolatedContainer = JSON.parse(isolatedContainer);
-                                        }
-                                        catch (e) {
-                                            isolatedContainer = {};
-                                        }
-                                    }
-                                    if (!isolatedContainer || typeof isolatedContainer !== 'object')
-                                        isolatedContainer = {};
-                                    if (!isolatedContainer[currentIsolationKey]) {
-                                        isolatedContainer[currentIsolationKey] = {
-                                            independentData: {},
-                                            modifiedKeys: [],
-                                            updateGroupKeys: [],
-                                        };
-                                    }
-                                    const tagData = isolatedContainer[currentIsolationKey];
-                                    tagData.independentData = newIndependentData;
-                                    tagData.modifiedKeys = Object.keys(newIndependentData);
-                                    tagData.updateGroupKeys = Object.keys(newIndependentData);
-                                    tagData._acu_storage_mode = 'checkpoint';
-                                    tagData._acu_storage_version = 1;
-                                    isolatedContainer[currentIsolationKey] = tagData;
-                                    targetMessage.TavernDB_ACU_IsolatedData = isolatedContainer;
-                                    if (settings_ACU.dataIsolationEnabled) {
-                                        targetMessage.TavernDB_ACU_Identity = settings_ACU.dataIsolationCode;
-                                    }
-                                    else {
-                                        delete targetMessage.TavernDB_ACU_Identity;
-                                    }
-                                    targetMessage.TavernDB_ACU_IndependentData = newIndependentData;
-                                    targetMessage.TavernDB_ACU_ModifiedKeys = tagData.modifiedKeys;
-                                    targetMessage.TavernDB_ACU_UpdateGroupKeys = tagData.updateGroupKeys;
-                                }
-                                catch (e) {
-                                    logWarn_ACU('[importTableAsJson] 同步 IsolatedData 失败（将继续执行旧写入以尽量保持可用）：', e);
-                                }
-                                // 分离标准表和总结表数据
-                                const standardData = JSON.parse(JSON.stringify(currentJsonTableData_ACU));
-                                const summaryData = JSON.parse(JSON.stringify(currentJsonTableData_ACU));
-                                const standardTableIndexes = Object.keys(standardData).filter(k => k.startsWith('sheet_'));
-                                standardTableIndexes.forEach(sheetKey => {
-                                    const table = standardData[sheetKey];
-                                    if (table && table.name && isSummaryOrOutlineTable_ACU(table.name)) {
-                                        delete standardData[sheetKey];
-                                    }
-                                });
-                                const summaryTableIndexes = Object.keys(summaryData).filter(k => k.startsWith('sheet_'));
-                                summaryTableIndexes.forEach(sheetKey => {
-                                    const table = summaryData[sheetKey];
-                                    if (table && table.name && !isSummaryOrOutlineTable_ACU(table.name)) {
-                                        delete summaryData[sheetKey];
-                                    }
-                                });
-                                if (Object.keys(standardData).some(k => k.startsWith('sheet_'))) {
-                                    targetMessage.TavernDB_ACU_Data = sanitizeChatSheetsObject_ACU(standardData, { ensureMate: true });
-                                    logDebug_ACU(`Saved standard table data to message at index ${finalIndex}.`);
-                                }
-                                if (Object.keys(summaryData).some(k => k.startsWith('sheet_'))) {
-                                    targetMessage.TavernDB_ACU_SummaryData = sanitizeChatSheetsObject_ACU(summaryData, { ensureMate: true });
-                                    logDebug_ACU(`Saved summary table data to message at index ${finalIndex}.`);
-                                }
-                                await SillyTavern_API_ACU.saveChat();
-                            }
-                        }
+                    const commitResult = await importTableJsonThroughCommit_ACU(jsonString);
+                    if (commitResult.success) {
+                        const targetMessageIndexForVectorSync = commitResult.messageIndex ?? -1;
+                        logDebug_ACU(`[importTableAsJson] 已通过服务层导入提交入口导入表格数据，messageIndex=${targetMessageIndexForVectorSync}。`);
                         await refreshMergedDataAndNotifyWithUI_ACU();
-                        const importedSummaryTables = Object.keys(currentJsonTableData_ACU || {})
-                            .filter(k => k.startsWith('sheet_'))
-                            .some(k => {
-                            const table = currentJsonTableData_ACU?.[k];
-                            return table?.name && isSummaryOrOutlineTable_ACU(table.name);
-                        });
-                        if (importedSummaryTables && getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
+                        if (commitResult.hasSummaryTables && getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
                             try {
                                 const queueResult = await enqueueSummaryVectorIndexFlush_ACU({
                                     targetMessageIndex: targetMessageIndexForVectorSync >= 0 ? targetMessageIndexForVectorSync : undefined,
@@ -49629,12 +52467,12 @@ $CONTENT
                         return true;
                     }
                     else {
-                        throw new Error('导入的JSON缺少关键结构 (mate, sheet_*)。');
+                        throw new Error(commitResult.error || '导入数据提交失败。');
                     }
                 }
                 catch (error) {
                     logError_ACU('Failed to import table data from JSON:', error);
-                    showToastr_ACU('error', `导入数据失败: ${error.message}`);
+                    showToastr_ACU('error', `导入数据失败: ${error?.message || String(error)}`);
                     return false;
                 }
             },
@@ -49706,14 +52544,14 @@ $CONTENT
      * 支持中文显示名、英文物理表名、中英混用
      * 返回值包含英文物理表名（用于 SQL 拼接）
      */
-    function findTargetSheet(tableName) {
-        if (!currentJsonTableData_ACU)
+    function findTargetSheetInData_ACU(tableData, tableName) {
+        if (!tableData)
             return null;
         // 路径 1：按 sheet.name（中文显示名）直接匹配
-        for (const sheetKey in currentJsonTableData_ACU) {
+        for (const sheetKey in tableData) {
             if (!sheetKey.startsWith('sheet_'))
                 continue;
-            const sheet = currentJsonTableData_ACU[sheetKey];
+            const sheet = tableData[sheetKey];
             if (sheet?.name === tableName) {
                 return {
                     sheet,
@@ -49726,10 +52564,10 @@ $CONTENT
         const mapper = getNameMapper();
         const maybeChineseName = mapper.getChineseTableName(tableName);
         if (maybeChineseName && maybeChineseName !== tableName) {
-            for (const sheetKey in currentJsonTableData_ACU) {
+            for (const sheetKey in tableData) {
                 if (!sheetKey.startsWith('sheet_'))
                     continue;
-                const sheet = currentJsonTableData_ACU[sheetKey];
+                const sheet = tableData[sheetKey];
                 if (sheet?.name === maybeChineseName) {
                     return {
                         sheet,
@@ -49740,10 +52578,10 @@ $CONTENT
             }
         }
         // 路径 3：直接从 DDL 的英文表名匹配（兜底，覆盖 NameMapper 未构建的场景）
-        for (const sheetKey in currentJsonTableData_ACU) {
+        for (const sheetKey in tableData) {
             if (!sheetKey.startsWith('sheet_'))
                 continue;
-            const sheet = currentJsonTableData_ACU[sheetKey];
+            const sheet = tableData[sheetKey];
             const english = getEnglishTableName(sheet, '');
             if (english && english === tableName) {
                 return {
@@ -49754,6 +52592,9 @@ $CONTENT
             }
         }
         return null;
+    }
+    function findTargetSheet(tableName) {
+        return findTargetSheetInData_ACU(currentJsonTableData_ACU, tableName);
     }
     /**
      * 将用户传入的列名（可能是中文、英文、或数字索引得来的中文）
@@ -49883,11 +52724,12 @@ $CONTENT
         };
     }
     function assertSqlMutationChanged_ACU(methodName, actionLabel, result) {
-        if (result.errors.length > 0) {
-            logError_ACU(`${methodName} SQL failed: ${result.errors.join(', ')}`);
+        const errors = result.errors || (result.error ? [result.error] : []);
+        if (result.success === false || errors.length > 0) {
+            logError_ACU(`${methodName} SQL failed: ${errors.join(', ') || 'unknown error'}`);
             return false;
         }
-        if (result.changes <= 0) {
+        if ((result.changes ?? 0) <= 0) {
             logWarn_ACU(`${methodName}: SQL executed but affected 0 rows. action=${actionLabel}`);
             return false;
         }
@@ -49941,33 +52783,11 @@ $CONTENT
             logError_ACU(`${methodName}: Summary vector index flush enqueue threw after editing [${tableName}].`, error);
         }
     }
-    /**
-     * 保存表格到最新楼层并刷新世界书（updateCell / updateRow / insertRow / deleteRow 共享）
-     */
-    async function saveToLatestFloorAndRefresh(targetSheetKey, tableName, ctx, methodName, options = { skipChatSave: false, skipNotify: false }) {
-        const tableLatestFloorIndex = findTableLatestFloor(targetSheetKey, tableName);
+    async function finalizeTableEditAfterCommit_ACU(tableName, methodName, tableLatestFloorIndex, options) {
         let didNotifyThroughRefresh = false;
-        if (tableLatestFloorIndex !== -1) {
-            if (!options.skipChatSave) {
-                logDebug_ACU(`${methodName}: Saving [${tableName}] to its latest floor ${tableLatestFloorIndex}`);
-                const chat = SillyTavern_API_ACU.chat;
-                const history = resolveTableHistoryStateFromChat_ACU(chat, {
-                    sheetKey: targetSheetKey,
-                    isSummaryTable: isSummaryOrOutlineTable_ACU(tableName),
-                    isolationKey: getCurrentIsolationKey_ACU(),
-                    settings: settings_ACU,
-                });
-                const shouldTrackAsUpdate = history.latestDataMessageIndex === -1;
-                await saveIndependentTableToChatHistory_ACU(tableLatestFloorIndex, [targetSheetKey], shouldTrackAsUpdate ? [targetSheetKey] : null, true);
-            }
-            await refreshMergedDataAndNotifyWithUI_ACU({ skipNotify: options.skipNotify });
-            didNotifyThroughRefresh = !options.skipNotify;
-            logDebug_ACU(`${methodName}: Worldbook refreshed after saving [${tableName}]`);
-        }
-        else {
-            logDebug_ACU(`${methodName}: No AI floor found, falling back to saveCurrentDataForTable_ACU`);
-            await saveCurrentDataForTable_ACU(targetSheetKey);
-        }
+        await refreshMergedDataAndNotifyWithUI_ACU({ skipNotify: options.skipNotify });
+        didNotifyThroughRefresh = !options.skipNotify;
+        logDebug_ACU(`${methodName}: Worldbook refreshed after saving [${tableName}]`);
         await syncSummaryVectorIndexAfterTableEdit_ACU(tableName, methodName, tableLatestFloorIndex, options.skipChatSave);
         if (!options.skipNotify && !didNotifyThroughRefresh) {
             topLevelWindow_ACU.AutoCardUpdaterAPI._notifyTableUpdate();
@@ -50030,41 +52850,94 @@ $CONTENT
                         return false;
                     }
                     if (isSqliteMode()) {
-                        // SQLite 模式：用英文物理表名和英文列名生成 UPDATE SQL；值统一走参数绑定，避免 row_id/单元格值字符串破坏 SQL。
-                        const rowId = targetSheet.content[normalizedRowIndex][0]; // row_id 是第一列
+                        const rowId = targetSheet.content[normalizedRowIndex][0];
                         if (rowId === undefined || rowId === null) {
                             logError_ACU(`updateCell: row_id not found at index ${normalizedRowIndex}`);
                             return false;
                         }
-                        const sql = `UPDATE ${quoteIdentifier(englishTableName)} SET ${quoteIdentifier(englishColName)} = ? WHERE ${quoteIdentifier('row_id')} = ?;`;
-                        const result = getStorageProvider().executeMutation(sql, [
-                            toSqlValueParam_ACU(normalizedValue),
-                            toSqlValueParam_ACU(rowId),
-                        ]);
-                        if (!assertSqlMutationChanged_ACU('updateCell', `table=${englishTableName}, row_id=${rowId}, col=${englishColName}`, result)) {
+                        const tableLatestFloorIndex = findTableLatestFloor(targetSheetKey, targetSheet.name);
+                        if (!skipChatSave && tableLatestFloorIndex === -1)
                             return false;
-                        }
-                        logDebug_ACU(`updateCell: [SQLite] Updated [${englishTableName}] row_id=${rowId}, col=${englishColName}`);
+                        const sql = `UPDATE ${quoteIdentifier(englishTableName)} SET ${quoteIdentifier(englishColName)} = ? WHERE ${quoteIdentifier('row_id')} = ?;`;
+                        const params = [toSqlValueParam_ACU(normalizedValue), toSqlValueParam_ACU(rowId)];
+                        const result = await runSqliteRuntimeMutationCommit_ACU({
+                            source: 'manual_crud',
+                            reason: 'updateCell:sqlite',
+                            isolationKey: getCurrentIsolationKey_ACU(),
+                            writeSet: [{ kind: 'cell', sheetKey: targetSheetKey, rowId: String(rowId), columnKey: String(chineseColName) }],
+                            revisionWriteSet: [{ kind: 'cell', sheetKey: targetSheetKey, rowId: String(rowId), columnKey: String(chineseColName) }],
+                            initialData: currentJsonTableData_ACU,
+                            targetMessageIndex: tableLatestFloorIndex,
+                            targetSheetKeys: [targetSheetKey],
+                            updateGroupKeys: null,
+                            trackingSheetKeys: [],
+                            trackAsUpdate: false,
+                            skipChatSave,
+                            sql,
+                            params,
+                            validate: ({ mutationResult }) => assertSqlMutationChanged_ACU('updateCell', `table=${englishTableName}, row_id=${rowId}, col=${englishColName}`, mutationResult) ? null : 'updateCell SQLite mutation affected 0 rows',
+                            mapValue: () => true,
+                        });
+                        if (!result.success)
+                            return false;
+                        await finalizeTableEditAfterCommit_ACU(targetSheet.name, 'updateCell', tableLatestFloorIndex, { skipChatSave, skipNotify });
+                        return true;
                     }
                     else {
-                        // 原生模式：直接操作 JSON 数组，用中文列名在 headers 中定位
-                        let colIndex = -1;
-                        if (numericColIdentifier !== null) {
-                            colIndex = numericColIdentifier;
-                        }
-                        else {
-                            const headers = targetSheet.content[0] || [];
-                            colIndex = headers.indexOf(chineseColName);
-                        }
-                        if (colIndex < 0) {
-                            logError_ACU(`updateCell: Column "${normalizedColIdentifier}" not found in table "${tableName}".`);
+                        const tableLatestFloorIndex = findTableLatestFloor(targetSheetKey, targetSheet.name);
+                        if (!skipChatSave && tableLatestFloorIndex === -1)
                             return false;
-                        }
-                        targetSheet.content[normalizedRowIndex][colIndex] = normalizedValue;
-                        logDebug_ACU(`updateCell: Updated [${tableName}] row ${normalizedRowIndex}, col ${normalizedColIdentifier} = ${normalizedValue}`);
+                        const writeSet = [{ kind: 'cell', sheetKey: targetSheetKey, rowId: String(targetSheet.content[normalizedRowIndex][0] ?? ''), columnKey: String(chineseColName) }];
+                        const commitResult = await runTableUpdateCommit_ACU({
+                            source: 'manual_crud',
+                            reason: 'updateCell',
+                            isolationKey: getCurrentIsolationKey_ACU(),
+                            writeSet,
+                            revisionWriteSet: writeSet,
+                            initialData: currentJsonTableData_ACU,
+                            targetMessageIndex: tableLatestFloorIndex,
+                            targetSheetKeys: [targetSheetKey],
+                            updateGroupKeys: null,
+                            trackingSheetKeys: [],
+                            trackAsUpdate: false,
+                            skipChatSave,
+                        }, ({ workingData }) => {
+                            const workingTarget = findTargetSheetInData_ACU(workingData, tableName);
+                            if (!workingTarget) {
+                                logError_ACU(`updateCell: Table "${tableName}" not found.`);
+                                return { success: false, error: `Table "${tableName}" not found.` };
+                            }
+                            const workingSheet = workingTarget.sheet;
+                            let colIndex = -1;
+                            if (numericColIdentifier !== null) {
+                                colIndex = numericColIdentifier;
+                            }
+                            else {
+                                const headers = workingSheet.content[0] || [];
+                                colIndex = headers.indexOf(chineseColName);
+                            }
+                            if (colIndex < 0) {
+                                logError_ACU(`updateCell: Column "${normalizedColIdentifier}" not found in table "${tableName}".`);
+                                return { success: false, error: `Column "${normalizedColIdentifier}" not found.` };
+                            }
+                            workingSheet.content[normalizedRowIndex][colIndex] = normalizedValue;
+                            const row = workingSheet.content[normalizedRowIndex];
+                            const rowId = String(row?.[0] ?? '');
+                            logDebug_ACU(`updateCell: Updated [${tableName}] row ${normalizedRowIndex}, col ${normalizedColIdentifier} = ${normalizedValue}`);
+                            return {
+                                success: true,
+                                value: true,
+                                tableData: workingData,
+                                persist: {
+                                    operations: rowId ? [{ kind: 'row_upsert', sheetKey: targetSheetKey, rowId, cells: [...row] }] : [],
+                                },
+                            };
+                        });
+                        if (!commitResult.success || !commitResult.value)
+                            return false;
+                        await finalizeTableEditAfterCommit_ACU(targetSheet.name, 'updateCell', tableLatestFloorIndex, { skipChatSave, skipNotify });
+                        return true;
                     }
-                    await saveToLatestFloorAndRefresh(targetSheetKey, targetSheet.name, ctx, 'updateCell', { skipChatSave, skipNotify });
-                    return true;
                 }
                 catch (e) {
                     logError_ACU('updateCell failed:', e);
@@ -50092,7 +52965,7 @@ $CONTENT
                     }
                     const { sheet: targetSheet, sheetKey: targetSheetKey, englishTableName } = target;
                     if (isSqliteMode()) {
-                        // SQLite 模式：用英文物理表名和英文列名生成 UPDATE SQL
+                        // SQLite 模式：统一交给公共提交模型执行运行时 SQL 和持久化。
                         const rowId = targetSheet.content[normalizedRowIndex]?.[0];
                         if (rowId === undefined || rowId === null) {
                             logError_ACU(`updateRow: row_id not found at index ${normalizedRowIndex}`);
@@ -50117,46 +52990,98 @@ $CONTENT
                             return false;
                         }
                         params.push(toSqlValueParam_ACU(rowId));
-                        const sql = `UPDATE ${quoteIdentifier(englishTableName)} SET ${setClauses.join(', ')} WHERE ${quoteIdentifier('row_id')} = ?;`;
-                        const result = getStorageProvider().executeMutation(sql, params);
-                        if (!assertSqlMutationChanged_ACU('updateRow', `table=${englishTableName}, row_id=${rowId}, cols=${setClauses.length}`, result)) {
+                        const tableLatestFloorIndex = findTableLatestFloor(targetSheetKey, targetSheet.name);
+                        if (!skipChatSave && tableLatestFloorIndex === -1)
                             return false;
-                        }
-                        logDebug_ACU(`updateRow: [SQLite] Updated ${setClauses.length} cols in [${englishTableName}] row_id=${rowId}`);
+                        const sql = `UPDATE ${quoteIdentifier(englishTableName)} SET ${setClauses.join(', ')} WHERE ${quoteIdentifier('row_id')} = ?;`;
+                        const result = await runSqliteRuntimeMutationCommit_ACU({
+                            source: 'manual_crud',
+                            reason: 'updateRow:sqlite',
+                            isolationKey: getCurrentIsolationKey_ACU(),
+                            writeSet: [{ kind: 'sheet', sheetKey: targetSheetKey }],
+                            revisionWriteSet: [{ kind: 'sheet', sheetKey: targetSheetKey }],
+                            initialData: currentJsonTableData_ACU,
+                            targetMessageIndex: tableLatestFloorIndex,
+                            targetSheetKeys: [targetSheetKey],
+                            updateGroupKeys: null,
+                            trackingSheetKeys: [],
+                            trackAsUpdate: false,
+                            skipChatSave,
+                            sql,
+                            params,
+                            validate: ({ mutationResult }) => assertSqlMutationChanged_ACU('updateRow', `table=${englishTableName}, row_id=${rowId}, cols=${setClauses.length}`, mutationResult) ? null : 'updateRow SQLite mutation affected 0 rows',
+                            mapValue: () => true,
+                        });
+                        if (!result.success)
+                            return false;
+                        await finalizeTableEditAfterCommit_ACU(targetSheet.name, 'updateRow', tableLatestFloorIndex, { skipChatSave, skipNotify });
+                        return true;
                     }
                     else {
-                        // 原生模式：直接操作 JSON 数组
-                        while (targetSheet.content.length <= normalizedRowIndex) {
-                            const newRow = new Array((targetSheet.content[0] || []).length).fill('');
-                            targetSheet.content.push(newRow);
-                        }
-                        const headers = targetSheet.content[0] || [];
-                        const row = targetSheet.content[normalizedRowIndex];
-                        let updated = 0;
-                        for (const colName in normalizedData) {
-                            if (colName === 'isImportMode')
-                                continue;
-                            // 将用户传入的列名翻译为中文（原生模式 headers 是中文）。
-                            // 原生模式下 NameMapper 未构建时 resolveColumnForSheet 原样返回，
-                            // 行为与旧版一致。
-                            const { chineseColName } = resolveColumnForSheet(englishTableName, colName);
-                            const colIndex = headers.indexOf(chineseColName);
-                            if (colIndex !== -1) {
-                                row[colIndex] = normalizedData[colName];
-                                updated++;
-                            }
-                            else {
-                                logWarn_ACU(`updateRow: Column "${colName}" not found in table "${tableName}".`);
-                            }
-                        }
-                        if (updated === 0) {
-                            logWarn_ACU(`updateRow: No valid columns updated in [${tableName}] row ${normalizedRowIndex}.`);
+                        const tableLatestFloorIndex = findTableLatestFloor(targetSheetKey, targetSheet.name);
+                        if (!skipChatSave && tableLatestFloorIndex === -1)
                             return false;
-                        }
-                        logDebug_ACU(`updateRow: Updated ${updated} cells in [${tableName}] row ${normalizedRowIndex}`);
+                        const writeSet = [{ kind: 'sheet', sheetKey: targetSheetKey }];
+                        const commitResult = await runTableUpdateCommit_ACU({
+                            source: 'manual_crud',
+                            reason: 'updateRow',
+                            isolationKey: getCurrentIsolationKey_ACU(),
+                            writeSet,
+                            revisionWriteSet: writeSet,
+                            initialData: currentJsonTableData_ACU,
+                            targetMessageIndex: tableLatestFloorIndex,
+                            targetSheetKeys: [targetSheetKey],
+                            updateGroupKeys: null,
+                            trackingSheetKeys: [],
+                            trackAsUpdate: false,
+                            skipChatSave,
+                        }, ({ workingData }) => {
+                            const workingTarget = findTargetSheetInData_ACU(workingData, tableName);
+                            if (!workingTarget) {
+                                logError_ACU(`updateRow: Table "${tableName}" not found.`);
+                                return { success: false, error: `Table "${tableName}" not found.` };
+                            }
+                            const workingSheet = workingTarget.sheet;
+                            while (workingSheet.content.length <= normalizedRowIndex) {
+                                const newRow = new Array((workingSheet.content[0] || []).length).fill('');
+                                workingSheet.content.push(newRow);
+                            }
+                            const headers = workingSheet.content[0] || [];
+                            const row = workingSheet.content[normalizedRowIndex];
+                            let updated = 0;
+                            for (const colName in normalizedData) {
+                                if (colName === 'isImportMode')
+                                    continue;
+                                const { chineseColName } = resolveColumnForSheet(workingTarget.englishTableName, colName);
+                                const colIndex = headers.indexOf(chineseColName);
+                                if (colIndex !== -1) {
+                                    row[colIndex] = normalizedData[colName];
+                                    updated++;
+                                }
+                                else {
+                                    logWarn_ACU(`updateRow: Column "${colName}" not found in table "${tableName}".`);
+                                }
+                            }
+                            if (updated === 0) {
+                                logWarn_ACU(`updateRow: No valid columns updated in [${tableName}] row ${normalizedRowIndex}.`);
+                                return { success: false, error: 'No valid columns updated.' };
+                            }
+                            const rowId = String(row?.[0] ?? '');
+                            logDebug_ACU(`updateRow: Updated ${updated} cells in [${tableName}] row ${normalizedRowIndex}`);
+                            return {
+                                success: true,
+                                value: true,
+                                tableData: workingData,
+                                persist: {
+                                    operations: rowId ? [{ kind: 'row_upsert', sheetKey: targetSheetKey, rowId, cells: [...row] }] : [],
+                                },
+                            };
+                        });
+                        if (!commitResult.success || !commitResult.value)
+                            return false;
+                        await finalizeTableEditAfterCommit_ACU(targetSheet.name, 'updateRow', tableLatestFloorIndex, { skipChatSave, skipNotify });
+                        return true;
                     }
-                    await saveToLatestFloorAndRefresh(targetSheetKey, targetSheet.name, ctx, 'updateRow', { skipChatSave, skipNotify });
-                    return true;
                 }
                 catch (e) {
                     logError_ACU('updateRow failed:', e);
@@ -50181,7 +53106,7 @@ $CONTENT
                     const { sheet: targetSheet, sheetKey: targetSheetKey, englishTableName } = target;
                     const headers = targetSheet.content[0] || [];
                     if (isSqliteMode()) {
-                        // SQLite 模式：用英文物理表名和英文列名生成 INSERT SQL
+                        // SQLite 模式：统一交给公共提交模型执行运行时 SQL 和持久化。
                         const beforeLength = targetSheet.content.length;
                         const colNames = [];
                         const params = [];
@@ -50196,39 +53121,100 @@ $CONTENT
                             params.push(toSqlValueParam_ACU(normalizedData[colName]));
                         }
                         const placeholders = colNames.map(() => '?').join(', ');
+                        const tableLatestFloorIndex = findTableLatestFloor(targetSheetKey, targetSheet.name);
+                        if (!skipChatSave && tableLatestFloorIndex === -1)
+                            return -1;
                         const sql = colNames.length > 0
                             ? `INSERT INTO ${quoteIdentifier(englishTableName)} (${colNames.join(', ')}) VALUES (${placeholders});`
                             : `INSERT INTO ${quoteIdentifier(englishTableName)} DEFAULT VALUES;`;
-                        const result = getStorageProvider().executeMutation(sql, params);
-                        if (!assertSqlMutationChanged_ACU('insertRow', `table=${englishTableName}, cols=${colNames.length}`, result)) {
+                        const result = await runSqliteRuntimeMutationCommit_ACU({
+                            source: 'manual_crud',
+                            reason: 'insertRow:sqlite',
+                            isolationKey: getCurrentIsolationKey_ACU(),
+                            writeSet: [{ kind: 'sheet', sheetKey: targetSheetKey }],
+                            revisionWriteSet: [{ kind: 'sheet', sheetKey: targetSheetKey }],
+                            initialData: currentJsonTableData_ACU,
+                            targetMessageIndex: tableLatestFloorIndex,
+                            targetSheetKeys: [targetSheetKey],
+                            updateGroupKeys: null,
+                            trackingSheetKeys: [],
+                            trackAsUpdate: false,
+                            skipChatSave,
+                            sql,
+                            params,
+                            validate: ({ mutationResult, tableData }) => {
+                                if (!assertSqlMutationChanged_ACU('insertRow', `table=${englishTableName}, cols=${colNames.length}`, mutationResult))
+                                    return 'insertRow SQLite mutation affected 0 rows';
+                                const refreshedTarget = findTargetSheetInData_ACU(tableData, tableName);
+                                const refreshedLength = refreshedTarget?.sheet?.content?.length ?? 0;
+                                return refreshedTarget && refreshedLength > beforeLength
+                                    ? null
+                                    : `insertRow: SQLite runtime mutation succeeded but exported JSON view did not contain a new row for [${tableName}].`;
+                            },
+                            mapValue: ({ tableData }) => {
+                                const refreshedTarget = findTargetSheetInData_ACU(tableData, tableName);
+                                return (refreshedTarget?.sheet?.content?.length ?? 1) - 1;
+                            },
+                        });
+                        if (!result.success || typeof result.value !== 'number')
                             return -1;
-                        }
-                        const refreshedTarget = findTargetSheet(tableName);
-                        const refreshedLength = refreshedTarget?.sheet?.content?.length ?? 0;
-                        if (!refreshedTarget || refreshedLength <= beforeLength) {
-                            logError_ACU(`insertRow: SQLite mutation succeeded but refreshed JSON view did not contain a new row for [${tableName}].`);
-                            return -1;
-                        }
-                        const newIndex = refreshedLength - 1;
-                        logDebug_ACU(`insertRow: [SQLite] Inserted row in [${englishTableName}] at index ${newIndex}`);
-                        await saveToLatestFloorAndRefresh(targetSheetKey, targetSheet.name, ctx, 'insertRow', { skipChatSave, skipNotify });
-                        return newIndex;
+                        await finalizeTableEditAfterCommit_ACU(targetSheet.name, 'insertRow', tableLatestFloorIndex, { skipChatSave, skipNotify });
+                        return result.value;
                     }
                     else {
-                        // 原生模式：直接操作 JSON 数组，用中文列名在 headers 中定位
-                        const newRow = new Array(headers.length).fill('');
-                        for (const colName in normalizedData) {
-                            const { chineseColName } = resolveColumnForSheet(englishTableName, colName);
-                            const colIndex = headers.indexOf(chineseColName);
-                            if (colIndex !== -1) {
-                                newRow[colIndex] = normalizedData[colName];
+                        const tableLatestFloorIndex = findTableLatestFloor(targetSheetKey, targetSheet.name);
+                        if (!skipChatSave && tableLatestFloorIndex === -1)
+                            return -1;
+                        const writeSet = [{ kind: 'sheet', sheetKey: targetSheetKey }];
+                        const commitResult = await runTableUpdateCommit_ACU({
+                            source: 'manual_crud',
+                            reason: 'insertRow',
+                            isolationKey: getCurrentIsolationKey_ACU(),
+                            writeSet,
+                            revisionWriteSet: writeSet,
+                            initialData: currentJsonTableData_ACU,
+                            targetMessageIndex: tableLatestFloorIndex,
+                            targetSheetKeys: [targetSheetKey],
+                            updateGroupKeys: null,
+                            trackingSheetKeys: [],
+                            trackAsUpdate: false,
+                            skipChatSave,
+                        }, ({ workingData }) => {
+                            const workingTarget = findTargetSheetInData_ACU(workingData, tableName);
+                            if (!workingTarget) {
+                                logError_ACU(`insertRow: Table "${tableName}" not found.`);
+                                return { success: false, error: `Table "${tableName}" not found.` };
                             }
-                        }
-                        targetSheet.content.push(newRow);
-                        const newIndex = targetSheet.content.length - 1;
-                        logDebug_ACU(`insertRow: Inserted row at index ${newIndex} in [${tableName}]`);
-                        await saveToLatestFloorAndRefresh(targetSheetKey, targetSheet.name, ctx, 'insertRow', { skipChatSave, skipNotify });
-                        return newIndex;
+                            const workingSheet = workingTarget.sheet;
+                            const workingHeaders = workingSheet.content[0] || [];
+                            const newRow = new Array(workingHeaders.length).fill('');
+                            for (const colName in normalizedData) {
+                                const { chineseColName } = resolveColumnForSheet(workingTarget.englishTableName, colName);
+                                const colIndex = workingHeaders.indexOf(chineseColName);
+                                if (colIndex !== -1) {
+                                    newRow[colIndex] = normalizedData[colName];
+                                }
+                            }
+                            workingSheet.content.push(newRow);
+                            const newIndex = workingSheet.content.length - 1;
+                            if (newRow[0] === undefined || newRow[0] === null || newRow[0] === '') {
+                                newRow[0] = String(newIndex);
+                            }
+                            const rowId = String(newRow[0]);
+                            logDebug_ACU(`insertRow: Inserted row at index ${newIndex} in [${tableName}]`);
+                            return {
+                                success: true,
+                                value: newIndex,
+                                tableData: workingData,
+                                persist: {
+                                    operations: [{ kind: 'row_upsert', sheetKey: targetSheetKey, rowId, cells: [...newRow] }],
+                                },
+                            };
+                        });
+                        if (!commitResult.success || typeof commitResult.value !== 'number')
+                            return -1;
+                        await finalizeTableEditAfterCommit_ACU(targetSheet.name, 'insertRow', tableLatestFloorIndex, { skipChatSave, skipNotify });
+                        return commitResult.value;
                     }
                 }
                 catch (e) {
@@ -50261,26 +53247,89 @@ $CONTENT
                         return false;
                     }
                     if (isSqliteMode()) {
-                        // SQLite 模式：用英文物理表名生成 DELETE SQL；row_id 走参数绑定，避免字符串 row_id 删除失效。
                         const rowId = targetSheet.content[normalizedRowIndex]?.[0];
+                        // SQLite 模式：统一交给公共提交模型执行运行时 SQL 和持久化。
                         if (rowId === undefined || rowId === null) {
                             logError_ACU(`deleteRow: row_id not found at index ${normalizedRowIndex}`);
                             return false;
                         }
-                        const sql = `DELETE FROM ${quoteIdentifier(englishTableName)} WHERE ${quoteIdentifier('row_id')} = ?;`;
-                        const result = getStorageProvider().executeMutation(sql, [toSqlValueParam_ACU(rowId)]);
-                        if (!assertSqlMutationChanged_ACU('deleteRow', `table=${englishTableName}, row_id=${rowId}`, result)) {
+                        const tableLatestFloorIndex = findTableLatestFloor(targetSheetKey, targetSheet.name);
+                        if (!skipChatSave && tableLatestFloorIndex === -1)
                             return false;
-                        }
-                        logDebug_ACU(`deleteRow: [SQLite] Deleted row_id=${rowId} from [${englishTableName}]`);
+                        const sql = `DELETE FROM ${quoteIdentifier(englishTableName)} WHERE ${quoteIdentifier('row_id')} = ?;`;
+                        const params = [toSqlValueParam_ACU(rowId)];
+                        const result = await runSqliteRuntimeMutationCommit_ACU({
+                            source: 'manual_crud',
+                            reason: 'deleteRow:sqlite',
+                            isolationKey: getCurrentIsolationKey_ACU(),
+                            writeSet: [{ kind: 'row', sheetKey: targetSheetKey, rowId: String(rowId) }],
+                            revisionWriteSet: [{ kind: 'row', sheetKey: targetSheetKey, rowId: String(rowId) }],
+                            initialData: currentJsonTableData_ACU,
+                            targetMessageIndex: tableLatestFloorIndex,
+                            targetSheetKeys: [targetSheetKey],
+                            updateGroupKeys: null,
+                            trackingSheetKeys: [],
+                            trackAsUpdate: false,
+                            skipChatSave,
+                            sql,
+                            params,
+                            validate: ({ mutationResult }) => assertSqlMutationChanged_ACU('deleteRow', `table=${englishTableName}, row_id=${rowId}`, mutationResult) ? null : 'deleteRow SQLite mutation affected 0 rows',
+                            mapValue: () => true,
+                        });
+                        if (!result.success)
+                            return false;
+                        await finalizeTableEditAfterCommit_ACU(targetSheet.name, 'deleteRow', tableLatestFloorIndex, { skipChatSave, skipNotify });
+                        return true;
                     }
                     else {
-                        // 原生模式：直接操作 JSON 数组
-                        targetSheet.content.splice(normalizedRowIndex, 1);
-                        logDebug_ACU(`deleteRow: Deleted row ${normalizedRowIndex} from [${tableName}]`);
+                        const rowId = targetSheet.content[normalizedRowIndex]?.[0];
+                        const tableLatestFloorIndex = findTableLatestFloor(targetSheetKey, targetSheet.name);
+                        if (!skipChatSave && tableLatestFloorIndex === -1)
+                            return false;
+                        const writeSet = rowId === undefined || rowId === null
+                            ? [{ kind: 'sheet', sheetKey: targetSheetKey }]
+                            : [{ kind: 'row', sheetKey: targetSheetKey, rowId: String(rowId) }];
+                        const commitResult = await runTableUpdateCommit_ACU({
+                            source: 'manual_crud',
+                            reason: 'deleteRow',
+                            isolationKey: getCurrentIsolationKey_ACU(),
+                            writeSet,
+                            revisionWriteSet: writeSet,
+                            initialData: currentJsonTableData_ACU,
+                            targetMessageIndex: tableLatestFloorIndex,
+                            targetSheetKeys: [targetSheetKey],
+                            updateGroupKeys: null,
+                            trackingSheetKeys: [],
+                            trackAsUpdate: false,
+                            skipChatSave,
+                        }, ({ workingData }) => {
+                            const workingTarget = findTargetSheetInData_ACU(workingData, tableName);
+                            if (!workingTarget) {
+                                logError_ACU(`deleteRow: Table "${tableName}" not found.`);
+                                return { success: false, error: `Table "${tableName}" not found.` };
+                            }
+                            const workingSheet = workingTarget.sheet;
+                            if (normalizedRowIndex >= workingSheet.content.length) {
+                                logError_ACU(`deleteRow: Row index ${normalizedRowIndex} out of bounds.`);
+                                return { success: false, error: `Row index ${normalizedRowIndex} out of bounds.` };
+                            }
+                            const deletedRowId = String(workingSheet.content[normalizedRowIndex]?.[0] ?? rowId ?? '');
+                            workingSheet.content.splice(normalizedRowIndex, 1);
+                            logDebug_ACU(`deleteRow: Deleted row ${normalizedRowIndex} from [${tableName}]`);
+                            return {
+                                success: true,
+                                value: true,
+                                tableData: workingData,
+                                persist: {
+                                    operations: deletedRowId ? [{ kind: 'row_delete', sheetKey: targetSheetKey, rowId: deletedRowId }] : [],
+                                },
+                            };
+                        });
+                        if (!commitResult.success || !commitResult.value)
+                            return false;
+                        await finalizeTableEditAfterCommit_ACU(targetSheet.name, 'deleteRow', tableLatestFloorIndex, { skipChatSave, skipNotify });
+                        return true;
                     }
-                    await saveToLatestFloorAndRefresh(targetSheetKey, targetSheet.name, ctx, 'deleteRow', { skipChatSave, skipNotify });
-                    return true;
                 }
                 catch (e) {
                     logError_ACU('deleteRow failed:', e);
@@ -50858,9 +53907,13 @@ $CONTENT
                             });
                             if (fillResult && typeof fillResult === 'object' && fillResult.success) {
                                 result.templateInjected = true;
-                                if (fillResult.messageIndex != null) {
+                                if (isSqliteMode()) {
+                                    await reloadStorageProvider();
+                                }
+                                const messageIndex = fillResult.messageIndex;
+                                if (messageIndex != null) {
                                     if (SillyTavern_API_ACU?.eventSource?.emit && SillyTavern_API_ACU?.eventTypes?.MESSAGE_UPDATED) {
-                                        SillyTavern_API_ACU.eventSource.emit(SillyTavern_API_ACU.eventTypes.MESSAGE_UPDATED, fillResult.messageIndex);
+                                        SillyTavern_API_ACU.eventSource.emit(SillyTavern_API_ACU.eventTypes.MESSAGE_UPDATED, messageIndex);
                                     }
                                     if (topLevelWindow_ACU?.AutoCardUpdaterAPI) {
                                         topLevelWindow_ACU.AutoCardUpdaterAPI._notifyTableUpdate();
@@ -51599,7 +54652,7 @@ $CONTENT
         getApi: () => apiRef,
     };
     // --- 组装所有领域 API ---
-    const api = Object.assign({}, createCallbackApi(ctx), createCoreDataApi(ctx), createTableCrudApi(ctx), createTableLockApi(ctx), createTemplatePresetApi(ctx), createPlotPresetApi(ctx), createDataAdminApi(ctx), createSettingsConfigApi(ctx), createWorldbookAiApi(ctx));
+    const api = Object.assign({}, createCallbackApi(ctx), createCoreDataApi(ctx), createTableCrudApi(ctx), createTableLockApi(ctx), createTemplatePresetApi(ctx), createPlotPresetApi(ctx), createDataAdminApi(ctx), createSettingsConfigApi(ctx), createWorldbookAiApi(ctx), createSqlApi(ctx));
     // 将最终组装的 api 赋给 apiRef，使 ctx.getApi() 返回完整对象
     apiRef = api;
     // --- 挂载到全局 ---
@@ -70462,7 +73515,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-badge {\r\n  display: inline-flex; align-items: center;\r\n  padding: 2px 8px; border-radius: var(--acu-radius-sm);\r\n  font-size: var(--acu-font-size-caption, 11px); font-weight: 500;\r\n  white-space: nowrap; line-height: 1.6;\n}\n.acu-badge--neutral {\r\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  color: var(--acu-text-2);\n}\n.acu-badge--accent {\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\n}\n.acu-badge--success,\r\n.acu-badge--warning,\r\n.acu-badge--danger {\r\n  font-weight: 600;\n}\n.acu-badge--success {\r\n  background: color-mix(in srgb, var(--acu-success) 16%, transparent);\r\n  color: var(--acu-success);\n}\n.acu-badge--warning {\r\n  background: color-mix(in srgb, var(--acu-warning) 16%, transparent);\r\n  color: var(--acu-warning);\n}\n.acu-badge--danger {\r\n  background: color-mix(in srgb, var(--acu-danger) 16%, transparent);\r\n  color: var(--acu-danger);\n}\r\n", "src/presentation-v2/components/_lib/AcuBadge.vue#style-0");
+    injectSfcStyle("\n.acu-badge {\n  display: inline-flex; align-items: center;\n  padding: 2px 8px; border-radius: var(--acu-radius-sm);\n  font-size: var(--acu-font-size-caption, 11px); font-weight: 500;\n  white-space: nowrap; line-height: 1.6;\n}\n.acu-badge--neutral {\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  color: var(--acu-text-2);\n}\n.acu-badge--accent {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-badge--success,\n.acu-badge--warning,\n.acu-badge--danger {\n  font-weight: 600;\n}\n.acu-badge--success {\n  background: color-mix(in srgb, var(--acu-success) 16%, transparent);\n  color: var(--acu-success);\n}\n.acu-badge--warning {\n  background: color-mix(in srgb, var(--acu-warning) 16%, transparent);\n  color: var(--acu-warning);\n}\n.acu-badge--danger {\n  background: color-mix(in srgb, var(--acu-danger) 16%, transparent);\n  color: var(--acu-danger);\n}\n", "src/presentation-v2/components/_lib/AcuBadge.vue#style-0");
     var AcuBadge_vue_vue_type_style_index_0_lang = null;
 
     var _export_sfc = (sfc, props) => {
@@ -70507,7 +73560,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-btn {\r\n  font: inherit;\r\n  border: 0;\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-1);\r\n  border-radius: var(--acu-radius-sm);\r\n  cursor: pointer;\r\n  display: inline-flex; align-items: center; justify-content: center; gap: 6px;\r\n  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;\n}\n.acu-btn--md { min-height: 32px; padding: 6px 9px; font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-btn--sm { min-height: 28px; padding: 4px 10px; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-btn--block { width: 100%; min-width: 0;\n}\n.acu-btn--icon-only { min-width: 32px; padding: 6px 8px;\n}\n.acu-btn--icon-only.acu-btn--sm { min-width: 28px; padding: 4px 8px;\n}\n.acu-btn:hover:not(:disabled) {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);\n}\n.acu-btn:disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-btn--primary {\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\r\n  font-weight: 500;\r\n  box-shadow: none;\n}\n.acu-btn--primary:hover:not(:disabled) {\r\n  background: var(--acu-accent-2);\r\n  box-shadow: none;\n}\n.acu-btn--danger {\r\n  background: color-mix(in srgb, var(--acu-danger) 10%, transparent);\r\n  color: var(--acu-danger);\n}\n.acu-btn--danger:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-danger) 18%, transparent);\n}\n.acu-btn:focus-visible {\r\n  outline: none;\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-btn--loading { cursor: wait;\n}\n.acu-btn__spinner { font-size: 0.85em;\n}\r\n", "src/presentation-v2/components/_lib/AcuButton.vue#style-0");
+    injectSfcStyle("\n.acu-btn {\n  font: inherit;\n  border: 0;\n  background: var(--acu-bg-2);\n  color: var(--acu-text-1);\n  border-radius: var(--acu-radius-sm);\n  cursor: pointer;\n  display: inline-flex; align-items: center; justify-content: center; gap: 6px;\n  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;\n}\n.acu-btn--md { min-height: 32px; padding: 6px 9px; font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-btn--sm { min-height: 28px; padding: 4px 10px; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-btn--block { width: 100%; min-width: 0;\n}\n.acu-btn--icon-only { min-width: 32px; padding: 6px 8px;\n}\n.acu-btn--icon-only.acu-btn--sm { min-width: 28px; padding: 4px 8px;\n}\n.acu-btn:hover:not(:disabled) {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);\n}\n.acu-btn:disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-btn--primary {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-weight: 500;\n  box-shadow: none;\n}\n.acu-btn--primary:hover:not(:disabled) {\n  background: var(--acu-accent-2);\n  box-shadow: none;\n}\n.acu-btn--danger {\n  background: color-mix(in srgb, var(--acu-danger) 10%, transparent);\n  color: var(--acu-danger);\n}\n.acu-btn--danger:hover:not(:disabled) {\n  background: color-mix(in srgb, var(--acu-danger) 18%, transparent);\n}\n.acu-btn:focus-visible {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-btn--loading { cursor: wait;\n}\n.acu-btn__spinner { font-size: 0.85em;\n}\n", "src/presentation-v2/components/_lib/AcuButton.vue#style-0");
     var AcuButton_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$10 = [
@@ -70589,7 +73642,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-input-shell {\r\n  position: relative;\r\n  display: block;\r\n  width: 100%;\r\n  min-width: 0;\n}\n.acu-input {\r\n  width: 100%; box-sizing: border-box;\r\n  border: 0 !important;\r\n  border-radius: var(--acu-radius-sm) !important;\r\n  background: var(--acu-bg-2) !important;\r\n  color: var(--acu-text-1) !important;\r\n  font: inherit !important;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-input--md { min-height: 32px; padding: 6px 9px !important; font-size: var(--acu-font-size-body, 12px) !important;\n}\n.acu-input--sm { min-height: 26px; padding: 3px 7px !important; font-size: var(--acu-font-size-caption, 11px) !important;\n}\n.acu-input-shell--number .acu-input--md { padding-right: 30px !important;\n}\n.acu-input-shell--number .acu-input--sm { padding-right: 25px !important;\n}\n.acu-input:hover:not(:disabled) {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2) !important;\n}\n.acu-input:focus {\r\n  outline: none;\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow) !important;\n}\n.acu-input:disabled,\r\n.acu-input--disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-input[type=\"number\"] {\r\n  -moz-appearance: textfield;\r\n  font-variant-numeric: tabular-nums;\n}\n.acu-input[type=\"number\"]::-webkit-inner-spin-button,\r\n.acu-input[type=\"number\"]::-webkit-outer-spin-button {\r\n  -webkit-appearance: none; margin: 0;\n}\n.acu-input__number-indicator {\r\n  position: absolute;\r\n  top: 50%;\r\n  right: 9px;\r\n  width: 10px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 2px;\r\n  color: var(--acu-text-3);\r\n  pointer-events: none;\r\n  transform: translateY(-50%);\r\n  opacity: 0.8;\n}\n.acu-input-shell--sm .acu-input__number-indicator {\r\n  right: 7px;\r\n  width: 8px;\r\n  gap: 1px;\n}\n.acu-input__number-caret {\r\n  width: 0;\r\n  height: 0;\r\n  border-left: 4px solid transparent;\r\n  border-right: 4px solid transparent;\n}\n.acu-input__number-caret--up { border-bottom: 4px solid currentColor;\n}\n.acu-input__number-caret--down { border-top: 4px solid currentColor;\n}\n.acu-input-shell--sm .acu-input__number-caret {\r\n  border-left-width: 3px;\r\n  border-right-width: 3px;\n}\n.acu-input-shell--sm .acu-input__number-caret--up { border-bottom-width: 3px;\n}\n.acu-input-shell--sm .acu-input__number-caret--down { border-top-width: 3px;\n}\r\n", "src/presentation-v2/components/_lib/AcuInput.vue#style-0");
+    injectSfcStyle("\n.acu-input-shell {\n  position: relative;\n  display: block;\n  width: 100%;\n  min-width: 0;\n}\n.acu-input {\n  width: 100%; box-sizing: border-box;\n  border: 0 !important;\n  border-radius: var(--acu-radius-sm) !important;\n  background: var(--acu-bg-2) !important;\n  color: var(--acu-text-1) !important;\n  font: inherit !important;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-input--md { min-height: 32px; padding: 6px 9px !important; font-size: var(--acu-font-size-body, 12px) !important;\n}\n.acu-input--sm { min-height: 26px; padding: 3px 7px !important; font-size: var(--acu-font-size-caption, 11px) !important;\n}\n.acu-input-shell--number .acu-input--md { padding-right: 30px !important;\n}\n.acu-input-shell--number .acu-input--sm { padding-right: 25px !important;\n}\n.acu-input:hover:not(:disabled) {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2) !important;\n}\n.acu-input:focus {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow) !important;\n}\n.acu-input:disabled,\n.acu-input--disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-input[type=\"number\"] {\n  -moz-appearance: textfield;\n  font-variant-numeric: tabular-nums;\n}\n.acu-input[type=\"number\"]::-webkit-inner-spin-button,\n.acu-input[type=\"number\"]::-webkit-outer-spin-button {\n  -webkit-appearance: none; margin: 0;\n}\n.acu-input__number-indicator {\n  position: absolute;\n  top: 50%;\n  right: 9px;\n  width: 10px;\n  display: flex;\n  flex-direction: column;\n  align-items: center;\n  justify-content: center;\n  gap: 2px;\n  color: var(--acu-text-3);\n  pointer-events: none;\n  transform: translateY(-50%);\n  opacity: 0.8;\n}\n.acu-input-shell--sm .acu-input__number-indicator {\n  right: 7px;\n  width: 8px;\n  gap: 1px;\n}\n.acu-input__number-caret {\n  width: 0;\n  height: 0;\n  border-left: 4px solid transparent;\n  border-right: 4px solid transparent;\n}\n.acu-input__number-caret--up { border-bottom: 4px solid currentColor;\n}\n.acu-input__number-caret--down { border-top: 4px solid currentColor;\n}\n.acu-input-shell--sm .acu-input__number-caret {\n  border-left-width: 3px;\n  border-right-width: 3px;\n}\n.acu-input-shell--sm .acu-input__number-caret--up { border-bottom-width: 3px;\n}\n.acu-input-shell--sm .acu-input__number-caret--down { border-top-width: 3px;\n}\n", "src/presentation-v2/components/_lib/AcuInput.vue#style-0");
     var AcuInput_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$$ = [
@@ -70689,7 +73742,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-dialog-layer {\r\n  position: fixed;\r\n  inset: 0;\r\n  z-index: 9600;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  padding:\r\n    calc(18px + var(--acu-safe-top, 0px))\r\n    calc(18px + var(--acu-safe-right, 0px))\r\n    calc(18px + var(--acu-safe-bottom, 0px))\r\n    calc(18px + var(--acu-safe-left, 0px));\r\n  background: rgba(0, 0, 0, 0.52);\r\n  pointer-events: auto;\r\n  animation: acu-dialog-layer-in 0.16s ease-out both;\n}\n.acu-dialog-layer.is-closing {\r\n  pointer-events: none;\r\n  animation: acu-dialog-layer-out 0.16s ease-in both;\n}\n.acu-dialog {\r\n  width: min(440px, 100%);\r\n  max-height: min(560px, calc(100vh - 36px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));\r\n  max-height: min(560px, calc(100dvh - 36px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\r\n  padding: 16px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  box-shadow: var(--acu-shadow);\r\n  overflow: auto;\r\n  animation: acu-dialog-panel-in 0.16s ease-out both;\n}\n.acu-dialog__header {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\n}\n.acu-dialog__header h2 {\r\n  min-width: 0;\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\r\n  line-height: 1.35;\r\n  font-weight: 700;\n}\n.acu-dialog__message {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\n}\n.acu-dialog__field {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.4;\n}\n.acu-dialog__actions {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\r\n  padding-top: 2px;\n}\n.acu-dialog__actions--stacked :deep(.acu-btn) {\r\n  flex: 1 1 128px;\n}\n.acu-dialog-layer.is-closing .acu-dialog {\r\n  animation: acu-dialog-panel-out 0.16s ease-in both;\n}\n@keyframes acu-dialog-layer-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-dialog-layer-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-dialog-panel-in {\nfrom {\r\n    opacity: 0;\r\n    transform: translateY(6px);\n}\nto {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\n}\n@keyframes acu-dialog-panel-out {\nfrom {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\nto {\r\n    opacity: 0;\r\n    transform: translateY(6px);\n}\n}\n@media (max-width: 520px) {\n.acu-dialog-layer {\r\n    align-items: flex-end;\r\n    padding:\r\n      calc(12px + var(--acu-safe-top, 0px))\r\n      calc(12px + var(--acu-safe-right, 0px))\r\n      calc(12px + var(--acu-safe-bottom, 0px))\r\n      calc(12px + var(--acu-safe-left, 0px));\n}\n.acu-dialog {\r\n    width: 100%;\r\n    max-height: calc(100vh - 24px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\r\n    max-height: calc(100dvh - 24px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n}\n.acu-dialog__actions,\r\n  .acu-dialog__actions--stacked {\r\n    display: grid;\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuDialogHost.vue#style-0");
+    injectSfcStyle("\n.acu-dialog-layer {\n  position: fixed;\n  inset: 0;\n  z-index: 9600;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  width: 100vw;\n  width: 100dvw;\n  height: 100vh;\n  height: 100dvh;\n  padding:\n    calc(18px + var(--acu-safe-top, 0px))\n    calc(18px + var(--acu-safe-right, 0px))\n    calc(18px + var(--acu-safe-bottom, 0px))\n    calc(18px + var(--acu-safe-left, 0px));\n  background: rgba(0, 0, 0, 0.52);\n  pointer-events: auto;\n  animation: acu-dialog-layer-in 0.16s ease-out both;\n}\n.acu-dialog-layer.is-closing {\n  pointer-events: none;\n  animation: acu-dialog-layer-out 0.16s ease-in both;\n}\n.acu-dialog {\n  width: min(440px, 100%);\n  max-height: min(560px, calc(100vh - 36px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));\n  max-height: min(560px, calc(100dvh - 36px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n  padding: 16px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-bg-1);\n  color: var(--acu-text-1);\n  box-shadow: var(--acu-shadow);\n  overflow: auto;\n  animation: acu-dialog-panel-in 0.16s ease-out both;\n}\n.acu-dialog__header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n}\n.acu-dialog__header h2 {\n  min-width: 0;\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-panel-title, 15px);\n  line-height: 1.35;\n  font-weight: 700;\n}\n.acu-dialog__message {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n  white-space: pre-wrap;\n}\n.acu-dialog__field {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.4;\n}\n.acu-dialog__actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  flex-wrap: wrap;\n  padding-top: 2px;\n}\n.acu-dialog__actions--stacked :deep(.acu-btn) {\n  flex: 1 1 128px;\n}\n.acu-dialog-layer.is-closing .acu-dialog {\n  animation: acu-dialog-panel-out 0.16s ease-in both;\n}\n@keyframes acu-dialog-layer-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-dialog-layer-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-dialog-panel-in {\nfrom {\n    opacity: 0;\n    transform: translateY(6px);\n}\nto {\n    opacity: 1;\n    transform: translateY(0);\n}\n}\n@keyframes acu-dialog-panel-out {\nfrom {\n    opacity: 1;\n    transform: translateY(0);\n}\nto {\n    opacity: 0;\n    transform: translateY(6px);\n}\n}\n@media (max-width: 520px) {\n.acu-dialog-layer {\n    align-items: flex-end;\n    padding:\n      calc(12px + var(--acu-safe-top, 0px))\n      calc(12px + var(--acu-safe-right, 0px))\n      calc(12px + var(--acu-safe-bottom, 0px))\n      calc(12px + var(--acu-safe-left, 0px));\n}\n.acu-dialog {\n    width: 100%;\n    max-height: calc(100vh - 24px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n    max-height: calc(100dvh - 24px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n}\n.acu-dialog__actions,\n  .acu-dialog__actions--stacked {\n    display: grid;\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/components/_lib/AcuDialogHost.vue#style-0");
     var AcuDialogHost_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$_ = { class: "acu-dialog__header" };
@@ -70869,7 +73922,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-file-button { display: inline-flex;\n}\n.acu-file-button--block { width: 100%; min-width: 0;\n}\n.acu-file-button__input { display: none;\n}\n.acu-file-button__button--icon-only-default {\r\n  background: transparent;\r\n  color: var(--acu-text-2);\n}\n.acu-file-button__button--icon-only-default:hover:not(:disabled) {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);\r\n  color: var(--acu-text-1);\n}\n.acu-file-button__button--icon-only-default.acu-file-button__button--md {\r\n  width: 32px;\r\n  min-width: 32px;\n}\n.acu-file-button__button--icon-only-default.acu-file-button__button--sm {\r\n  width: 22px;\r\n  min-width: 22px;\r\n  min-height: 22px;\r\n  padding: 4px;\r\n  font-size: var(--acu-font-size-micro, 10px);\n}\r\n", "src/presentation-v2/components/_lib/AcuFileButton.vue#style-0");
+    injectSfcStyle("\n.acu-file-button { display: inline-flex;\n}\n.acu-file-button--block { width: 100%; min-width: 0;\n}\n.acu-file-button__input { display: none;\n}\n.acu-file-button__button--icon-only-default {\n  background: transparent;\n  color: var(--acu-text-2);\n}\n.acu-file-button__button--icon-only-default:hover:not(:disabled) {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);\n  color: var(--acu-text-1);\n}\n.acu-file-button__button--icon-only-default.acu-file-button__button--md {\n  width: 32px;\n  min-width: 32px;\n}\n.acu-file-button__button--icon-only-default.acu-file-button__button--sm {\n  width: 22px;\n  min-width: 22px;\n  min-height: 22px;\n  padding: 4px;\n  font-size: var(--acu-font-size-micro, 10px);\n}\n", "src/presentation-v2/components/_lib/AcuFileButton.vue#style-0");
     var AcuFileButton_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$Z = ["accept"];
@@ -70915,7 +73968,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-icon-btn {\r\n  --acu-icon-btn-size: 32px;\r\n  --acu-icon-btn-font-size: var(--acu-font-size-body-lg, 13px);\r\n  appearance: none !important;\r\n  -webkit-appearance: none !important;\r\n  flex: 0 0 auto;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  width: var(--acu-icon-btn-size) !important;\r\n  min-width: var(--acu-icon-btn-size) !important;\r\n  max-width: var(--acu-icon-btn-size) !important;\r\n  height: var(--acu-icon-btn-size) !important;\r\n  min-height: var(--acu-icon-btn-size) !important;\r\n  max-height: var(--acu-icon-btn-size) !important;\r\n  box-sizing: border-box !important;\r\n  margin: 0 !important;\r\n  padding: 0 !important;\r\n  border: 0 !important;\r\n  background: transparent !important;\r\n  color: var(--acu-text-2) !important;\r\n  border-radius: var(--acu-radius-sm) !important;\r\n  cursor: pointer;\r\n  font: inherit !important;\r\n  font-size: var(--acu-icon-btn-font-size) !important;\r\n  line-height: 1 !important;\r\n  text-align: center !important;\r\n  vertical-align: middle !important;\r\n  box-shadow: none !important;\r\n  outline: none !important;\r\n  -webkit-tap-highlight-color: transparent;\r\n  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;\n}\n.acu-icon-btn > i {\r\n  flex: 0 0 auto !important;\r\n  display: inline-block !important;\r\n  width: 1em !important;\r\n  min-width: 1em !important;\r\n  height: 1em !important;\r\n  min-height: 1em !important;\r\n  color: inherit !important;\r\n  font-size: inherit !important;\r\n  line-height: 1 !important;\r\n  text-align: center !important;\r\n  vertical-align: -0.125em !important;\n}\n.acu-icon-btn > i::before {\r\n  display: block !important;\r\n  width: 1em !important;\r\n  height: 1em !important;\r\n  color: inherit !important;\r\n  font-size: inherit !important;\r\n  line-height: 1 !important;\n}\n.acu-icon-btn--md {\r\n  --acu-icon-btn-size: 32px;\r\n  --acu-icon-btn-font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-icon-btn--sm {\r\n  --acu-icon-btn-size: 22px;\r\n  --acu-icon-btn-font-size: var(--acu-font-size-micro, 10px);\r\n  background: var(--acu-bg-2) !important;\n}\n.acu-icon-btn--default:hover:not(:disabled) {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2) !important;\r\n  color: var(--acu-text-1) !important;\n}\n.acu-icon-btn--danger:hover:not(:disabled) {\r\n  color: var(--acu-danger) !important;\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent) !important;\n}\n.acu-icon-btn--accent {\r\n  background: var(--acu-bg-2) !important;\r\n  color: var(--acu-text-1) !important;\n}\n.acu-icon-btn--accent:hover:not(:disabled) {\r\n  background: var(--acu-accent-glow) !important; color: var(--acu-accent) !important;\n}\n.acu-icon-btn:focus-visible {\r\n  outline: none !important;\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow) !important;\n}\n.acu-icon-btn:disabled { opacity: 0.4; cursor: not-allowed;\n}\r\n", "src/presentation-v2/components/_lib/AcuIconButton.vue#style-0");
+    injectSfcStyle("\n.acu-icon-btn {\n  --acu-icon-btn-size: 32px;\n  --acu-icon-btn-font-size: var(--acu-font-size-body-lg, 13px);\n  appearance: none !important;\n  -webkit-appearance: none !important;\n  flex: 0 0 auto;\n  display: inline-flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n  width: var(--acu-icon-btn-size) !important;\n  min-width: var(--acu-icon-btn-size) !important;\n  max-width: var(--acu-icon-btn-size) !important;\n  height: var(--acu-icon-btn-size) !important;\n  min-height: var(--acu-icon-btn-size) !important;\n  max-height: var(--acu-icon-btn-size) !important;\n  box-sizing: border-box !important;\n  margin: 0 !important;\n  padding: 0 !important;\n  border: 0 !important;\n  background: transparent !important;\n  color: var(--acu-text-2) !important;\n  border-radius: var(--acu-radius-sm) !important;\n  cursor: pointer;\n  font: inherit !important;\n  font-size: var(--acu-icon-btn-font-size) !important;\n  line-height: 1 !important;\n  text-align: center !important;\n  vertical-align: middle !important;\n  box-shadow: none !important;\n  outline: none !important;\n  -webkit-tap-highlight-color: transparent;\n  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;\n}\n.acu-icon-btn > i {\n  flex: 0 0 auto !important;\n  display: inline-block !important;\n  width: 1em !important;\n  min-width: 1em !important;\n  height: 1em !important;\n  min-height: 1em !important;\n  color: inherit !important;\n  font-size: inherit !important;\n  line-height: 1 !important;\n  text-align: center !important;\n  vertical-align: -0.125em !important;\n}\n.acu-icon-btn > i::before {\n  display: block !important;\n  width: 1em !important;\n  height: 1em !important;\n  color: inherit !important;\n  font-size: inherit !important;\n  line-height: 1 !important;\n}\n.acu-icon-btn--md {\n  --acu-icon-btn-size: 32px;\n  --acu-icon-btn-font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-icon-btn--sm {\n  --acu-icon-btn-size: 22px;\n  --acu-icon-btn-font-size: var(--acu-font-size-micro, 10px);\n  background: var(--acu-bg-2) !important;\n}\n.acu-icon-btn--default:hover:not(:disabled) {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2) !important;\n  color: var(--acu-text-1) !important;\n}\n.acu-icon-btn--danger:hover:not(:disabled) {\n  color: var(--acu-danger) !important;\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent) !important;\n}\n.acu-icon-btn--accent {\n  background: var(--acu-bg-2) !important;\n  color: var(--acu-text-1) !important;\n}\n.acu-icon-btn--accent:hover:not(:disabled) {\n  background: var(--acu-accent-glow) !important; color: var(--acu-accent) !important;\n}\n.acu-icon-btn:focus-visible {\n  outline: none !important;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow) !important;\n}\n.acu-icon-btn:disabled { opacity: 0.4; cursor: not-allowed;\n}\n", "src/presentation-v2/components/_lib/AcuIconButton.vue#style-0");
     var AcuIconButton_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$Y = [
@@ -71159,7 +74212,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-toast-viewport {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  z-index: 9410;\r\n  box-sizing: border-box;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  min-height: 100%;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\r\n  pointer-events: none;\n}\n.acu-toast-viewport,\r\n.acu-toast-viewport * {\r\n  box-sizing: border-box;\n}\n.acu-toast-viewport__list {\r\n  position: absolute;\r\n  top: calc(62px + var(--acu-safe-top, 0px));\r\n  right: calc(18px + var(--acu-safe-right, 0px));\r\n  bottom: auto;\r\n  width: min(360px, calc(100% - 36px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\r\n  max-height: calc(100% - 80px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  margin: 0;\r\n  padding: 0;\r\n  overflow: visible;\r\n  list-style: none;\n}\n.acu-v2-toast {\r\n  --acu-toast-tone: var(--acu-accent);\r\n  position: relative;\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: 26px minmax(0, 1fr) auto auto;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 10px 12px;\r\n  overflow: hidden;\r\n  border: 1px solid color-mix(in srgb, var(--acu-toast-tone) 22%, var(--acu-border-2));\r\n  border-radius: var(--acu-radius-md);\r\n  background:\r\n    linear-gradient(\r\n      90deg,\r\n      color-mix(in srgb, var(--acu-toast-tone) 7%, transparent),\r\n      transparent 48%\r\n    ),\r\n    color-mix(in srgb, var(--acu-bg-1) 97%, var(--acu-text-1) 3%);\r\n  box-shadow:\r\n    0 18px 46px rgba(0, 0, 0, 0.18),\r\n    0 4px 16px rgba(0, 0, 0, 0.12),\r\n    inset 0 1px 0 color-mix(in srgb, var(--acu-text-1) 8%, transparent);\r\n  color: var(--acu-text-1);\r\n  pointer-events: auto;\r\n  animation: acu-toast-in 0.16s ease-out both;\n}\n.acu-v2-toast--success {\r\n  --acu-toast-tone: var(--acu-success);\n}\n.acu-v2-toast--warning {\r\n  --acu-toast-tone: var(--acu-warning);\n}\n.acu-v2-toast--error {\r\n  --acu-toast-tone: var(--acu-danger);\n}\n.acu-v2-toast.is-closing {\r\n  pointer-events: none;\r\n  animation: acu-toast-out 0.16s ease-in both;\n}\n.acu-v2-toast__icon {\r\n  --acu-icon-color: var(--acu-toast-tone);\r\n  min-width: 0;\r\n  width: 26px;\r\n  height: 26px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-toast-tone) 13%, transparent);\r\n  color: var(--acu-toast-tone);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1;\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-toast-tone) 18%, transparent);\n}\n.acu-v2-toast__text {\r\n  min-width: 0;\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-toast__action {\r\n  white-space: nowrap;\n}\n.acu-v2-toast__dismiss {\r\n  flex: 0 0 auto;\n}\n@keyframes acu-toast-in {\nfrom {\r\n    opacity: 0;\r\n    transform: translateY(-6px);\n}\nto {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\n}\n@keyframes acu-toast-out {\nfrom {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\nto {\r\n    opacity: 0;\r\n    transform: translateY(-6px);\n}\n}\n@media (max-width: 640px) {\n.acu-toast-viewport__list {\r\n    top: calc(58px + var(--acu-safe-top, 0px));\r\n    right: auto;\r\n    bottom: auto;\r\n    left: calc(50% + (var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)) / 2);\r\n    width: clamp(240px, 70vw, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\r\n    max-height: calc(100% - 70px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\r\n    transform: translateX(-50%);\n}\n.acu-v2-toast {\r\n    grid-template-columns: 22px minmax(0, 1fr) auto;\r\n    gap: 7px;\r\n    padding: 8px 9px;\n}\n.acu-v2-toast__icon {\r\n    width: 22px;\r\n    height: 22px;\r\n    font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-toast__text {\r\n    font-size: var(--acu-font-size-caption, 11px);\r\n    line-height: 1.4;\n}\n.acu-v2-toast__action {\r\n    grid-column: 2 / 4;\r\n    justify-self: start;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuToastViewport.vue#style-0");
+    injectSfcStyle("\n.acu-toast-viewport {\n  position: fixed;\n  top: 0;\n  right: 0;\n  bottom: 0;\n  left: 0;\n  inset: 0;\n  z-index: 9410;\n  box-sizing: border-box;\n  width: 100%;\n  width: 100vw;\n  width: 100dvw;\n  min-height: 100%;\n  min-height: 100vh;\n  min-height: 100dvh;\n  overflow: hidden;\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-ui);\n  font-size: var(--acu-font-size-body);\n  pointer-events: none;\n}\n.acu-toast-viewport,\n.acu-toast-viewport * {\n  box-sizing: border-box;\n}\n.acu-toast-viewport__list {\n  position: absolute;\n  top: calc(62px + var(--acu-safe-top, 0px));\n  right: calc(18px + var(--acu-safe-right, 0px));\n  bottom: auto;\n  width: min(360px, calc(100% - 36px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n  max-height: calc(100% - 80px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  margin: 0;\n  padding: 0;\n  overflow: visible;\n  list-style: none;\n}\n.acu-v2-toast {\n  --acu-toast-tone: var(--acu-accent);\n  position: relative;\n  min-width: 0;\n  display: grid;\n  grid-template-columns: 26px minmax(0, 1fr) auto auto;\n  align-items: center;\n  gap: 8px;\n  padding: 10px 12px;\n  overflow: hidden;\n  border: 1px solid color-mix(in srgb, var(--acu-toast-tone) 22%, var(--acu-border-2));\n  border-radius: var(--acu-radius-md);\n  background:\n    linear-gradient(\n      90deg,\n      color-mix(in srgb, var(--acu-toast-tone) 7%, transparent),\n      transparent 48%\n    ),\n    color-mix(in srgb, var(--acu-bg-1) 97%, var(--acu-text-1) 3%);\n  box-shadow:\n    0 18px 46px rgba(0, 0, 0, 0.18),\n    0 4px 16px rgba(0, 0, 0, 0.12),\n    inset 0 1px 0 color-mix(in srgb, var(--acu-text-1) 8%, transparent);\n  color: var(--acu-text-1);\n  pointer-events: auto;\n  animation: acu-toast-in 0.16s ease-out both;\n}\n.acu-v2-toast--success {\n  --acu-toast-tone: var(--acu-success);\n}\n.acu-v2-toast--warning {\n  --acu-toast-tone: var(--acu-warning);\n}\n.acu-v2-toast--error {\n  --acu-toast-tone: var(--acu-danger);\n}\n.acu-v2-toast.is-closing {\n  pointer-events: none;\n  animation: acu-toast-out 0.16s ease-in both;\n}\n.acu-v2-toast__icon {\n  --acu-icon-color: var(--acu-toast-tone);\n  min-width: 0;\n  width: 26px;\n  height: 26px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-toast-tone) 13%, transparent);\n  color: var(--acu-toast-tone);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1;\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-toast-tone) 18%, transparent);\n}\n.acu-v2-toast__text {\n  min-width: 0;\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.45;\n  overflow-wrap: anywhere;\n}\n.acu-v2-toast__action {\n  white-space: nowrap;\n}\n.acu-v2-toast__dismiss {\n  flex: 0 0 auto;\n}\n@keyframes acu-toast-in {\nfrom {\n    opacity: 0;\n    transform: translateY(-6px);\n}\nto {\n    opacity: 1;\n    transform: translateY(0);\n}\n}\n@keyframes acu-toast-out {\nfrom {\n    opacity: 1;\n    transform: translateY(0);\n}\nto {\n    opacity: 0;\n    transform: translateY(-6px);\n}\n}\n@media (max-width: 640px) {\n.acu-toast-viewport__list {\n    top: calc(58px + var(--acu-safe-top, 0px));\n    right: auto;\n    bottom: auto;\n    left: calc(50% + (var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)) / 2);\n    width: clamp(240px, 70vw, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n    max-height: calc(100% - 70px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n    transform: translateX(-50%);\n}\n.acu-v2-toast {\n    grid-template-columns: 22px minmax(0, 1fr) auto;\n    gap: 7px;\n    padding: 8px 9px;\n}\n.acu-v2-toast__icon {\n    width: 22px;\n    height: 22px;\n    font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-toast__text {\n    font-size: var(--acu-font-size-caption, 11px);\n    line-height: 1.4;\n}\n.acu-v2-toast__action {\n    grid-column: 2 / 4;\n    justify-self: start;\n}\n}\n", "src/presentation-v2/components/_lib/AcuToastViewport.vue#style-0");
     var AcuToastViewport_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$X = {
@@ -71415,7 +74468,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-mobile-panel-nav {\r\n  display: none;\n}\n@media (max-width: 860px) {\n.acu-mobile-panel-nav {\r\n    position: sticky;\r\n    top: 0;\r\n    z-index: 30;\r\n    display: block;\r\n    margin: -20px -20px 4px;\r\n    padding: 0;\r\n    border-top: 0;\r\n    border-bottom: 1px solid var(--acu-border-2);\r\n    background: color-mix(in srgb, var(--acu-bg-0) 94%, transparent);\r\n    backdrop-filter: blur(10px);\r\n    -webkit-backdrop-filter: blur(10px);\n}\n.acu-mobile-panel-nav::before,\r\n  .acu-mobile-panel-nav::after {\r\n    content: \"\";\r\n    position: absolute;\r\n    top: 0;\r\n    bottom: 1px;\r\n    z-index: 2;\r\n    width: 22px;\r\n    pointer-events: none;\n}\n.acu-mobile-panel-nav::before {\r\n    left: 0;\r\n    background: linear-gradient(to right, var(--acu-bg-0), transparent);\n}\n.acu-mobile-panel-nav::after {\r\n    right: 0;\r\n    background: linear-gradient(to left, var(--acu-bg-0), transparent);\n}\n.acu-mobile-panel-nav__track {\r\n    min-width: 0;\r\n    display: flex;\r\n    gap: 0;\r\n    overflow-x: auto;\r\n    overscroll-behavior-x: contain;\r\n    scroll-padding-inline: 18px;\r\n    scrollbar-width: none;\r\n    padding: 0 18px;\r\n    border: 0;\r\n    border-radius: 0;\r\n    background: transparent;\n}\n.acu-mobile-panel-nav__track::-webkit-scrollbar {\r\n    display: none;\n}\n.acu-mobile-panel-nav__item {\r\n    flex: 0 0 auto;\r\n    position: relative;\r\n    min-width: 84px;\r\n    min-height: 44px;\r\n    max-width: none;\r\n    padding: 0 12px;\r\n    border: 0;\r\n    border-radius: 0;\r\n    background: transparent;\r\n    color: var(--acu-text-3);\r\n    font: inherit;\r\n    font-size: var(--acu-font-size-body, 12px);\r\n    font-weight: 650;\r\n    line-height: 1.2;\r\n    white-space: nowrap;\r\n    overflow: hidden;\r\n    text-overflow: ellipsis;\r\n    cursor: pointer;\r\n    transition:\r\n      background 0.15s ease,\r\n      border-color 0.15s ease,\r\n      color 0.15s ease,\r\n      box-shadow 0.15s ease;\n}\n.acu-mobile-panel-nav__item:hover {\r\n    background: var(--acu-hover-overlay);\r\n    color: var(--acu-text-1);\n}\n.acu-mobile-panel-nav__item::after {\r\n    content: \"\";\r\n    position: absolute;\r\n    right: 12px;\r\n    bottom: 0;\r\n    left: 12px;\r\n    height: 2px;\r\n    border-radius: 2px 2px 0 0;\r\n    background: transparent;\r\n    transition: background 0.15s ease, opacity 0.15s ease;\n}\n.acu-mobile-panel-nav__item.is-active {\r\n    background: transparent;\r\n    color: var(--acu-text-1);\r\n    box-shadow: none;\n}\n.acu-mobile-panel-nav__item.is-active::after {\r\n    background: var(--acu-accent);\n}\n.acu-mobile-panel-nav__item:focus-visible {\r\n    outline: none;\r\n    box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-mobile-panel-nav__item.is-active:focus-visible {\r\n    box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n}\n@media (max-width: 720px) {\n.acu-mobile-panel-nav {\r\n    margin: -14px -14px 4px;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuMobilePanelNav.vue#style-0");
+    injectSfcStyle("\n.acu-mobile-panel-nav {\n  display: none;\n}\n@media (max-width: 860px) {\n.acu-mobile-panel-nav {\n    position: sticky;\n    top: 0;\n    z-index: 30;\n    display: block;\n    margin: -20px -20px 4px;\n    padding: 0;\n    border-top: 0;\n    border-bottom: 1px solid var(--acu-border-2);\n    background: color-mix(in srgb, var(--acu-bg-0) 94%, transparent);\n    backdrop-filter: blur(10px);\n    -webkit-backdrop-filter: blur(10px);\n}\n.acu-mobile-panel-nav::before,\n  .acu-mobile-panel-nav::after {\n    content: \"\";\n    position: absolute;\n    top: 0;\n    bottom: 1px;\n    z-index: 2;\n    width: 22px;\n    pointer-events: none;\n}\n.acu-mobile-panel-nav::before {\n    left: 0;\n    background: linear-gradient(to right, var(--acu-bg-0), transparent);\n}\n.acu-mobile-panel-nav::after {\n    right: 0;\n    background: linear-gradient(to left, var(--acu-bg-0), transparent);\n}\n.acu-mobile-panel-nav__track {\n    min-width: 0;\n    display: flex;\n    gap: 0;\n    overflow-x: auto;\n    overscroll-behavior-x: contain;\n    scroll-padding-inline: 18px;\n    scrollbar-width: none;\n    padding: 0 18px;\n    border: 0;\n    border-radius: 0;\n    background: transparent;\n}\n.acu-mobile-panel-nav__track::-webkit-scrollbar {\n    display: none;\n}\n.acu-mobile-panel-nav__item {\n    flex: 0 0 auto;\n    position: relative;\n    min-width: 84px;\n    min-height: 44px;\n    max-width: none;\n    padding: 0 12px;\n    border: 0;\n    border-radius: 0;\n    background: transparent;\n    color: var(--acu-text-3);\n    font: inherit;\n    font-size: var(--acu-font-size-body, 12px);\n    font-weight: 650;\n    line-height: 1.2;\n    white-space: nowrap;\n    overflow: hidden;\n    text-overflow: ellipsis;\n    cursor: pointer;\n    transition:\n      background 0.15s ease,\n      border-color 0.15s ease,\n      color 0.15s ease,\n      box-shadow 0.15s ease;\n}\n.acu-mobile-panel-nav__item:hover {\n    background: var(--acu-hover-overlay);\n    color: var(--acu-text-1);\n}\n.acu-mobile-panel-nav__item::after {\n    content: \"\";\n    position: absolute;\n    right: 12px;\n    bottom: 0;\n    left: 12px;\n    height: 2px;\n    border-radius: 2px 2px 0 0;\n    background: transparent;\n    transition: background 0.15s ease, opacity 0.15s ease;\n}\n.acu-mobile-panel-nav__item.is-active {\n    background: transparent;\n    color: var(--acu-text-1);\n    box-shadow: none;\n}\n.acu-mobile-panel-nav__item.is-active::after {\n    background: var(--acu-accent);\n}\n.acu-mobile-panel-nav__item:focus-visible {\n    outline: none;\n    box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-mobile-panel-nav__item.is-active:focus-visible {\n    box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n}\n@media (max-width: 720px) {\n.acu-mobile-panel-nav {\n    margin: -14px -14px 4px;\n}\n}\n", "src/presentation-v2/components/_lib/AcuMobilePanelNav.vue#style-0");
     var AcuMobilePanelNav_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$W = {
@@ -71478,7 +74531,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-panel-grid {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(var(--acu-panel-grid-columns), minmax(0, 1fr));\r\n  gap: 16px;\r\n  align-items: stretch;\n}\n.acu-panel-grid > :deep(*) {\r\n  min-width: 0;\n}\n@media (max-width: 860px) {\n.acu-panel-grid--collapse-md {\r\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 1080px) {\n.acu-panel-grid--collapse-lg {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuPanelGrid.vue#style-0");
+    injectSfcStyle("\n.acu-panel-grid {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(var(--acu-panel-grid-columns), minmax(0, 1fr));\n  gap: 16px;\n  align-items: stretch;\n}\n.acu-panel-grid > :deep(*) {\n  min-width: 0;\n}\n@media (max-width: 860px) {\n.acu-panel-grid--collapse-md {\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 1080px) {\n.acu-panel-grid--collapse-lg {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/components/_lib/AcuPanelGrid.vue#style-0");
     var AcuPanelGrid_vue_vue_type_style_index_0_lang = null;
 
     function _sfc_render$Z(_ctx, _cache, $props, $setup, $data, $options) {
@@ -71936,7 +74989,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-form-row {\r\n  display: flex; flex-direction: column; gap: 5px;\r\n  color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\r\n  min-width: 0;\n}\n.acu-form-row__label { font-weight: 500;\n}\n.acu-form-row__hint { color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px); line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-form-row :deep(input[type=\"text\"]),\r\n.acu-form-row :deep(input[type=\"password\"]),\r\n.acu-form-row :deep(input[type=\"number\"]),\r\n.acu-form-row :deep(select),\r\n.acu-form-row :deep(textarea) {\r\n  min-width: 0; min-height: 32px; padding: 6px 9px;\r\n  border: 0 !important;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2) !important;\r\n  color: var(--acu-text-1) !important;\r\n  font: inherit;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-form-row :deep(textarea) {\r\n  min-height: unset;\r\n  resize: none;\n}\n.acu-form-row :deep(select) {\r\n  appearance: none;\r\n  -webkit-appearance: none;\r\n  padding-right: 28px;\r\n  background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\") !important;\r\n  background-repeat: no-repeat !important;\r\n  background-position: right 9px center !important;\r\n  background-size: 10px 6px !important;\r\n  cursor: pointer;\n}\n.acu-form-row :deep(input:focus),\r\n.acu-form-row :deep(select:focus),\r\n.acu-form-row :deep(textarea:focus) {\r\n  outline: none;\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\r\n", "src/presentation-v2/components/_lib/AcuFormRow.vue#style-0");
+    injectSfcStyle("\n.acu-form-row {\n  display: flex; flex-direction: column; gap: 5px;\n  color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n  min-width: 0;\n}\n.acu-form-row__label { font-weight: 500;\n}\n.acu-form-row__hint { color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px); line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-form-row :deep(input[type=\"text\"]),\n.acu-form-row :deep(input[type=\"password\"]),\n.acu-form-row :deep(input[type=\"number\"]),\n.acu-form-row :deep(select),\n.acu-form-row :deep(textarea) {\n  min-width: 0; min-height: 32px; padding: 6px 9px;\n  border: 0 !important;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2) !important;\n  color: var(--acu-text-1) !important;\n  font: inherit;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-form-row :deep(textarea) {\n  min-height: unset;\n  resize: none;\n}\n.acu-form-row :deep(select) {\n  appearance: none;\n  -webkit-appearance: none;\n  padding-right: 28px;\n  background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\") !important;\n  background-repeat: no-repeat !important;\n  background-position: right 9px center !important;\n  background-size: 10px 6px !important;\n  cursor: pointer;\n}\n.acu-form-row :deep(input:focus),\n.acu-form-row :deep(select:focus),\n.acu-form-row :deep(textarea:focus) {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n", "src/presentation-v2/components/_lib/AcuFormRow.vue#style-0");
     var AcuFormRow_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$V = { class: "acu-form-row" };
@@ -71985,7 +75038,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-message {\r\n  padding: 8px 0 8px 10px;\r\n  border-radius: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  border: 0;\r\n  border-left: 2px solid color-mix(in srgb, var(--acu-text-3) 28%, transparent);\r\n  line-height: 1.5;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\n}\n.acu-message--info {\r\n  border-left-color: color-mix(in srgb, var(--acu-text-3) 28%, transparent);\n}\n.acu-message--success {\r\n  border-left-color: var(--acu-success);\n}\n.acu-message--warning {\r\n  border-left-color: var(--acu-warning);\n}\n.acu-message--error {\r\n  border-left-color: var(--acu-danger);\n}\r\n", "src/presentation-v2/components/_lib/AcuMessage.vue#style-0");
+    injectSfcStyle("\n.acu-message {\n  padding: 8px 0 8px 10px;\n  border-radius: 0;\n  font-size: var(--acu-font-size-body, 12px);\n  border: 0;\n  border-left: 2px solid color-mix(in srgb, var(--acu-text-3) 28%, transparent);\n  line-height: 1.5;\n  background: transparent;\n  color: var(--acu-text-2);\n}\n.acu-message--info {\n  border-left-color: color-mix(in srgb, var(--acu-text-3) 28%, transparent);\n}\n.acu-message--success {\n  border-left-color: var(--acu-success);\n}\n.acu-message--warning {\n  border-left-color: var(--acu-warning);\n}\n.acu-message--error {\n  border-left-color: var(--acu-danger);\n}\n", "src/presentation-v2/components/_lib/AcuMessage.vue#style-0");
     var AcuMessage_vue_vue_type_style_index_0_lang = null;
 
     function _sfc_render$X(_ctx, _cache, $props, $setup, $data, $options) {
@@ -72024,7 +75077,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-info-banner {\r\n  display: flex;\r\n  align-items: flex-start;\r\n  gap: 10px;\r\n  padding: 9px 10px;\r\n  border-radius: var(--acu-radius-sm);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\r\n  background: color-mix(in srgb, var(--acu-text-3) 12%, transparent);\r\n  color: var(--acu-text-2);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-text-3) 18%, transparent);\r\n  min-width: 0;\n}\n.acu-info-banner__icon {\r\n  flex-shrink: 0;\r\n  margin-top: 2px;\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-info-banner__content {\r\n  min-width: 0;\r\n  width: 100%;\r\n  word-wrap: break-word;\r\n  overflow-wrap: anywhere;\n}\n.acu-info-banner--info {\r\n  background: color-mix(in srgb, var(--acu-text-3) 12%, transparent);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-text-3) 18%, transparent);\n}\n.acu-info-banner--info .acu-info-banner__icon {\r\n  --acu-icon-color: var(--acu-text-3);\r\n  color: var(--acu-text-3);\n}\n.acu-info-banner--tip {\r\n  background: color-mix(in srgb, var(--acu-accent) 10%, transparent);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 18%, transparent);\n}\n.acu-info-banner--tip .acu-info-banner__icon {\r\n  --acu-icon-color: var(--acu-accent);\r\n  color: var(--acu-accent);\n}\n.acu-info-banner--warning {\r\n  background: color-mix(in srgb, var(--acu-warning) 10%, transparent);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-warning) 20%, transparent);\n}\n.acu-info-banner--warning .acu-info-banner__icon {\r\n  --acu-icon-color: var(--acu-warning);\r\n  color: var(--acu-warning);\n}\r\n", "src/presentation-v2/components/_lib/AcuInfoBanner.vue#style-0");
+    injectSfcStyle("\n.acu-info-banner {\n  display: flex;\n  align-items: flex-start;\n  gap: 10px;\n  padding: 9px 10px;\n  border-radius: var(--acu-radius-sm);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n  background: color-mix(in srgb, var(--acu-text-3) 12%, transparent);\n  color: var(--acu-text-2);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-text-3) 18%, transparent);\n  min-width: 0;\n}\n.acu-info-banner__icon {\n  flex-shrink: 0;\n  margin-top: 2px;\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-info-banner__content {\n  min-width: 0;\n  width: 100%;\n  word-wrap: break-word;\n  overflow-wrap: anywhere;\n}\n.acu-info-banner--info {\n  background: color-mix(in srgb, var(--acu-text-3) 12%, transparent);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-text-3) 18%, transparent);\n}\n.acu-info-banner--info .acu-info-banner__icon {\n  --acu-icon-color: var(--acu-text-3);\n  color: var(--acu-text-3);\n}\n.acu-info-banner--tip {\n  background: color-mix(in srgb, var(--acu-accent) 10%, transparent);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 18%, transparent);\n}\n.acu-info-banner--tip .acu-info-banner__icon {\n  --acu-icon-color: var(--acu-accent);\n  color: var(--acu-accent);\n}\n.acu-info-banner--warning {\n  background: color-mix(in srgb, var(--acu-warning) 10%, transparent);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-warning) 20%, transparent);\n}\n.acu-info-banner--warning .acu-info-banner__icon {\n  --acu-icon-color: var(--acu-warning);\n  color: var(--acu-warning);\n}\n", "src/presentation-v2/components/_lib/AcuInfoBanner.vue#style-0");
     var AcuInfoBanner_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$U = { class: "acu-info-banner__content" };
@@ -72232,7 +75285,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-panel {\r\n  min-width: 0; padding: 16px;\r\n  background: var(--acu-bg-1);\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  display: flex; flex-direction: column; gap: 0;\r\n  height: 100%;\n}\n.acu-panel__header {\r\n  display: flex; align-items: center; justify-content: space-between;\r\n  gap: 12px; margin-bottom: 12px;\r\n  min-height: 32px;\r\n  transition: margin-bottom 0.15s ease;\n}\n.acu-panel__header--description-open {\r\n  margin-bottom: 8px;\n}\n.acu-panel__title {\r\n  margin: 0;\r\n  min-width: 0;\r\n  flex: 1 1 auto;\r\n  font-size: var(--acu-font-size-panel-title, 15px);\r\n  line-height: 1.3;\r\n  color: var(--acu-text-1);\n}\n.acu-panel__header-right {\r\n  margin-left: auto;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  flex-shrink: 0;\n}\n.acu-panel__actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0;\n}\n.acu-panel__description-button {\r\n  width: 28px;\r\n  height: 28px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  color: var(--acu-text-3);\r\n  cursor: pointer;\r\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;\n}\n.acu-panel__description-button:hover {\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-1);\n}\n.acu-panel__description-button--open {\r\n  background: color-mix(in srgb, var(--acu-text-3) 12%, transparent);\r\n  color: var(--acu-text-1);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-text-3) 18%, transparent);\n}\n.acu-panel__description-button:focus-visible {\r\n  outline: none;\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-panel__body { display: flex; flex-direction: column; gap: 12px; min-width: 0; flex: 1 1 auto;\n}\n.acu-panel__description-region {\r\n  min-width: 0;\r\n  overflow: hidden;\n}\n.acu-panel__description-region-inner {\r\n  padding-bottom: 12px;\r\n  overflow: hidden;\n}\r\n", "src/presentation-v2/components/_lib/AcuPanel.vue#style-0");
+    injectSfcStyle("\n.acu-panel {\n  min-width: 0; padding: 16px;\n  background: var(--acu-bg-1);\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  display: flex; flex-direction: column; gap: 0;\n  height: 100%;\n}\n.acu-panel__header {\n  display: flex; align-items: center; justify-content: space-between;\n  gap: 12px; margin-bottom: 12px;\n  min-height: 32px;\n  transition: margin-bottom 0.15s ease;\n}\n.acu-panel__header--description-open {\n  margin-bottom: 8px;\n}\n.acu-panel__title {\n  margin: 0;\n  min-width: 0;\n  flex: 1 1 auto;\n  font-size: var(--acu-font-size-panel-title, 15px);\n  line-height: 1.3;\n  color: var(--acu-text-1);\n}\n.acu-panel__header-right {\n  margin-left: auto;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-shrink: 0;\n}\n.acu-panel__actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0;\n}\n.acu-panel__description-button {\n  width: 28px;\n  height: 28px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: var(--acu-text-3);\n  cursor: pointer;\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;\n}\n.acu-panel__description-button:hover {\n  background: var(--acu-bg-2);\n  color: var(--acu-text-1);\n}\n.acu-panel__description-button--open {\n  background: color-mix(in srgb, var(--acu-text-3) 12%, transparent);\n  color: var(--acu-text-1);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-text-3) 18%, transparent);\n}\n.acu-panel__description-button:focus-visible {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-panel__body { display: flex; flex-direction: column; gap: 12px; min-width: 0; flex: 1 1 auto;\n}\n.acu-panel__description-region {\n  min-width: 0;\n  overflow: hidden;\n}\n.acu-panel__description-region-inner {\n  padding-bottom: 12px;\n  overflow: hidden;\n}\n", "src/presentation-v2/components/_lib/AcuPanel.vue#style-0");
     var AcuPanel_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$T = { class: "acu-panel" };
@@ -72452,7 +75505,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-textarea {\r\n  appearance: none !important;\r\n  -webkit-appearance: none !important;\r\n  display: block !important;\r\n  width: 100% !important;\r\n  min-width: 0 !important;\r\n  box-sizing: border-box !important;\r\n  margin: 0 !important;\r\n  padding: 8px 10px !important;\r\n  border: 0 !important;\r\n  border-radius: var(--acu-radius-sm) !important;\r\n  background: var(--acu-bg-2) !important;\r\n  color: var(--acu-text-1) !important;\r\n  font: inherit !important;\r\n  font-size: var(--acu-font-size-body, 12px) !important;\r\n  line-height: 1.45 !important;\r\n  letter-spacing: 0 !important;\r\n  text-align: start !important;\r\n  resize: none !important;\r\n  outline: none !important;\r\n  box-shadow: none !important;\r\n  caret-color: var(--acu-text-1);\r\n  -webkit-tap-highlight-color: transparent;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-textarea--auto-resize {\r\n  overflow-x: hidden !important;\r\n  overflow-y: auto;\n}\n.acu-textarea:hover:not(:disabled) {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2) !important;\n}\n.acu-textarea:focus {\r\n  outline: none !important;\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow) !important;\n}\n.acu-textarea:disabled {\r\n  opacity: 0.5; cursor: not-allowed;\n}\r\n", "src/presentation-v2/components/_lib/AcuTextarea.vue#style-0");
+    injectSfcStyle("\n.acu-textarea {\n  appearance: none !important;\n  -webkit-appearance: none !important;\n  display: block !important;\n  width: 100% !important;\n  min-width: 0 !important;\n  box-sizing: border-box !important;\n  margin: 0 !important;\n  padding: 8px 10px !important;\n  border: 0 !important;\n  border-radius: var(--acu-radius-sm) !important;\n  background: var(--acu-bg-2) !important;\n  color: var(--acu-text-1) !important;\n  font: inherit !important;\n  font-size: var(--acu-font-size-body, 12px) !important;\n  line-height: 1.45 !important;\n  letter-spacing: 0 !important;\n  text-align: start !important;\n  resize: none !important;\n  outline: none !important;\n  box-shadow: none !important;\n  caret-color: var(--acu-text-1);\n  -webkit-tap-highlight-color: transparent;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-textarea--auto-resize {\n  overflow-x: hidden !important;\n  overflow-y: auto;\n}\n.acu-textarea:hover:not(:disabled) {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2) !important;\n}\n.acu-textarea:focus {\n  outline: none !important;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow) !important;\n}\n.acu-textarea:disabled {\n  opacity: 0.5; cursor: not-allowed;\n}\n", "src/presentation-v2/components/_lib/AcuTextarea.vue#style-0");
     var AcuTextarea_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$S = [
@@ -72534,7 +75587,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-preset-dd { position: relative; flex: 1; min-width: 0;\n}\n.acu-preset-dd__trigger {\r\n  display: flex; align-items: center; gap: 8px; width: 100%;\r\n  min-height: 32px; padding: 6px 9px;\r\n  background: var(--acu-bg-2); border: 0;\r\n  border-radius: var(--acu-radius-sm); color: var(--acu-text-1);\r\n  font: inherit; font-size: var(--acu-font-size-body, 12px); cursor: pointer;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-preset-dd__trigger:hover {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);\n}\n.acu-preset-dd__trigger:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-preset-dd__trigger:disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-preset-dd--disabled { pointer-events: none; opacity: 0.5;\n}\n.acu-preset-dd__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;\n}\n.acu-preset-dd__caret { font-size: var(--acu-font-size-micro, 10px); --acu-icon-color: var(--acu-text-3); color: var(--acu-text-3); transition: transform 0.15s ease;\n}\n.acu-preset-dd__caret--open { transform: rotate(180deg);\n}\n.acu-preset-dd__menu {\r\n  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 100;\r\n  margin: 0; padding: 4px 0; list-style: none;\r\n  background: var(--acu-bg-1); border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm); box-shadow: var(--acu-shadow);\r\n  max-height: 240px; overflow-y: auto;\n}\n.acu-preset-dd__item {\r\n  display: flex; align-items: center; gap: 8px;\r\n  padding: 8px 12px; cursor: pointer; font-size: var(--acu-font-size-body-lg, 13px);\r\n  color: var(--acu-text-2); transition: background 0.1s ease;\n}\n.acu-preset-dd__item:hover { background: var(--acu-hover-overlay); color: var(--acu-text-1);\n}\n.acu-preset-dd__item--active { color: var(--acu-on-accent); background: var(--acu-accent);\n}\n.acu-preset-dd__item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500;\n}\n.acu-preset-dd__item-meta { font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3); white-space: nowrap;\n}\n.acu-preset-dd__star {\r\n  width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;\r\n  border: 0; background: transparent; color: var(--acu-text-3); cursor: pointer;\r\n  border-radius: var(--acu-radius-sm); font-size: var(--acu-font-size-body, 12px); transition: color 0.15s ease;\n}\n.acu-preset-dd__star:hover { color: var(--acu-text-1); background: var(--acu-hover-overlay);\n}\n.acu-preset-dd__star--active { color: var(--acu-text-1);\n}\n.acu-preset-dd__item--active .acu-preset-dd__item-meta,\r\n.acu-preset-dd__item--active .acu-preset-dd__star,\r\n.acu-preset-dd__item--active .acu-preset-dd__check { --acu-icon-color: var(--acu-on-accent); color: var(--acu-on-accent);\n}\n.acu-preset-dd__check { font-size: var(--acu-font-size-caption, 11px); --acu-icon-color: var(--acu-text-1); color: var(--acu-text-1);\n}\n.acu-preset-dd__empty { padding: 12px; text-align: center; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\r\n", "src/presentation-v2/components/_lib/AcuPresetDropdown.vue#style-0");
+    injectSfcStyle("\n.acu-preset-dd { position: relative; flex: 1; min-width: 0;\n}\n.acu-preset-dd__trigger {\n  display: flex; align-items: center; gap: 8px; width: 100%;\n  min-height: 32px; padding: 6px 9px;\n  background: var(--acu-bg-2); border: 0;\n  border-radius: var(--acu-radius-sm); color: var(--acu-text-1);\n  font: inherit; font-size: var(--acu-font-size-body, 12px); cursor: pointer;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-preset-dd__trigger:hover {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);\n}\n.acu-preset-dd__trigger:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-preset-dd__trigger:disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-preset-dd--disabled { pointer-events: none; opacity: 0.5;\n}\n.acu-preset-dd__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;\n}\n.acu-preset-dd__caret { font-size: var(--acu-font-size-micro, 10px); --acu-icon-color: var(--acu-text-3); color: var(--acu-text-3); transition: transform 0.15s ease;\n}\n.acu-preset-dd__caret--open { transform: rotate(180deg);\n}\n.acu-preset-dd__menu {\n  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 100;\n  margin: 0; padding: 4px 0; list-style: none;\n  background: var(--acu-bg-1); border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm); box-shadow: var(--acu-shadow);\n  max-height: 240px; overflow-y: auto;\n}\n.acu-preset-dd__item {\n  display: flex; align-items: center; gap: 8px;\n  padding: 8px 12px; cursor: pointer; font-size: var(--acu-font-size-body-lg, 13px);\n  color: var(--acu-text-2); transition: background 0.1s ease;\n}\n.acu-preset-dd__item:hover { background: var(--acu-hover-overlay); color: var(--acu-text-1);\n}\n.acu-preset-dd__item--active { color: var(--acu-on-accent); background: var(--acu-accent);\n}\n.acu-preset-dd__item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500;\n}\n.acu-preset-dd__item-meta { font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3); white-space: nowrap;\n}\n.acu-preset-dd__star {\n  width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;\n  border: 0; background: transparent; color: var(--acu-text-3); cursor: pointer;\n  border-radius: var(--acu-radius-sm); font-size: var(--acu-font-size-body, 12px); transition: color 0.15s ease;\n}\n.acu-preset-dd__star:hover { color: var(--acu-text-1); background: var(--acu-hover-overlay);\n}\n.acu-preset-dd__star--active { color: var(--acu-text-1);\n}\n.acu-preset-dd__item--active .acu-preset-dd__item-meta,\n.acu-preset-dd__item--active .acu-preset-dd__star,\n.acu-preset-dd__item--active .acu-preset-dd__check { --acu-icon-color: var(--acu-on-accent); color: var(--acu-on-accent);\n}\n.acu-preset-dd__check { font-size: var(--acu-font-size-caption, 11px); --acu-icon-color: var(--acu-text-1); color: var(--acu-text-1);\n}\n.acu-preset-dd__empty { padding: 12px; text-align: center; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\n", "src/presentation-v2/components/_lib/AcuPresetDropdown.vue#style-0");
     var AcuPresetDropdown_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$R = ["disabled"];
@@ -72681,7 +75734,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-segmented {\r\n  position: relative;\r\n  display: grid;\r\n  grid-auto-flow: column;\r\n  grid-auto-columns: minmax(0, 1fr);\r\n  min-width: 0;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  padding: 3px;\r\n  overflow: hidden;\n}\n.acu-segmented--disabled {\r\n  opacity: 0.55;\n}\n.acu-segmented__thumb {\r\n  position: absolute;\r\n  inset: 3px auto 3px 3px;\r\n  width: calc((100% - 6px) / var(--acu-segment-count));\r\n  border-radius: calc(var(--acu-radius-sm) - 2px);\r\n  background: var(--acu-accent);\r\n  transform: translateX(calc(var(--acu-segment-index) * 100%));\r\n  transition: transform 0.16s ease, background 0.16s ease;\r\n  pointer-events: none;\n}\n.acu-segmented__item {\r\n  position: relative;\r\n  min-width: 0;\r\n  margin: 0;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font: inherit;\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  cursor: pointer;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 6px;\r\n  transition: background 0.15s ease, color 0.15s ease;\r\n  z-index: 1;\n}\n.acu-segmented__item:not(.acu-segmented__item--active):hover:not(:disabled) {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-segmented__item:disabled {\r\n  cursor: not-allowed;\r\n  color: var(--acu-text-3);\n}\n.acu-segmented__item--active {\r\n  color: var(--acu-on-accent);\n}\n.acu-segmented__item:focus-visible {\r\n  outline: none;\n}\n.acu-segmented__item:focus-visible::before {\r\n  content: '';\r\n  position: absolute;\r\n  inset: 2px;\r\n  border-radius: var(--acu-radius-sm);\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\r\n  pointer-events: none;\r\n  z-index: 2;\n}\n.acu-segmented--md .acu-segmented__item {\r\n  min-height: 30px;\r\n  padding: 0 8px;\r\n  border-radius: calc(var(--acu-radius-sm) - 2px);\n}\n.acu-segmented--sm .acu-segmented__item {\r\n  min-height: 24px;\r\n  padding: 0 7px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  border-radius: calc(var(--acu-radius-sm) - 2px);\n}\n.acu-segmented__label {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\r\n", "src/presentation-v2/components/_lib/AcuSegmentedControl.vue#style-0");
+    injectSfcStyle("\n.acu-segmented {\n  position: relative;\n  display: grid;\n  grid-auto-flow: column;\n  grid-auto-columns: minmax(0, 1fr);\n  min-width: 0;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  padding: 3px;\n  overflow: hidden;\n}\n.acu-segmented--disabled {\n  opacity: 0.55;\n}\n.acu-segmented__thumb {\n  position: absolute;\n  inset: 3px auto 3px 3px;\n  width: calc((100% - 6px) / var(--acu-segment-count));\n  border-radius: calc(var(--acu-radius-sm) - 2px);\n  background: var(--acu-accent);\n  transform: translateX(calc(var(--acu-segment-index) * 100%));\n  transition: transform 0.16s ease, background 0.16s ease;\n  pointer-events: none;\n}\n.acu-segmented__item {\n  position: relative;\n  min-width: 0;\n  margin: 0;\n  border: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font: inherit;\n  font-size: var(--acu-font-size-body-lg, 13px);\n  cursor: pointer;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 6px;\n  transition: background 0.15s ease, color 0.15s ease;\n  z-index: 1;\n}\n.acu-segmented__item:not(.acu-segmented__item--active):hover:not(:disabled) {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-segmented__item:disabled {\n  cursor: not-allowed;\n  color: var(--acu-text-3);\n}\n.acu-segmented__item--active {\n  color: var(--acu-on-accent);\n}\n.acu-segmented__item:focus-visible {\n  outline: none;\n}\n.acu-segmented__item:focus-visible::before {\n  content: '';\n  position: absolute;\n  inset: 2px;\n  border-radius: var(--acu-radius-sm);\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n  pointer-events: none;\n  z-index: 2;\n}\n.acu-segmented--md .acu-segmented__item {\n  min-height: 30px;\n  padding: 0 8px;\n  border-radius: calc(var(--acu-radius-sm) - 2px);\n}\n.acu-segmented--sm .acu-segmented__item {\n  min-height: 24px;\n  padding: 0 7px;\n  font-size: var(--acu-font-size-body, 12px);\n  border-radius: calc(var(--acu-radius-sm) - 2px);\n}\n.acu-segmented__label {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n", "src/presentation-v2/components/_lib/AcuSegmentedControl.vue#style-0");
     var AcuSegmentedControl_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$Q = ["aria-label"];
@@ -72786,7 +75839,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-select {\r\n  position: relative;\r\n  display: block;\r\n  width: 100%;\r\n  min-width: 0;\r\n  margin: 0 !important;\r\n  padding: 0 !important;\r\n  border: 0 !important;\r\n  outline: 0 !important;\r\n  background: transparent !important;\r\n  box-shadow: none !important;\n}\n.acu-select__trigger {\r\n  display: flex; align-items: center; gap: 8px; width: 100%;\r\n  min-height: 32px; padding: 6px 9px;\r\n  margin: 0 !important;\r\n  background: var(--acu-bg-2) !important; border: 0 !important;\r\n  border-radius: var(--acu-radius-sm); color: var(--acu-text-1);\r\n  font: inherit; font-size: var(--acu-font-size-body, 12px); cursor: pointer;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\r\n  box-shadow: none;\n}\n.acu-select__trigger:hover {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2) !important;\n}\n.acu-select__trigger:focus { outline: none !important;\n}\n.acu-select__trigger:focus:not(:focus-visible) { box-shadow: none !important;\n}\n.acu-select__trigger:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-select__trigger:disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-select__label {\r\n  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;\n}\n.acu-select__label--placeholder { color: var(--acu-text-3);\n}\n.acu-select__caret { font-size: var(--acu-font-size-micro, 10px); --acu-icon-color: var(--acu-text-3); color: var(--acu-text-3); transition: transform 0.15s ease; flex-shrink: 0;\n}\n.acu-select__caret--open { transform: rotate(180deg);\n}\n.acu-select__menu {\r\n  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 100;\r\n  margin: 0; padding: 4px 0; list-style: none;\r\n  background: var(--acu-bg-1); border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm); box-shadow: var(--acu-shadow);\r\n  max-height: 240px; overflow-y: auto;\n}\n.acu-select__item {\r\n  padding: 8px 12px; cursor: pointer; font-size: var(--acu-font-size-body-lg, 13px);\r\n  color: var(--acu-text-2); transition: background 0.1s ease;\r\n  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\n}\n.acu-select__item:hover { background: var(--acu-hover-overlay); color: var(--acu-text-1);\n}\n.acu-select__item--active { color: var(--acu-on-accent); background: var(--acu-accent);\n}\n.acu-select__empty { padding: 12px; text-align: center; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\r\n\r\n/* ── sm variant ── */\n.acu-select--sm .acu-select__trigger { min-height: 26px; padding: 3px 7px; font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-select--sm .acu-select__item { padding: 6px 10px; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-select--disabled { pointer-events: none; opacity: 0.5;\n}\r\n", "src/presentation-v2/components/_lib/AcuSelect.vue#style-0");
+    injectSfcStyle("\n.acu-select {\n  position: relative;\n  display: block;\n  width: 100%;\n  min-width: 0;\n  margin: 0 !important;\n  padding: 0 !important;\n  border: 0 !important;\n  outline: 0 !important;\n  background: transparent !important;\n  box-shadow: none !important;\n}\n.acu-select__trigger {\n  display: flex; align-items: center; gap: 8px; width: 100%;\n  min-height: 32px; padding: 6px 9px;\n  margin: 0 !important;\n  background: var(--acu-bg-2) !important; border: 0 !important;\n  border-radius: var(--acu-radius-sm); color: var(--acu-text-1);\n  font: inherit; font-size: var(--acu-font-size-body, 12px); cursor: pointer;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n  box-shadow: none;\n}\n.acu-select__trigger:hover {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2) !important;\n}\n.acu-select__trigger:focus { outline: none !important;\n}\n.acu-select__trigger:focus:not(:focus-visible) { box-shadow: none !important;\n}\n.acu-select__trigger:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-select__trigger:disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-select__label {\n  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;\n}\n.acu-select__label--placeholder { color: var(--acu-text-3);\n}\n.acu-select__caret { font-size: var(--acu-font-size-micro, 10px); --acu-icon-color: var(--acu-text-3); color: var(--acu-text-3); transition: transform 0.15s ease; flex-shrink: 0;\n}\n.acu-select__caret--open { transform: rotate(180deg);\n}\n.acu-select__menu {\n  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 100;\n  margin: 0; padding: 4px 0; list-style: none;\n  background: var(--acu-bg-1); border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm); box-shadow: var(--acu-shadow);\n  max-height: 240px; overflow-y: auto;\n}\n.acu-select__item {\n  padding: 8px 12px; cursor: pointer; font-size: var(--acu-font-size-body-lg, 13px);\n  color: var(--acu-text-2); transition: background 0.1s ease;\n  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\n}\n.acu-select__item:hover { background: var(--acu-hover-overlay); color: var(--acu-text-1);\n}\n.acu-select__item--active { color: var(--acu-on-accent); background: var(--acu-accent);\n}\n.acu-select__empty { padding: 12px; text-align: center; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\n\n/* ── sm variant ── */\n.acu-select--sm .acu-select__trigger { min-height: 26px; padding: 3px 7px; font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-select--sm .acu-select__item { padding: 6px 10px; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-select--disabled { pointer-events: none; opacity: 0.5;\n}\n", "src/presentation-v2/components/_lib/AcuSelect.vue#style-0");
     var AcuSelect_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$P = ["disabled"];
@@ -72992,7 +76045,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-api-config-panel__select-row {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__editor {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0");
+    injectSfcStyle("\n.acu-api-config-panel__select-row {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\n  gap: 6px;\n  align-items: stretch;\n}\n.acu-api-config-panel__editor {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action {\n  display: flex;\n  align-items: center;\n  flex-wrap: wrap;\n  gap: 10px;\n}\n.acu-api-config-panel__two-col {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-api-config-panel__muted {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger {\n  color: var(--acu-danger);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n}\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0");
     var ApiConfigPanel_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$O = { class: "acu-api-config-panel__select-row" };
@@ -74406,7 +77459,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-disclosure-group {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 0;\r\n  overflow: hidden;\r\n  border-radius: var(--acu-radius-md);\r\n  background: transparent;\n}\n.acu-disclosure-group__header {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  width: 100%;\r\n  min-height: 34px;\r\n  appearance: none;\r\n  border: 0;\r\n  border-radius: 0;\r\n  padding: 7px 10px;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font: inherit;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.35;\r\n  text-align: left;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  transition: background-color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-disclosure-group__header:hover {\r\n  background: var(--acu-hover-overlay);\n}\n.acu-disclosure-group__header:focus-visible {\r\n  outline: none;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-disclosure-group__chevron {\r\n  flex: 0 0 10px;\r\n  width: 10px;\r\n  font-size: var(--acu-font-size-micro, 10px);\r\n  --acu-icon-color: var(--acu-text-3);\r\n  color: var(--acu-text-3);\r\n  transition: transform 0.15s ease;\n}\n.acu-disclosure-group__chevron--open {\r\n  transform: rotate(90deg);\n}\n.acu-disclosure-group__label {\r\n  flex: 1;\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  font-weight: 500;\r\n  color: var(--acu-text-2);\n}\n.acu-disclosure-group__meta {\r\n  flex-shrink: 0;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  color: var(--acu-text-3);\r\n  font-variant-numeric: tabular-nums;\r\n  white-space: nowrap;\n}\n.acu-disclosure-group__body {\r\n  box-sizing: border-box;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 18%, transparent);\r\n  padding: 8px;\r\n  opacity: 1;\r\n  transform: translateY(0);\r\n  overflow-x: hidden;\n}\r\n", "src/presentation-v2/components/_lib/AcuDisclosureGroup.vue#style-0");
+    injectSfcStyle("\n.acu-disclosure-group {\n  display: flex;\n  flex-direction: column;\n  gap: 0;\n  overflow: hidden;\n  border-radius: var(--acu-radius-md);\n  background: transparent;\n}\n.acu-disclosure-group__header {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  width: 100%;\n  min-height: 34px;\n  appearance: none;\n  border: 0;\n  border-radius: 0;\n  padding: 7px 10px;\n  background: transparent;\n  color: var(--acu-text-2);\n  font: inherit;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.35;\n  text-align: left;\n  cursor: pointer;\n  user-select: none;\n  transition: background-color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-disclosure-group__header:hover {\n  background: var(--acu-hover-overlay);\n}\n.acu-disclosure-group__header:focus-visible {\n  outline: none;\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-disclosure-group__chevron {\n  flex: 0 0 10px;\n  width: 10px;\n  font-size: var(--acu-font-size-micro, 10px);\n  --acu-icon-color: var(--acu-text-3);\n  color: var(--acu-text-3);\n  transition: transform 0.15s ease;\n}\n.acu-disclosure-group__chevron--open {\n  transform: rotate(90deg);\n}\n.acu-disclosure-group__label {\n  flex: 1;\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-weight: 500;\n  color: var(--acu-text-2);\n}\n.acu-disclosure-group__meta {\n  flex-shrink: 0;\n  font-size: var(--acu-font-size-caption, 11px);\n  color: var(--acu-text-3);\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n}\n.acu-disclosure-group__body {\n  box-sizing: border-box;\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 18%, transparent);\n  padding: 8px;\n  opacity: 1;\n  transform: translateY(0);\n  overflow-x: hidden;\n}\n", "src/presentation-v2/components/_lib/AcuDisclosureGroup.vue#style-0");
     var AcuDisclosureGroup_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$N = ["aria-expanded", "aria-controls"];
@@ -74515,7 +77568,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-toggle {\r\n  display: inline-flex; align-items: center; gap: 8px;\r\n  flex: 0 0 auto;\r\n  padding: 0; border: 0; background: transparent;\r\n  font: inherit; font-size: var(--acu-font-size-body, 12px); color: var(--acu-text-2);\r\n  cursor: pointer; user-select: none;\n}\n.acu-toggle--disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-toggle__track {\r\n  position: relative; flex-shrink: 0;\r\n  width: 36px; height: 20px;\r\n  background: var(--acu-bg-2);\r\n  border: 0;\r\n  border-radius: 10px;\r\n  transition: background 0.2s ease, box-shadow 0.2s ease;\n}\n.acu-toggle--on .acu-toggle__track {\r\n  background: var(--acu-accent);\n}\n.acu-toggle__thumb {\r\n  position: absolute; top: 2px; left: 2px;\r\n  width: 16px; height: 16px;\r\n  background: #fff;\r\n  border-radius: 50%;\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);\r\n  transition: transform 0.2s ease;\n}\n.acu-toggle--on .acu-toggle__thumb {\r\n  transform: translateX(16px);\n}\n.acu-toggle__label { white-space: nowrap;\n}\n.acu-toggle:hover:not(.acu-toggle--disabled) .acu-toggle__track {\r\n  box-shadow: inset 0 0 0 1px var(--acu-border-2);\n}\n.acu-toggle:focus-visible .acu-toggle__track {\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\r\n", "src/presentation-v2/components/_lib/AcuToggle.vue#style-0");
+    injectSfcStyle("\n.acu-toggle {\n  display: inline-flex; align-items: center; gap: 8px;\n  flex: 0 0 auto;\n  padding: 0; border: 0; background: transparent;\n  font: inherit; font-size: var(--acu-font-size-body, 12px); color: var(--acu-text-2);\n  cursor: pointer; user-select: none;\n}\n.acu-toggle--disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-toggle__track {\n  position: relative; flex-shrink: 0;\n  width: 36px; height: 20px;\n  background: var(--acu-bg-2);\n  border: 0;\n  border-radius: 10px;\n  transition: background 0.2s ease, box-shadow 0.2s ease;\n}\n.acu-toggle--on .acu-toggle__track {\n  background: var(--acu-accent);\n}\n.acu-toggle__thumb {\n  position: absolute; top: 2px; left: 2px;\n  width: 16px; height: 16px;\n  background: #fff;\n  border-radius: 50%;\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);\n  transition: transform 0.2s ease;\n}\n.acu-toggle--on .acu-toggle__thumb {\n  transform: translateX(16px);\n}\n.acu-toggle__label { white-space: nowrap;\n}\n.acu-toggle:hover:not(.acu-toggle--disabled) .acu-toggle__track {\n  box-shadow: inset 0 0 0 1px var(--acu-border-2);\n}\n.acu-toggle:focus-visible .acu-toggle__track {\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n", "src/presentation-v2/components/_lib/AcuToggle.vue#style-0");
     var AcuToggle_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$M = ["aria-checked", "disabled"];
@@ -74634,7 +77687,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-form-fill-update-settings-panel__settings-groups {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-form-fill-update-settings-panel__setting-group {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-form-fill-update-settings-panel__setting-group\r\n  + .acu-form-fill-update-settings-panel__setting-group {\r\n  padding-top: 14px;\r\n  border-top: 1px solid var(--acu-border-2);\n}\n.acu-form-fill-update-settings-panel__advanced {\r\n  border: 0;\r\n  background: transparent;\n}\n.acu-form-fill-update-settings-panel__number-grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n@media (max-width: 560px) {\n.acu-form-fill-update-settings-panel__number-grid {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/FormFillUpdateSettingsPanel.vue#style-0");
+    injectSfcStyle("\n.acu-form-fill-update-settings-panel__settings-groups {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-form-fill-update-settings-panel__setting-group {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-form-fill-update-settings-panel__setting-group\n  + .acu-form-fill-update-settings-panel__setting-group {\n  padding-top: 14px;\n  border-top: 1px solid var(--acu-border-2);\n}\n.acu-form-fill-update-settings-panel__advanced {\n  border: 0;\n  background: transparent;\n}\n.acu-form-fill-update-settings-panel__number-grid {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n@media (max-width: 560px) {\n.acu-form-fill-update-settings-panel__number-grid {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/components/FormFillUpdateSettingsPanel.vue#style-0");
     var FormFillUpdateSettingsPanel_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$L = { class: "acu-form-fill-update-settings-panel__settings-groups" };
@@ -75467,7 +78520,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-text {\r\n  margin: 0;\r\n  min-width: 0;\n}\n.acu-text--caption {\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\r\n  color: var(--acu-text-3);\n}\n.acu-text--meta {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-body, 1.45);\r\n  color: var(--acu-text-3);\n}\n.acu-text--hint {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-readable, 1.55);\r\n  color: var(--acu-text-3);\n}\n.acu-text--status-line {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\r\n  min-height: 22px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-body, 1.45);\r\n  color: var(--acu-text-3);\n}\n.acu-text--empty {\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: var(--acu-line-height-readable, 1.55);\r\n  color: var(--acu-text-3);\r\n  text-align: center;\n}\n.acu-text--error {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-body, 1.45);\r\n  color: var(--acu-danger);\n}\n.acu-text--section-label {\r\n  font-size: var(--acu-font-size-section-title, 12px);\r\n  line-height: var(--acu-line-height-body, 1.45);\r\n  font-weight: 600;\r\n  color: var(--acu-text-2);\n}\n.acu-text--list-title {\r\n  font-size: var(--acu-font-size-list-title, 13px);\r\n  line-height: var(--acu-line-height-body, 1.45);\r\n  font-weight: 500;\r\n  color: var(--acu-text-1);\n}\n:deep(.acu-text__value) {\r\n  color: var(--acu-text-1);\r\n  font-weight: 500;\n}\r\n", "src/presentation-v2/components/_lib/AcuText.vue#style-0");
+    injectSfcStyle("\n.acu-text {\n  margin: 0;\n  min-width: 0;\n}\n.acu-text--caption {\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: var(--acu-line-height-caption, 1.5);\n  color: var(--acu-text-3);\n}\n.acu-text--meta {\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n  color: var(--acu-text-3);\n}\n.acu-text--hint {\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-readable, 1.55);\n  color: var(--acu-text-3);\n}\n.acu-text--status-line {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-wrap: wrap;\n  min-height: 22px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n  color: var(--acu-text-3);\n}\n.acu-text--empty {\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: var(--acu-line-height-readable, 1.55);\n  color: var(--acu-text-3);\n  text-align: center;\n}\n.acu-text--error {\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n  color: var(--acu-danger);\n}\n.acu-text--section-label {\n  font-size: var(--acu-font-size-section-title, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 600;\n  color: var(--acu-text-2);\n}\n.acu-text--list-title {\n  font-size: var(--acu-font-size-list-title, 13px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 500;\n  color: var(--acu-text-1);\n}\n:deep(.acu-text__value) {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n", "src/presentation-v2/components/_lib/AcuText.vue#style-0");
     var AcuText_vue_vue_type_style_index_0_lang = null;
 
     function _sfc_render$M(_ctx, _cache, $props, $setup, $data, $options) {
@@ -75563,7 +78616,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-drawer-layer {\r\n  position: fixed; top: 0; right: 0; bottom: 0; left: 0; inset: 0; z-index: 9200;\r\n  width: 100%; width: 100vw; width: 100dvw;\r\n  height: 100%; height: 100vh; height: 100dvh;\r\n  display: flex; justify-content: flex-end;\r\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\r\n  background: rgba(0, 0, 0, 0.38);\r\n  overflow: hidden;\r\n  animation: acu-drawer-layer-in 0.18s ease-out both;\n}\n.acu-v2-drawer-layer.is-closing {\r\n  pointer-events: none;\r\n  animation: acu-drawer-layer-out 0.15s ease-in both;\n}\n.acu-v2-drawer {\r\n  max-width: 100%;\r\n  height: 100%; max-height: 100%;\r\n  display: flex; flex-direction: column;\r\n  background: var(--acu-bg-1);\r\n  border-left: 0;\r\n  box-shadow: var(--acu-shadow);\r\n  min-width: 0; min-height: 0;\r\n  overflow: hidden;\r\n  animation: acu-drawer-panel-in 0.18s ease-out both;\n}\n.acu-v2-drawer-layer.is-closing .acu-v2-drawer {\r\n  animation: acu-drawer-panel-out 0.15s ease-in both;\n}\n@supports (max-height: 100dvh) {\n.acu-v2-drawer { max-height: 100%;\n}\n}\n.acu-v2-drawer__header {\r\n  flex: 0 0 auto;\r\n  display: flex; align-items: center; justify-content: space-between;\r\n  gap: 12px; padding: 14px 16px;\r\n  border-bottom: 0;\n}\n.acu-v2-drawer__header-left { display: flex; align-items: center; gap: 10px;\n}\n.acu-v2-drawer__header h3 { margin: 0; font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-v2-drawer__body {\r\n  flex: 1; min-height: 0;\r\n  overflow-y: auto; padding: 16px;\r\n  display: flex; flex-direction: column; gap: 14px;\n}\n@keyframes acu-drawer-layer-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-drawer-panel-in {\nfrom { transform: translateX(100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes acu-drawer-layer-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-drawer-panel-out {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(100%);\n}\n}\n@media (max-width: 860px) {\n.acu-v2-drawer { width: 100% !important; border-left: 0;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuDrawer.vue#style-0");
+    injectSfcStyle("\n.acu-v2-drawer-layer {\n  position: fixed; top: 0; right: 0; bottom: 0; left: 0; inset: 0; z-index: 9200;\n  width: 100%; width: 100vw; width: 100dvw;\n  height: 100%; height: 100vh; height: 100dvh;\n  display: flex; justify-content: flex-end;\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\n  background: rgba(0, 0, 0, 0.38);\n  overflow: hidden;\n  animation: acu-drawer-layer-in 0.18s ease-out both;\n}\n.acu-v2-drawer-layer.is-closing {\n  pointer-events: none;\n  animation: acu-drawer-layer-out 0.15s ease-in both;\n}\n.acu-v2-drawer {\n  max-width: 100%;\n  height: 100%; max-height: 100%;\n  display: flex; flex-direction: column;\n  background: var(--acu-bg-1);\n  border-left: 0;\n  box-shadow: var(--acu-shadow);\n  min-width: 0; min-height: 0;\n  overflow: hidden;\n  animation: acu-drawer-panel-in 0.18s ease-out both;\n}\n.acu-v2-drawer-layer.is-closing .acu-v2-drawer {\n  animation: acu-drawer-panel-out 0.15s ease-in both;\n}\n@supports (max-height: 100dvh) {\n.acu-v2-drawer { max-height: 100%;\n}\n}\n.acu-v2-drawer__header {\n  flex: 0 0 auto;\n  display: flex; align-items: center; justify-content: space-between;\n  gap: 12px; padding: 14px 16px;\n  border-bottom: 0;\n}\n.acu-v2-drawer__header-left { display: flex; align-items: center; gap: 10px;\n}\n.acu-v2-drawer__header h3 { margin: 0; font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-v2-drawer__body {\n  flex: 1; min-height: 0;\n  overflow-y: auto; padding: 16px;\n  display: flex; flex-direction: column; gap: 14px;\n}\n@keyframes acu-drawer-layer-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-drawer-panel-in {\nfrom { transform: translateX(100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes acu-drawer-layer-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-drawer-panel-out {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(100%);\n}\n}\n@media (max-width: 860px) {\n.acu-v2-drawer { width: 100% !important; border-left: 0;\n}\n}\n", "src/presentation-v2/components/_lib/AcuDrawer.vue#style-0");
     var AcuDrawer_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$K = { class: "acu-v2-drawer__header" };
@@ -75662,7 +78715,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-rule-pair-list--standalone {\r\n  display: flex; flex-direction: column; gap: 6px;\n}\n.acu-rule-pair-list__body {\r\n  display: flex; flex-direction: column; gap: 6px;\n}\n.acu-rule-pair-list--standalone .acu-rule-pair-list__body {\r\n  /* 老接口：未提供 label 时直接展示，无外层 padding */\r\n  border-top: 0;\r\n  padding: 0;\n}\n.acu-rule-pair-list__row {\r\n  display: flex; align-items: center; gap: 6px;\n}\n.acu-rule-pair-list__field { flex: 1; min-width: 0;\n}\n.acu-rule-pair-list__sep {\r\n  flex-shrink: 0; font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n}\n.acu-rule-pair-list__empty {\r\n  padding: 8px; text-align: center;\r\n  color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-rule-pair-list__add {\r\n  align-self: flex-start;\n}\r\n", "src/presentation-v2/components/_lib/AcuRulePairList.vue#style-0");
+    injectSfcStyle("\n.acu-rule-pair-list--standalone {\n  display: flex; flex-direction: column; gap: 6px;\n}\n.acu-rule-pair-list__body {\n  display: flex; flex-direction: column; gap: 6px;\n}\n.acu-rule-pair-list--standalone .acu-rule-pair-list__body {\n  /* 老接口：未提供 label 时直接展示，无外层 padding */\n  border-top: 0;\n  padding: 0;\n}\n.acu-rule-pair-list__row {\n  display: flex; align-items: center; gap: 6px;\n}\n.acu-rule-pair-list__field { flex: 1; min-width: 0;\n}\n.acu-rule-pair-list__sep {\n  flex-shrink: 0; font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n}\n.acu-rule-pair-list__empty {\n  padding: 8px; text-align: center;\n  color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-rule-pair-list__add {\n  align-self: flex-start;\n}\n", "src/presentation-v2/components/_lib/AcuRulePairList.vue#style-0");
     var AcuRulePairList_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$J = {
@@ -75864,7 +78917,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-plot-match-fields {\r\n  margin: 0;\r\n  padding: 0 0 14px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-plot-match-fields legend {\r\n  padding: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-section-title, 12px);\r\n  font-weight: 600;\n}\n.acu-v2-plot-match-fields__grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));\r\n  gap: 10px;\n}\r\n", "src/presentation-v2/components/PlotMatchReplaceFields.vue#style-0");
+    injectSfcStyle("\n.acu-v2-plot-match-fields {\n  margin: 0;\n  padding: 0 0 14px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  min-width: 0;\n}\n.acu-v2-plot-match-fields legend {\n  padding: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-section-title, 12px);\n  font-weight: 600;\n}\n.acu-v2-plot-match-fields__grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));\n  gap: 10px;\n}\n", "src/presentation-v2/components/PlotMatchReplaceFields.vue#style-0");
     var PlotMatchReplaceFields_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$I = { class: "acu-v2-plot-match-fields" };
@@ -75976,7 +79029,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-prompt-segs { display: flex; flex-direction: column; gap: 10px;\n}\n.acu-prompt-segs__add { display: flex; justify-content: center;\n}\n.acu-prompt-segs__list {\r\n  list-style: none; margin: 0; padding: 0;\r\n  display: flex; flex-direction: column; gap: 10px;\n}\n.acu-prompt-segs__item {\r\n  border: 0; border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent; padding: 0 0 12px;\r\n  display: flex; flex-direction: column; gap: 8px;\n}\n.acu-prompt-segs__item:last-child {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-prompt-segs__item-head {\r\n  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;\n}\n.acu-prompt-segs__index {\r\n  font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\r\n  min-width: 26px;\r\n  font-family: var(--acu-font-mono);\n}\n.acu-prompt-segs__role { min-width: 110px;\n}\n.acu-prompt-segs__slot { min-width: 120px;\n}\n.acu-prompt-segs__actions {\r\n  margin-left: auto;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  flex-wrap: wrap;\n}\n.acu-prompt-segs__empty {\r\n  padding: 10px 0; text-align: center;\r\n  color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\r\n", "src/presentation-v2/components/_lib/AcuPromptSegments.vue#style-0");
+    injectSfcStyle("\n.acu-prompt-segs { display: flex; flex-direction: column; gap: 10px;\n}\n.acu-prompt-segs__add { display: flex; justify-content: center;\n}\n.acu-prompt-segs__list {\n  list-style: none; margin: 0; padding: 0;\n  display: flex; flex-direction: column; gap: 10px;\n}\n.acu-prompt-segs__item {\n  border: 0; border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent; padding: 0 0 12px;\n  display: flex; flex-direction: column; gap: 8px;\n}\n.acu-prompt-segs__item:last-child {\n  padding-bottom: 0;\n  border-bottom: 0;\n}\n.acu-prompt-segs__item-head {\n  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;\n}\n.acu-prompt-segs__index {\n  font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n  min-width: 26px;\n  font-family: var(--acu-font-mono);\n}\n.acu-prompt-segs__role { min-width: 110px;\n}\n.acu-prompt-segs__slot { min-width: 120px;\n}\n.acu-prompt-segs__actions {\n  margin-left: auto;\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  flex-wrap: wrap;\n}\n.acu-prompt-segs__empty {\n  padding: 10px 0; text-align: center;\n  color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n", "src/presentation-v2/components/_lib/AcuPromptSegments.vue#style-0");
     var AcuPromptSegments_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$H = { class: "acu-prompt-segs" };
@@ -76185,7 +79238,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-plot-task-editor {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  min-width: 0;\n}\n.acu-v2-plot-task-editor__section {\r\n  margin: 0;\r\n  padding: 0 0 14px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-plot-task-editor__section:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-plot-task-editor__section legend {\r\n  padding: 0;\r\n  font-size: var(--acu-font-size-section-title, 12px);\r\n  font-weight: 600;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-plot-task-editor__grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-plot-task-editor__hint {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  color: var(--acu-text-3);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-v2-plot-task-editor__empty {\r\n  padding: 18px 0;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  text-align: center;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\r\n", "src/presentation-v2/components/PlotTaskEditor.vue#style-0");
+    injectSfcStyle("\n.acu-v2-plot-task-editor {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  min-width: 0;\n}\n.acu-v2-plot-task-editor__section {\n  margin: 0;\n  padding: 0 0 14px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  min-width: 0;\n}\n.acu-v2-plot-task-editor__section:last-of-type {\n  padding-bottom: 0;\n  border-bottom: 0;\n}\n.acu-v2-plot-task-editor__section legend {\n  padding: 0;\n  font-size: var(--acu-font-size-section-title, 12px);\n  font-weight: 600;\n  color: var(--acu-text-2);\n}\n.acu-v2-plot-task-editor__grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));\n  gap: 10px;\n}\n.acu-v2-plot-task-editor__hint {\n  margin: 0;\n  font-size: var(--acu-font-size-caption, 11px);\n  color: var(--acu-text-3);\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-v2-plot-task-editor__empty {\n  padding: 18px 0;\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n  text-align: center;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n", "src/presentation-v2/components/PlotTaskEditor.vue#style-0");
     var PlotTaskEditor_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$G = {
@@ -76364,7 +79417,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-plot-tasks {\r\n  margin: 0; padding: 0 0 14px;\r\n  border: 0; border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex; flex-direction: column; gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-plot-tasks > legend {\r\n  padding: 0;\r\n  font-size: var(--acu-font-size-section-title, 12px); font-weight: 600; color: var(--acu-text-2);\r\n  display: flex; align-items: center; gap: 10px;\n}\n.acu-v2-plot-tasks__toolbar { display: inline-flex; gap: 4px;\n}\n.acu-v2-plot-tasks__cards {\r\n  display: flex; gap: 8px;\r\n  min-width: 0;\r\n  overflow-x: auto;\n}\n.acu-v2-plot-tasks__card {\r\n  flex: 0 0 140px;\r\n  min-height: 100px;\r\n  display: flex; flex-direction: column; gap: 6px;\r\n  padding: 10px 12px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  border: 0;\r\n  color: inherit;\r\n  cursor: pointer;\r\n  font: inherit;\r\n  text-align: left;\r\n  transition: box-shadow 0.15s ease, color 0.15s ease, opacity 0.15s ease;\n}\n.acu-v2-plot-tasks__card:hover,\r\n.acu-v2-plot-tasks__card:focus-visible {\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\r\n  outline: none;\n}\n.acu-v2-plot-tasks__card--active {\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-plot-tasks__card--disabled {\r\n  opacity: 0.5;\n}\n.acu-v2-plot-tasks__card--disabled.acu-v2-plot-tasks__card--active {\r\n  opacity: 0.7;\n}\n.acu-v2-plot-tasks__card--disabled .acu-v2-plot-tasks__name {\r\n  text-decoration: line-through;\n}\n.acu-v2-plot-tasks__name {\r\n  font-size: var(--acu-font-size-list-title, 13px); color: var(--acu-text-1); font-weight: 500;\r\n  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\n}\n.acu-v2-plot-tasks__card--active .acu-v2-plot-tasks__name,\r\n.acu-v2-plot-tasks__card--active .acu-v2-plot-tasks__stage,\r\n.acu-v2-plot-tasks__card--active .acu-v2-plot-tasks__seg-count,\r\n.acu-v2-plot-tasks__card--active .acu-v2-plot-tasks__disabled-label {\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-plot-tasks__stage {\r\n  font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-plot-tasks__seg-count {\r\n  font-size: var(--acu-font-size-micro, 10px); color: var(--acu-text-3);\r\n  margin-top: auto;\n}\n.acu-v2-plot-tasks__disabled-label {\r\n  font-size: var(--acu-font-size-micro, 10px); color: var(--acu-warning);\r\n  font-weight: 500;\n}\n.acu-v2-plot-tasks__empty {\r\n  padding: 16px 12px; text-align: center;\r\n  color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\r\n  flex: 1;\n}\r\n", "src/presentation-v2/components/PlotTaskList.vue#style-0");
+    injectSfcStyle("\n.acu-v2-plot-tasks {\n  margin: 0; padding: 0 0 14px;\n  border: 0; border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n  display: flex; flex-direction: column; gap: 10px;\n  min-width: 0;\n}\n.acu-v2-plot-tasks > legend {\n  padding: 0;\n  font-size: var(--acu-font-size-section-title, 12px); font-weight: 600; color: var(--acu-text-2);\n  display: flex; align-items: center; gap: 10px;\n}\n.acu-v2-plot-tasks__toolbar { display: inline-flex; gap: 4px;\n}\n.acu-v2-plot-tasks__cards {\n  display: flex; gap: 8px;\n  min-width: 0;\n  overflow-x: auto;\n}\n.acu-v2-plot-tasks__card {\n  flex: 0 0 140px;\n  min-height: 100px;\n  display: flex; flex-direction: column; gap: 6px;\n  padding: 10px 12px;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  border: 0;\n  color: inherit;\n  cursor: pointer;\n  font: inherit;\n  text-align: left;\n  transition: box-shadow 0.15s ease, color 0.15s ease, opacity 0.15s ease;\n}\n.acu-v2-plot-tasks__card:hover,\n.acu-v2-plot-tasks__card:focus-visible {\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n  outline: none;\n}\n.acu-v2-plot-tasks__card--active {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-v2-plot-tasks__card--disabled {\n  opacity: 0.5;\n}\n.acu-v2-plot-tasks__card--disabled.acu-v2-plot-tasks__card--active {\n  opacity: 0.7;\n}\n.acu-v2-plot-tasks__card--disabled .acu-v2-plot-tasks__name {\n  text-decoration: line-through;\n}\n.acu-v2-plot-tasks__name {\n  font-size: var(--acu-font-size-list-title, 13px); color: var(--acu-text-1); font-weight: 500;\n  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\n}\n.acu-v2-plot-tasks__card--active .acu-v2-plot-tasks__name,\n.acu-v2-plot-tasks__card--active .acu-v2-plot-tasks__stage,\n.acu-v2-plot-tasks__card--active .acu-v2-plot-tasks__seg-count,\n.acu-v2-plot-tasks__card--active .acu-v2-plot-tasks__disabled-label {\n  color: var(--acu-on-accent);\n}\n.acu-v2-plot-tasks__stage {\n  font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-plot-tasks__seg-count {\n  font-size: var(--acu-font-size-micro, 10px); color: var(--acu-text-3);\n  margin-top: auto;\n}\n.acu-v2-plot-tasks__disabled-label {\n  font-size: var(--acu-font-size-micro, 10px); color: var(--acu-warning);\n  font-weight: 500;\n}\n.acu-v2-plot-tasks__empty {\n  padding: 16px 12px; text-align: center;\n  color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n  flex: 1;\n}\n", "src/presentation-v2/components/PlotTaskList.vue#style-0");
     var PlotTaskList_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$F = { class: "acu-v2-plot-tasks" };
@@ -76497,7 +79550,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-plot-drawer__create-btn {\r\n  width: 100%;\n}\n.acu-v2-plot-drawer__empty {\r\n  margin-top: 20px;\n}\n.acu-v2-plot-drawer__actions {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\r\n  padding-top: 12px;\r\n  margin-top: 12px;\n}\r\n\r\n/* manage list */\n.acu-v2-manage-list {\r\n  list-style: none;\r\n  margin: 0;\r\n  padding: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-manage-item {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  padding: 10px 12px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-manage-item:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info {\r\n  flex: 1;\r\n  min-width: 0;\n}\n.acu-v2-manage-item__name {\r\n  display: block;\r\n  font-size: var(--acu-font-size-list-title, 13px);\r\n  line-height: var(--acu-line-height-body, 1.45);\r\n  font-weight: 500;\r\n  color: var(--acu-text-1);\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta {\r\n  display: block;\r\n  margin-top: 2px;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions {\r\n  display: flex;\r\n  gap: 4px;\n}\r\n\r\n/* form */\n.acu-v2-form {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-form__section {\r\n  min-width: 0;\r\n  margin: 0;\r\n  padding: 0 0 14px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-form__section:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-form__section legend {\r\n  padding: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-section-title, 12px);\r\n  font-weight: 600;\n}\n.acu-v2-plot-drawer__rules {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  min-width: 0;\n}\n.acu-v2-error {\r\n  padding: 8px 10px;\r\n  background: color-mix(in srgb, var(--acu-danger) 10%, transparent);\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\n}\r\n", "src/presentation-v2/components/PlotPresetDrawer.vue#style-0");
+    injectSfcStyle("\n.acu-v2-plot-drawer__create-btn {\n  width: 100%;\n}\n.acu-v2-plot-drawer__empty {\n  margin-top: 20px;\n}\n.acu-v2-plot-drawer__actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  flex-wrap: wrap;\n  padding-top: 12px;\n  margin-top: 12px;\n}\n\n/* manage list */\n.acu-v2-manage-list {\n  list-style: none;\n  margin: 0;\n  padding: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-v2-manage-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 10px 12px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-manage-item:last-child {\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info {\n  flex: 1;\n  min-width: 0;\n}\n.acu-v2-manage-item__name {\n  display: block;\n  font-size: var(--acu-font-size-list-title, 13px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 500;\n  color: var(--acu-text-1);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta {\n  display: block;\n  margin-top: 2px;\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: var(--acu-line-height-caption, 1.5);\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions {\n  display: flex;\n  gap: 4px;\n}\n\n/* form */\n.acu-v2-form {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-v2-form__section {\n  min-width: 0;\n  margin: 0;\n  padding: 0 0 14px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-v2-form__section:last-of-type {\n  padding-bottom: 0;\n  border-bottom: 0;\n}\n.acu-v2-form__section legend {\n  padding: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-section-title, 12px);\n  font-weight: 600;\n}\n.acu-v2-plot-drawer__rules {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  min-width: 0;\n}\n.acu-v2-error {\n  padding: 8px 10px;\n  background: color-mix(in srgb, var(--acu-danger) 10%, transparent);\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n}\n", "src/presentation-v2/components/PlotPresetDrawer.vue#style-0");
     var PlotPresetDrawer_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$E = {
@@ -76892,7 +79945,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-plot-preset-panel__status-line {\r\n  margin: 0 0 10px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-plot-preset-panel__select-row {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  margin-bottom: 12px;\r\n  min-width: 0;\n}\r\n", "src/presentation-v2/components/PlotPresetPanel.vue#style-0");
+    injectSfcStyle("\n.acu-plot-preset-panel__status-line {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-plot-preset-panel__select-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\n  gap: 6px;\n  align-items: stretch;\n  margin-bottom: 12px;\n  min-width: 0;\n}\n", "src/presentation-v2/components/PlotPresetPanel.vue#style-0");
     var PlotPresetPanel_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$D = { class: "acu-text__value" };
@@ -77108,7 +80161,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-table-drawer__top-actions {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\n}\n.acu-v2-manage-list {\r\n  list-style: none;\r\n  margin: 0;\r\n  padding: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-manage-item {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  padding: 10px 12px;\r\n  border: 0;\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-manage-item:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info {\r\n  flex: 1;\r\n  min-width: 0;\n}\n.acu-v2-manage-item__name {\r\n  display: block;\r\n  font-size: var(--acu-font-size-list-title, 13px);\r\n  line-height: var(--acu-line-height-body, 1.45);\r\n  font-weight: 500;\r\n  color: var(--acu-text-1);\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta {\r\n  display: block;\r\n  margin-top: 2px;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions {\r\n  display: flex;\r\n  gap: 4px;\n}\n.acu-v2-table-drawer__empty {\r\n  margin: 12px 0;\n}\r\n\r\n", "src/presentation-v2/components/TablePresetDrawer.vue#style-0");
+    injectSfcStyle("\n.acu-v2-table-drawer__top-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-v2-manage-list {\n  list-style: none;\n  margin: 0;\n  padding: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-v2-manage-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 10px 12px;\n  border: 0;\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-manage-item:last-child {\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info {\n  flex: 1;\n  min-width: 0;\n}\n.acu-v2-manage-item__name {\n  display: block;\n  font-size: var(--acu-font-size-list-title, 13px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 500;\n  color: var(--acu-text-1);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta {\n  display: block;\n  margin-top: 2px;\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: var(--acu-line-height-caption, 1.5);\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions {\n  display: flex;\n  gap: 4px;\n}\n.acu-v2-table-drawer__empty {\n  margin: 12px 0;\n}\n\n", "src/presentation-v2/components/TablePresetDrawer.vue#style-0");
     var TablePresetDrawer_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$C = { class: "acu-v2-table-drawer__top-actions" };
@@ -78360,7 +81413,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-table-template-panel__status-line {\r\n  margin: 0 0 10px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-table-template-panel__preset-row {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(2, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  min-width: 0;\n}\n.acu-table-template-panel__action-area {\r\n  margin-top: 10px;\n}\n.acu-table-template-panel__visualizer-button {\r\n  width: 100%;\n}\r\n\r\n", "src/presentation-v2/components/TableTemplatePresetPanel.vue#style-0");
+    injectSfcStyle("\n.acu-table-template-panel__status-line {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-table-template-panel__preset-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) repeat(2, max-content);\n  gap: 6px;\n  align-items: stretch;\n  min-width: 0;\n}\n.acu-table-template-panel__action-area {\n  margin-top: 10px;\n}\n.acu-table-template-panel__visualizer-button {\n  width: 100%;\n}\n\n", "src/presentation-v2/components/TableTemplatePresetPanel.vue#style-0");
     var TableTemplatePresetPanel_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$B = { class: "acu-text__value" };
@@ -78569,7 +81622,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-basic-config-page {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-basic-config-page__grid {\r\n  grid-template-areas:\r\n    \"api update\"\r\n    \"api table\"\r\n    \"api plot\";\n}\n.acu-v2-basic-config-page__api {\r\n  grid-area: api;\n}\n.acu-v2-basic-config-page__update {\r\n  grid-area: update;\n}\n.acu-v2-basic-config-page__table {\r\n  grid-area: table;\n}\n.acu-v2-basic-config-page__plot {\r\n  grid-area: plot;\n}\n@media (max-width: 860px) {\n.acu-v2-basic-config-page {\r\n    padding: 14px;\n}\n.acu-v2-basic-config-page__grid {\r\n    grid-template-areas:\r\n      \"api\"\r\n      \"update\"\r\n      \"table\"\r\n      \"plot\";\n}\n}\r\n", "src/presentation-v2/pages/BasicConfigPage.vue#style-0");
+    injectSfcStyle("\n.acu-v2-basic-config-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-basic-config-page__grid {\n  grid-template-areas:\n    \"api update\"\n    \"api table\"\n    \"api plot\";\n}\n.acu-v2-basic-config-page__api {\n  grid-area: api;\n}\n.acu-v2-basic-config-page__update {\n  grid-area: update;\n}\n.acu-v2-basic-config-page__table {\n  grid-area: table;\n}\n.acu-v2-basic-config-page__plot {\n  grid-area: plot;\n}\n@media (max-width: 860px) {\n.acu-v2-basic-config-page {\n    padding: 14px;\n}\n.acu-v2-basic-config-page__grid {\n    grid-template-areas:\n      \"api\"\n      \"update\"\n      \"table\"\n      \"plot\";\n}\n}\n", "src/presentation-v2/pages/BasicConfigPage.vue#style-0");
     var BasicConfigPage_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$A = { class: "acu-v2-basic-config-page" };
@@ -78875,7 +81928,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-dashboard-storage-mode {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-dashboard-storage-mode__head {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\n}\n.acu-dashboard-storage-mode__label {\r\n  min-width: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 500;\n}\n.acu-dashboard-storage-mode__desc-main {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.5;\n}\n.acu-dashboard-storage-mode__switch {\r\n  flex: 0 0 auto;\r\n  width: 92px;\n}\n.acu-dashboard-storage-mode__cards {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\r\n  margin-top: 4px;\n}\n.acu-dashboard-storage-mode__card {\r\n  position: relative;\r\n  min-width: 0;\r\n  padding: 5px 0 5px 8px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  display: grid;\r\n  grid-template-columns: 26px minmax(0, 1fr);\r\n  gap: 8px;\r\n  align-items: center;\r\n  transition:\r\n    background 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-dashboard-storage-mode__card--active {\r\n  background: color-mix(in srgb, var(--acu-accent) 8%, transparent);\r\n  box-shadow:\r\n    inset 0 0 0 1px\r\n    color-mix(in srgb, var(--acu-accent) 30%, transparent);\n}\n.acu-dashboard-storage-mode__icon {\r\n  width: 26px;\r\n  height: 26px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  color: var(--acu-text-3);\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  font-size: 15px;\n}\n.acu-dashboard-storage-mode__card--active .acu-dashboard-storage-mode__icon {\r\n  color: var(--acu-accent);\r\n  background: transparent;\n}\n.acu-dashboard-storage-mode__body {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-dashboard-storage-mode__card-head {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 6px;\n}\n.acu-dashboard-storage-mode__name {\r\n  min-width: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 600;\r\n  line-height: 1.25;\n}\n.acu-dashboard-storage-mode__badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  min-height: 18px;\r\n  padding: 1px 6px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-micro, 10px);\r\n  line-height: 1.2;\r\n  white-space: nowrap;\n}\n.acu-dashboard-storage-mode__card--active .acu-dashboard-storage-mode__badge {\r\n  background: color-mix(in srgb, var(--acu-accent) 16%, transparent);\r\n  color: var(--acu-accent);\n}\n.acu-dashboard-storage-mode__desc {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.5;\n}\n@media (max-width: 640px) {\n.acu-dashboard-storage-mode__head {\r\n    align-items: center;\n}\n.acu-dashboard-storage-mode__switch {\r\n    width: 88px;\n}\n.acu-dashboard-storage-mode__card {\r\n    grid-template-columns: minmax(0, 1fr);\n}\n.acu-dashboard-storage-mode__icon {\r\n    display: none;\n}\n}\r\n", "src/presentation-v2/components/DashboardStorageModeSection.vue#style-0");
+    injectSfcStyle("\n.acu-dashboard-storage-mode {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-dashboard-storage-mode__head {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n}\n.acu-dashboard-storage-mode__label {\n  min-width: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n}\n.acu-dashboard-storage-mode__desc-main {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-dashboard-storage-mode__switch {\n  flex: 0 0 auto;\n  width: 92px;\n}\n.acu-dashboard-storage-mode__cards {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  margin-top: 4px;\n}\n.acu-dashboard-storage-mode__card {\n  position: relative;\n  min-width: 0;\n  padding: 5px 0 5px 8px;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  display: grid;\n  grid-template-columns: 26px minmax(0, 1fr);\n  gap: 8px;\n  align-items: center;\n  transition:\n    background 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-dashboard-storage-mode__card--active {\n  background: color-mix(in srgb, var(--acu-accent) 8%, transparent);\n  box-shadow:\n    inset 0 0 0 1px\n    color-mix(in srgb, var(--acu-accent) 30%, transparent);\n}\n.acu-dashboard-storage-mode__icon {\n  width: 26px;\n  height: 26px;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: var(--acu-text-3);\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  font-size: 15px;\n}\n.acu-dashboard-storage-mode__card--active .acu-dashboard-storage-mode__icon {\n  color: var(--acu-accent);\n  background: transparent;\n}\n.acu-dashboard-storage-mode__body {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-dashboard-storage-mode__card-head {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex-wrap: wrap;\n  gap: 6px;\n}\n.acu-dashboard-storage-mode__name {\n  min-width: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  font-weight: 600;\n  line-height: 1.25;\n}\n.acu-dashboard-storage-mode__badge {\n  display: inline-flex;\n  align-items: center;\n  min-height: 18px;\n  padding: 1px 6px;\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-micro, 10px);\n  line-height: 1.2;\n  white-space: nowrap;\n}\n.acu-dashboard-storage-mode__card--active .acu-dashboard-storage-mode__badge {\n  background: color-mix(in srgb, var(--acu-accent) 16%, transparent);\n  color: var(--acu-accent);\n}\n.acu-dashboard-storage-mode__desc {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n@media (max-width: 640px) {\n.acu-dashboard-storage-mode__head {\n    align-items: center;\n}\n.acu-dashboard-storage-mode__switch {\n    width: 88px;\n}\n.acu-dashboard-storage-mode__card {\n    grid-template-columns: minmax(0, 1fr);\n}\n.acu-dashboard-storage-mode__icon {\n    display: none;\n}\n}\n", "src/presentation-v2/components/DashboardStorageModeSection.vue#style-0");
     var DashboardStorageModeSection_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$z = ["aria-label"];
@@ -78989,7 +82042,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-dashboard-toggle-row {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-dashboard-toggle-row__head {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\n}\n.acu-dashboard-toggle-row__label {\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 500;\r\n  color: var(--acu-text-1);\r\n  min-width: 0;\n}\n.acu-dashboard-toggle-row__desc {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.5;\r\n  color: var(--acu-text-3);\n}\r\n", "src/presentation-v2/components/DashboardToggleRow.vue#style-0");
+    injectSfcStyle("\n.acu-dashboard-toggle-row {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-dashboard-toggle-row__head {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n}\n.acu-dashboard-toggle-row__label {\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n  color: var(--acu-text-1);\n  min-width: 0;\n}\n.acu-dashboard-toggle-row__desc {\n  margin: 0;\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n  color: var(--acu-text-3);\n}\n", "src/presentation-v2/components/DashboardToggleRow.vue#style-0");
     var DashboardToggleRow_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$y = { class: "acu-dashboard-toggle-row" };
@@ -79932,7 +82985,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-dashboard-page {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-dashboard-page__toggle-list {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\r\n  margin-top: 14px;\n}\n.acu-v2-dashboard-page__health-list {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-item {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: 30px minmax(0, 1fr) max-content;\r\n  column-gap: 10px;\r\n  row-gap: 8px;\r\n  align-items: center;\r\n  padding: 10px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  transition:\r\n    border-color 0.15s ease,\r\n    background 0.15s ease;\n}\n.acu-v2-dashboard-page__health-item--error {\r\n  border-color: color-mix(in srgb, var(--acu-danger) 38%, var(--acu-border));\n}\n.acu-v2-dashboard-page__health-icon {\r\n  width: 30px;\r\n  height: 30px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-2);\n}\n.acu-v2-dashboard-page__health-item--ok .acu-v2-dashboard-page__health-icon {\r\n  color: var(--acu-success);\r\n  background: color-mix(in srgb, var(--acu-success) 10%, transparent);\n}\n.acu-v2-dashboard-page__health-item--warning\r\n  .acu-v2-dashboard-page__health-icon {\r\n  color: var(--acu-warning);\r\n  background: color-mix(in srgb, var(--acu-warning) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-item--error .acu-v2-dashboard-page__health-icon {\r\n  color: var(--acu-danger);\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-body {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-dashboard-page__health-heading {\r\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-heading strong {\r\n  min-width: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 650;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-dashboard-page__health-body p {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-dashboard-page__health-side {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-end;\r\n  gap: 8px;\r\n  justify-self: end;\n}\n.acu-v2-dashboard-page__health-action {\r\n  white-space: nowrap;\n}\n@media (max-width: 860px) {\n.acu-v2-dashboard-page {\r\n    padding: 14px;\n}\n.acu-v2-dashboard-page__health-item {\r\n    grid-template-columns: 30px minmax(0, 1fr);\r\n    align-items: center;\n}\n.acu-v2-dashboard-page__health-side {\r\n    grid-column: 2;\r\n    align-items: flex-start;\r\n    justify-self: start;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\n}\n.acu-v2-dashboard-page__health-action {\r\n    justify-self: start;\n}\n}\r\n", "src/presentation-v2/pages/DashboardPage.vue#style-0");
+    injectSfcStyle("\n.acu-v2-dashboard-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-dashboard-page__toggle-list {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n  margin-top: 14px;\n}\n.acu-v2-dashboard-page__health-list {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-item {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: 30px minmax(0, 1fr) max-content;\n  column-gap: 10px;\n  row-gap: 8px;\n  align-items: center;\n  padding: 10px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-bg-1);\n  transition:\n    border-color 0.15s ease,\n    background 0.15s ease;\n}\n.acu-v2-dashboard-page__health-item--error {\n  border-color: color-mix(in srgb, var(--acu-danger) 38%, var(--acu-border));\n}\n.acu-v2-dashboard-page__health-icon {\n  width: 30px;\n  height: 30px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  color: var(--acu-text-2);\n}\n.acu-v2-dashboard-page__health-item--ok .acu-v2-dashboard-page__health-icon {\n  color: var(--acu-success);\n  background: color-mix(in srgb, var(--acu-success) 10%, transparent);\n}\n.acu-v2-dashboard-page__health-item--warning\n  .acu-v2-dashboard-page__health-icon {\n  color: var(--acu-warning);\n  background: color-mix(in srgb, var(--acu-warning) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-item--error .acu-v2-dashboard-page__health-icon {\n  color: var(--acu-danger);\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-body {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-v2-dashboard-page__health-heading {\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-heading strong {\n  min-width: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 650;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-dashboard-page__health-body p {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-v2-dashboard-page__health-side {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  align-items: flex-end;\n  gap: 8px;\n  justify-self: end;\n}\n.acu-v2-dashboard-page__health-action {\n  white-space: nowrap;\n}\n@media (max-width: 860px) {\n.acu-v2-dashboard-page {\n    padding: 14px;\n}\n.acu-v2-dashboard-page__health-item {\n    grid-template-columns: 30px minmax(0, 1fr);\n    align-items: center;\n}\n.acu-v2-dashboard-page__health-side {\n    grid-column: 2;\n    align-items: flex-start;\n    justify-self: start;\n    flex-direction: row;\n    flex-wrap: wrap;\n}\n.acu-v2-dashboard-page__health-action {\n    justify-self: start;\n}\n}\n", "src/presentation-v2/pages/DashboardPage.vue#style-0");
     var DashboardPage_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$x = { class: "acu-v2-dashboard-page" };
@@ -80110,7 +83163,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-checkbox {\r\n  display: inline-flex; align-items: flex-start; gap: 7px;\r\n  padding: 0; border: 0; background: transparent;\r\n  font: inherit; font-size: var(--acu-font-size-body, 12px); color: var(--acu-text-2);\r\n  cursor: pointer; user-select: none;\r\n  line-height: 1.5; text-align: left;\n}\n.acu-checkbox--disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-checkbox__box {\r\n  flex-shrink: 0;\r\n  width: 16px; height: 16px; margin-top: 1px;\r\n  display: flex; align-items: center; justify-content: center;\r\n  border: 0;\r\n  border-radius: 3px;\r\n  background: var(--acu-bg-2);\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-checkbox--checked .acu-checkbox__box {\r\n  background: var(--acu-accent);\n}\n.acu-checkbox__icon {\r\n  display: block;\r\n  width: 12px; height: 12px;\r\n  color: #fff;\r\n  fill: none;\r\n  stroke: currentColor;\r\n  stroke-width: 2.15;\r\n  stroke-linecap: round;\r\n  stroke-linejoin: round;\r\n  opacity: 0;\r\n  transform: scale(0.82);\r\n  transition: opacity 0.15s ease, transform 0.15s ease;\n}\n.acu-checkbox--checked .acu-checkbox__icon {\r\n  opacity: 1;\r\n  transform: scale(1);\n}\n.acu-checkbox__label { min-width: 0;\n}\n.acu-checkbox:hover:not(:disabled) .acu-checkbox__box {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);\n}\n.acu-checkbox--checked:hover:not(:disabled) .acu-checkbox__box {\r\n  background: var(--acu-accent-2);\n}\n.acu-checkbox:focus-visible {\r\n  outline: none;\n}\n.acu-checkbox:focus-visible .acu-checkbox__box {\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\r\n", "src/presentation-v2/components/_lib/AcuCheckbox.vue#style-0");
+    injectSfcStyle("\n.acu-checkbox {\n  display: inline-flex; align-items: flex-start; gap: 7px;\n  padding: 0; border: 0; background: transparent;\n  font: inherit; font-size: var(--acu-font-size-body, 12px); color: var(--acu-text-2);\n  cursor: pointer; user-select: none;\n  line-height: 1.5; text-align: left;\n}\n.acu-checkbox--disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-checkbox__box {\n  flex-shrink: 0;\n  width: 16px; height: 16px; margin-top: 1px;\n  display: flex; align-items: center; justify-content: center;\n  border: 0;\n  border-radius: 3px;\n  background: var(--acu-bg-2);\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-checkbox--checked .acu-checkbox__box {\n  background: var(--acu-accent);\n}\n.acu-checkbox__icon {\n  display: block;\n  width: 12px; height: 12px;\n  color: #fff;\n  fill: none;\n  stroke: currentColor;\n  stroke-width: 2.15;\n  stroke-linecap: round;\n  stroke-linejoin: round;\n  opacity: 0;\n  transform: scale(0.82);\n  transition: opacity 0.15s ease, transform 0.15s ease;\n}\n.acu-checkbox--checked .acu-checkbox__icon {\n  opacity: 1;\n  transform: scale(1);\n}\n.acu-checkbox__label { min-width: 0;\n}\n.acu-checkbox:hover:not(:disabled) .acu-checkbox__box {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);\n}\n.acu-checkbox--checked:hover:not(:disabled) .acu-checkbox__box {\n  background: var(--acu-accent-2);\n}\n.acu-checkbox:focus-visible {\n  outline: none;\n}\n.acu-checkbox:focus-visible .acu-checkbox__box {\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n", "src/presentation-v2/components/_lib/AcuCheckbox.vue#style-0");
     var AcuCheckbox_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$w = ["aria-checked", "disabled"];
@@ -80185,7 +83238,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-table-selector { display: flex; flex-direction: column; gap: 8px; min-width: 0;\n}\n.acu-v2-table-selector__empty {\r\n  padding: 10px 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-table-selector__actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;\n}\n.acu-v2-table-selector__count { color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-table-selector__grid {\r\n  display: grid; gap: 6px;\r\n  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));\r\n  max-height: 240px; overflow: auto;\r\n  padding: 0;\r\n  border: 0; border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-table-selector__item {\r\n  padding: 8px 10px;\r\n  border: 0; border-radius: var(--acu-radius-sm);\r\n  background: transparent; min-width: 0;\n}\r\n", "src/presentation-v2/components/TableSelector.vue#style-0");
+    injectSfcStyle("\n.acu-v2-table-selector { display: flex; flex-direction: column; gap: 8px; min-width: 0;\n}\n.acu-v2-table-selector__empty {\n  padding: 10px 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-table-selector__actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;\n}\n.acu-v2-table-selector__count { color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-table-selector__grid {\n  display: grid; gap: 6px;\n  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));\n  max-height: 240px; overflow: auto;\n  padding: 0;\n  border: 0; border-radius: 0;\n  background: transparent;\n}\n.acu-v2-table-selector__item {\n  padding: 8px 10px;\n  border: 0; border-radius: var(--acu-radius-sm);\n  background: transparent; min-width: 0;\n}\n", "src/presentation-v2/components/TableSelector.vue#style-0");
     var TableSelector_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$v = { class: "acu-v2-table-selector" };
@@ -80497,7 +83550,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 const restoreAutoUpdateSettings = applyManualSettingsForOrchestrator();
                 let result;
                 try {
-                    result = await orchestrateManualUpdate_ACU(selectedManualTableKeys.value, runProcessBatch, async () => { await reloadStorageProvider(); }, { clearBeforeUpdate, onProgress: handleProgress });
+                    result = await orchestrateManualUpdate_ACU(selectedManualTableKeys.value, runProcessBatch, async () => { await refreshMergedDataAndNotify_ACU(); }, { clearBeforeUpdate, onProgress: handleProgress });
                 }
                 finally {
                     restoreAutoUpdateSettings();
@@ -80563,7 +83616,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-form-fill-page {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-form-fill-page__grid {\r\n  grid-template-areas:\r\n    \"status update\"\r\n    \"manual template\"\r\n    \"manual template\";\n}\n.acu-v2-form-fill-page__panel--status {\r\n  grid-area: status;\n}\n.acu-v2-form-fill-page__panel--update {\r\n  grid-area: update;\n}\n.acu-v2-form-fill-page__panel--template {\r\n  grid-area: template;\n}\n.acu-v2-form-fill-page__panel--manual {\r\n  grid-area: manual;\n}\n.acu-v2-form-fill-page__manual-number-grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-form-fill-page__status-line {\r\n  margin: 0 0 10px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-v2-form-fill-page__status-chat {\r\n  max-width: min(42ch, 100%);\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-form-fill-page__manual-extra {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\n}\n.acu-v2-form-fill-page__table-wrap {\r\n  min-width: 0;\r\n  overflow: auto;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\n}\n.acu-v2-form-fill-page__status-table {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  min-width: 560px;\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-form-fill-page__status-table th,\r\n.acu-v2-form-fill-page__status-table td {\r\n  padding: 8px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  text-align: left;\n}\n.acu-v2-form-fill-page__status-table th {\r\n  color: var(--acu-text-3);\r\n  font-weight: 600;\r\n  background: var(--acu-bg-1);\n}\n.acu-v2-form-fill-page__status-table td {\r\n  color: var(--acu-text-2);\n}\n.acu-v2-form-fill-page__status-table tr:last-child td {\r\n  border-bottom: 0;\n}\n.acu-v2-form-fill-page__status-row--ready td {\r\n  color: var(--acu-text-1);\n}\n.acu-v2-form-fill-page__empty {\r\n  text-align: center !important;\r\n  color: var(--acu-text-3) !important;\n}\n.acu-v2-form-fill-page__actions {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-form-fill-page {\r\n    padding: 14px;\n}\n.acu-v2-form-fill-page__grid {\r\n    grid-template-areas:\r\n      \"status\"\r\n      \"update\"\r\n      \"manual\"\r\n      \"template\";\n}\n.acu-v2-form-fill-page__manual-number-grid {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/pages/FormFillPage.vue#style-0");
+    injectSfcStyle("\n.acu-v2-form-fill-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-form-fill-page__grid {\n  grid-template-areas:\n    \"status update\"\n    \"manual template\"\n    \"manual template\";\n}\n.acu-v2-form-fill-page__panel--status {\n  grid-area: status;\n}\n.acu-v2-form-fill-page__panel--update {\n  grid-area: update;\n}\n.acu-v2-form-fill-page__panel--template {\n  grid-area: template;\n}\n.acu-v2-form-fill-page__panel--manual {\n  grid-area: manual;\n}\n.acu-v2-form-fill-page__manual-number-grid {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-v2-form-fill-page__status-line {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-v2-form-fill-page__status-chat {\n  max-width: min(42ch, 100%);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-form-fill-page__manual-extra {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.acu-v2-form-fill-page__table-wrap {\n  min-width: 0;\n  overflow: auto;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-v2-form-fill-page__status-table {\n  width: 100%;\n  border-collapse: collapse;\n  min-width: 560px;\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-form-fill-page__status-table th,\n.acu-v2-form-fill-page__status-table td {\n  padding: 8px 10px;\n  border-bottom: 1px solid var(--acu-border-2);\n  text-align: left;\n}\n.acu-v2-form-fill-page__status-table th {\n  color: var(--acu-text-3);\n  font-weight: 600;\n  background: var(--acu-bg-1);\n}\n.acu-v2-form-fill-page__status-table td {\n  color: var(--acu-text-2);\n}\n.acu-v2-form-fill-page__status-table tr:last-child td {\n  border-bottom: 0;\n}\n.acu-v2-form-fill-page__status-row--ready td {\n  color: var(--acu-text-1);\n}\n.acu-v2-form-fill-page__empty {\n  text-align: center !important;\n  color: var(--acu-text-3) !important;\n}\n.acu-v2-form-fill-page__actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-form-fill-page {\n    padding: 14px;\n}\n.acu-v2-form-fill-page__grid {\n    grid-template-areas:\n      \"status\"\n      \"update\"\n      \"manual\"\n      \"template\";\n}\n.acu-v2-form-fill-page__manual-number-grid {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/FormFillPage.vue#style-0");
     var FormFillPage_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$u = { class: "acu-v2-form-fill-page" };
@@ -80848,7 +83901,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-form-fill-prompt-drawer__toolbar {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\n}\n.acu-form-fill-prompt-drawer__actions {\r\n  position: sticky;\r\n  bottom: -16px;\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding: 12px 0 0;\r\n  background: var(--acu-bg-1);\n}\r\n", "src/presentation-v2/components/FormFillPromptDrawer.vue#style-0");
+    injectSfcStyle("\n.acu-form-fill-prompt-drawer__toolbar {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-form-fill-prompt-drawer__actions {\n  position: sticky;\n  bottom: -16px;\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding: 12px 0 0;\n  background: var(--acu-bg-1);\n}\n", "src/presentation-v2/components/FormFillPromptDrawer.vue#style-0");
     var FormFillPromptDrawer_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$t = { class: "acu-form-fill-prompt-drawer__toolbar" };
@@ -80996,7 +84049,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-wb-selector { display: flex; flex-direction: column; gap: 10px; min-width: 0;\n}\r\n", "src/presentation-v2/components/WorldbookSelector.vue#style-0");
+    injectSfcStyle("\n.acu-v2-wb-selector { display: flex; flex-direction: column; gap: 10px; min-width: 0;\n}\n", "src/presentation-v2/components/WorldbookSelector.vue#style-0");
     var WorldbookSelector_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$s = { class: "acu-v2-wb-selector" };
@@ -81080,7 +84133,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-wb-source-picker {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-wb-source-picker__list {\r\n  min-width: 0;\r\n  max-height: 180px;\r\n  overflow-y: auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\n}\n.acu-v2-wb-source-picker__list--disabled {\r\n  opacity: 0.65;\n}\n.acu-v2-wb-source-picker__item {\r\n  width: 100%;\r\n  min-width: 0;\r\n  min-height: 32px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 10px;\r\n  margin: 0;\r\n  padding: 7px 9px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font: inherit;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.4;\r\n  text-align: left;\r\n  cursor: pointer;\r\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-wb-source-picker__item:hover:not(:disabled) {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-wb-source-picker__item:disabled {\r\n  cursor: not-allowed;\n}\n.acu-v2-wb-source-picker__item:focus-visible {\r\n  outline: none;\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-wb-source-picker__item--selected {\r\n  background: color-mix(in srgb, var(--acu-accent) 14%, transparent);\r\n  color: var(--acu-text-1);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 42%, transparent);\n}\n.acu-v2-wb-source-picker__item--selected:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-accent) 20%, transparent);\r\n  color: var(--acu-text-1);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 54%, transparent);\n}\n.acu-v2-wb-source-picker__item-label {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-wb-source-picker__item-check {\r\n  flex-shrink: 0;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  color: var(--acu-accent);\r\n  opacity: 0;\r\n  transform: scale(0.86);\r\n  transition: opacity 0.15s ease, transform 0.15s ease;\n}\n.acu-v2-wb-source-picker__item--selected .acu-v2-wb-source-picker__item-check {\r\n  opacity: 1;\r\n  transform: scale(1);\n}\n.acu-v2-wb-source-picker__empty {\r\n  padding: 8px 2px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\n}\n.acu-v2-wb-source-picker__error {\r\n  margin: 0;\n}\r\n", "src/presentation-v2/components/WorldbookSourcePicker.vue#style-0");
+    injectSfcStyle("\n.acu-v2-wb-source-picker {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  min-width: 0;\n}\n.acu-v2-wb-source-picker__list {\n  min-width: 0;\n  max-height: 180px;\n  overflow-y: auto;\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  padding: 8px;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n}\n.acu-v2-wb-source-picker__list--disabled {\n  opacity: 0.65;\n}\n.acu-v2-wb-source-picker__item {\n  width: 100%;\n  min-width: 0;\n  min-height: 32px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 10px;\n  margin: 0;\n  padding: 7px 9px;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: var(--acu-text-2);\n  font: inherit;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.4;\n  text-align: left;\n  cursor: pointer;\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-wb-source-picker__item:hover:not(:disabled) {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-wb-source-picker__item:disabled {\n  cursor: not-allowed;\n}\n.acu-v2-wb-source-picker__item:focus-visible {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-wb-source-picker__item--selected {\n  background: color-mix(in srgb, var(--acu-accent) 14%, transparent);\n  color: var(--acu-text-1);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 42%, transparent);\n}\n.acu-v2-wb-source-picker__item--selected:hover:not(:disabled) {\n  background: color-mix(in srgb, var(--acu-accent) 20%, transparent);\n  color: var(--acu-text-1);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 54%, transparent);\n}\n.acu-v2-wb-source-picker__item-label {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-wb-source-picker__item-check {\n  flex-shrink: 0;\n  font-size: var(--acu-font-size-caption, 11px);\n  color: var(--acu-accent);\n  opacity: 0;\n  transform: scale(0.86);\n  transition: opacity 0.15s ease, transform 0.15s ease;\n}\n.acu-v2-wb-source-picker__item--selected .acu-v2-wb-source-picker__item-check {\n  opacity: 1;\n  transform: scale(1);\n}\n.acu-v2-wb-source-picker__empty {\n  padding: 8px 2px;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: center;\n}\n.acu-v2-wb-source-picker__error {\n  margin: 0;\n}\n", "src/presentation-v2/components/WorldbookSourcePicker.vue#style-0");
     var WorldbookSourcePicker_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$r = { class: "acu-v2-wb-source-picker" };
@@ -81224,7 +84277,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-wb-entries {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-wb-entries__status {\r\n  padding: 8px 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-wb-entry-item {\r\n  padding: 3px 10px;\r\n  transition: background 0.08s ease;\n}\n.acu-v2-wb-entry-item:hover { background: var(--acu-hover-overlay);\n}\n.acu-v2-wb-entry-item--disabled {\r\n  opacity: 0.5;\n}\r\n", "src/presentation-v2/components/WorldbookEntryList.vue#style-0");
+    injectSfcStyle("\n.acu-v2-wb-entries {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-v2-wb-entries__status {\n  padding: 8px 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-wb-entry-item {\n  padding: 3px 10px;\n  transition: background 0.08s ease;\n}\n.acu-v2-wb-entry-item:hover { background: var(--acu-hover-overlay);\n}\n.acu-v2-wb-entry-item--disabled {\n  opacity: 0.5;\n}\n", "src/presentation-v2/components/WorldbookEntryList.vue#style-0");
     var WorldbookEntryList_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$q = { class: "acu-v2-wb-entries" };
@@ -81320,7 +84373,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-wb-entry-toolbar {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  margin-top: 10px;\r\n  padding-top: 10px;\r\n  flex-wrap: wrap;\n}\n.acu-v2-wb-entry-toolbar__filter {\r\n  flex: 1;\r\n  min-width: 160px;\n}\r\n", "src/presentation-v2/components/WorldbookEntryToolbar.vue#style-0");
+    injectSfcStyle("\n.acu-v2-wb-entry-toolbar {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  margin-top: 10px;\n  padding-top: 10px;\n  flex-wrap: wrap;\n}\n.acu-v2-wb-entry-toolbar__filter {\n  flex: 1;\n  min-width: 160px;\n}\n", "src/presentation-v2/components/WorldbookEntryToolbar.vue#style-0");
     var WorldbookEntryToolbar_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$p = { class: "acu-v2-wb-entry-toolbar" };
@@ -81379,7 +84432,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-wb-entry-picker {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  min-width: 0;\n}\n.acu-v2-wb-entry-picker__hint {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-wb-entry-picker__hint strong {\r\n  color: var(--acu-text-1);\r\n  font-weight: 500;\n}\r\n", "src/presentation-v2/components/WorldbookEntryPickerBody.vue#style-0");
+    injectSfcStyle("\n.acu-v2-wb-entry-picker {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  min-width: 0;\n}\n.acu-v2-wb-entry-picker__hint {\n  margin: 0;\n  font-size: var(--acu-font-size-caption, 11px);\n  color: var(--acu-text-3);\n}\n.acu-v2-wb-entry-picker__hint strong {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n", "src/presentation-v2/components/WorldbookEntryPickerBody.vue#style-0");
     var WorldbookEntryPickerBody_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$o = { class: "acu-v2-wb-entry-picker" };
@@ -81935,7 +84988,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-table-page {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-table-page__col {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\r\n  min-width: 0;\n}\n.acu-v2-table-page__filter {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-table-page__toggle-row {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-table-page__toggle-head {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\n}\n.acu-v2-table-page__toggle-label {\r\n  min-width: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 500;\r\n  line-height: 1.35;\n}\n.acu-v2-table-page__toggle-desc {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.5;\n}\n.acu-v2-table-page__actions {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-table-page__status-line {\r\n  margin: 0 0 10px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\n}\n.acu-v2-table-page__status-line strong {\r\n  color: var(--acu-text-1);\r\n  font-weight: 500;\n}\n.acu-v2-table-page__preset-row {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  min-width: 0;\n}\n.acu-v2-table-page__badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  padding: 2px 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 500;\n}\n.acu-v2-table-page__badge--inherit {\r\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  color: var(--acu-text-2);\n}\n.acu-v2-table-page__badge--override {\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-table-page__hint {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-table-page__hint strong {\r\n  color: var(--acu-text-1);\r\n  font-weight: 500;\n}\n@media (max-width: 860px) {\n.acu-v2-table-page {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/TablePage.vue#style-0");
+    injectSfcStyle("\n.acu-v2-table-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-table-page__col {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n  min-width: 0;\n}\n.acu-v2-table-page__filter {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-v2-table-page__toggle-row {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-v2-table-page__toggle-head {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n}\n.acu-v2-table-page__toggle-label {\n  min-width: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n  line-height: 1.35;\n}\n.acu-v2-table-page__toggle-desc {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-v2-table-page__actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-table-page__status-line {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  color: var(--acu-text-3);\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-wrap: wrap;\n}\n.acu-v2-table-page__status-line strong {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n.acu-v2-table-page__preset-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\n  gap: 6px;\n  align-items: stretch;\n  min-width: 0;\n}\n.acu-v2-table-page__badge {\n  display: inline-flex;\n  align-items: center;\n  padding: 2px 8px;\n  border-radius: var(--acu-radius-sm);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 500;\n}\n.acu-v2-table-page__badge--inherit {\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  color: var(--acu-text-2);\n}\n.acu-v2-table-page__badge--override {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-v2-table-page__hint {\n  margin: 0;\n  font-size: var(--acu-font-size-body, 12px);\n  color: var(--acu-text-3);\n}\n.acu-v2-table-page__hint strong {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n@media (max-width: 860px) {\n.acu-v2-table-page {\n    padding: 14px;\n}\n}\n", "src/presentation-v2/pages/TablePage.vue#style-0");
     var TablePage_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$n = { class: "acu-v2-table-page" };
@@ -82135,7 +85188,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-api-page {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-api-page__spacer {\r\n  min-width: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-api-page {\r\n    padding: 14px;\n}\n.acu-v2-api-page__spacer {\r\n    display: none;\n}\n}\r\n", "src/presentation-v2/pages/ApiPage.vue#style-0");
+    injectSfcStyle("\n.acu-v2-api-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-api-page__spacer {\n  min-width: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-api-page {\n    padding: 14px;\n}\n.acu-v2-api-page__spacer {\n    display: none;\n}\n}\n", "src/presentation-v2/pages/ApiPage.vue#style-0");
     var ApiPage_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$m = { class: "acu-v2-api-page" };
@@ -82482,7 +85535,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-plot-page { min-height: 100%; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 18px;\n}\n@media (max-width: 860px) {\n.acu-v2-plot-page { padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/PlotPage.vue#style-0");
+    injectSfcStyle("\n.acu-v2-plot-page { min-height: 100%; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 18px;\n}\n@media (max-width: 860px) {\n.acu-v2-plot-page { padding: 14px;\n}\n}\n", "src/presentation-v2/pages/PlotPage.vue#style-0");
     var PlotPage_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$l = { class: "acu-v2-plot-page" };
@@ -82851,7 +85904,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-continuation-page {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-continuation-page__side-stack {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\r\n  min-width: 0;\n}\n.acu-v2-continuation-page__prompt-toolbar,\r\n.acu-v2-continuation-page__prompt-head,\r\n.acu-v2-continuation-page__actions,\r\n.acu-v2-continuation-page__status {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\n}\n.acu-v2-continuation-page__prompt-toolbar {\r\n  justify-content: space-between;\n}\n.acu-v2-continuation-page__meta,\r\n.acu-v2-continuation-page__empty,\r\n.acu-v2-continuation-page__timer {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-continuation-page__empty {\r\n  margin: 0;\r\n  padding: 10px 0;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-continuation-page__prompt-list {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-continuation-page__prompt-item {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\r\n  padding: 0 0 12px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-continuation-page__prompt-item:last-child {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-continuation-page__prompt-head {\r\n  justify-content: space-between;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 500;\n}\n.acu-v2-continuation-page__number-grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\n}\n.acu-v2-continuation-page__status {\r\n  min-height: 38px;\r\n  padding: 8px 0 8px 10px;\r\n  border: 0;\r\n  border-left: 2px solid color-mix(in srgb, var(--acu-text-3) 28%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-continuation-page__status-label {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-continuation-page__status strong {\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-v2-continuation-page__status strong.is-running {\r\n  color: var(--acu-success);\n}\n.acu-v2-continuation-page__actions {\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-continuation-page {\r\n    padding: 14px;\n}\n.acu-v2-continuation-page__number-grid {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/pages/ContinuationPage.vue#style-0");
+    injectSfcStyle("\n.acu-v2-continuation-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-continuation-page__side-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n  min-width: 0;\n}\n.acu-v2-continuation-page__prompt-toolbar,\n.acu-v2-continuation-page__prompt-head,\n.acu-v2-continuation-page__actions,\n.acu-v2-continuation-page__status {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.acu-v2-continuation-page__prompt-toolbar {\n  justify-content: space-between;\n}\n.acu-v2-continuation-page__meta,\n.acu-v2-continuation-page__empty,\n.acu-v2-continuation-page__timer {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-continuation-page__empty {\n  margin: 0;\n  padding: 10px 0;\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-continuation-page__prompt-list {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-v2-continuation-page__prompt-item {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n  padding: 0 0 12px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-continuation-page__prompt-item:last-child {\n  padding-bottom: 0;\n  border-bottom: 0;\n}\n.acu-v2-continuation-page__prompt-head {\n  justify-content: space-between;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  font-weight: 500;\n}\n.acu-v2-continuation-page__number-grid {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 12px;\n}\n.acu-v2-continuation-page__status {\n  min-height: 38px;\n  padding: 8px 0 8px 10px;\n  border: 0;\n  border-left: 2px solid color-mix(in srgb, var(--acu-text-3) 28%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-continuation-page__status-label {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-continuation-page__status strong {\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-v2-continuation-page__status strong.is-running {\n  color: var(--acu-success);\n}\n.acu-v2-continuation-page__actions {\n  justify-content: flex-end;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-continuation-page {\n    padding: 14px;\n}\n.acu-v2-continuation-page__number-grid {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/ContinuationPage.vue#style-0");
     var ContinuationPage_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$k = { class: "acu-v2-continuation-page" };
@@ -83523,7 +86576,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-import-page {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-import-page__action-grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-import-page__action-grid :deep(.acu-file-button),\r\n.acu-v2-import-page__action-grid :deep(.acu-btn) {\r\n  width: 100%;\r\n  min-width: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-import-page {\r\n    padding: 14px;\n}\n}\n@media (max-width: 560px) {\n.acu-v2-import-page__action-grid {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/pages/ImportPage.vue#style-0");
+    injectSfcStyle("\n.acu-v2-import-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-import-page__action-grid {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-import-page__action-grid :deep(.acu-file-button),\n.acu-v2-import-page__action-grid :deep(.acu-btn) {\n  width: 100%;\n  min-width: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-import-page {\n    padding: 14px;\n}\n}\n@media (max-width: 560px) {\n.acu-v2-import-page__action-grid {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/ImportPage.vue#style-0");
     var ImportPage_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$j = { class: "acu-v2-import-page" };
@@ -83688,7 +86741,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-stats {\r\n  margin: 0;\r\n  padding: 2px 0 0;\r\n  background: transparent;\r\n  border-radius: 0;\r\n  display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 16px;\n}\n.acu-stats__item {\r\n  min-width: 0;\r\n  padding: 8px 0;\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-stats dt {\r\n  margin: 0 0 2px; font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n}\n.acu-stats dd {\r\n  margin: 0; font-size: var(--acu-font-size-body, 12px); color: var(--acu-text-1); word-break: break-all;\n}\n.acu-stats--mono code {\r\n  display: inline-block; max-width: 100%;\r\n  font-family: var(--acu-font-mono); font-size: var(--acu-font-size-body, 12px);\r\n  background: transparent; color: var(--acu-text-1);\r\n  padding: 0; border-radius: 0;\n}\n@media (max-width: 720px) {\n.acu-stats { grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuStatsList.vue#style-0");
+    injectSfcStyle("\n.acu-stats {\n  margin: 0;\n  padding: 2px 0 0;\n  background: transparent;\n  border-radius: 0;\n  display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 16px;\n}\n.acu-stats__item {\n  min-width: 0;\n  padding: 8px 0;\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-stats dt {\n  margin: 0 0 2px; font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n}\n.acu-stats dd {\n  margin: 0; font-size: var(--acu-font-size-body, 12px); color: var(--acu-text-1); word-break: break-all;\n}\n.acu-stats--mono code {\n  display: inline-block; max-width: 100%;\n  font-family: var(--acu-font-mono); font-size: var(--acu-font-size-body, 12px);\n  background: transparent; color: var(--acu-text-1);\n  padding: 0; border-radius: 0;\n}\n@media (max-width: 720px) {\n.acu-stats { grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/components/_lib/AcuStatsList.vue#style-0");
     var AcuStatsList_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$i = { key: 0 };
@@ -83771,7 +86824,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-vector-prompt-drawer__toolbar {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\n}\n.acu-vector-prompt-drawer__actions {\r\n  position: sticky;\r\n  bottom: -16px;\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding: 12px 0 0;\r\n  background: var(--acu-bg-1);\n}\r\n", "src/presentation-v2/components/VectorIndexPromptDrawer.vue#style-0");
+    injectSfcStyle("\n.acu-vector-prompt-drawer__toolbar {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-vector-prompt-drawer__actions {\n  position: sticky;\n  bottom: -16px;\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding: 12px 0 0;\n  background: var(--acu-bg-1);\n}\n", "src/presentation-v2/components/VectorIndexPromptDrawer.vue#style-0");
     var VectorIndexPromptDrawer_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$h = { class: "acu-vector-prompt-drawer__toolbar" };
@@ -84320,7 +87373,25 @@ Expected function or array of functions, received type ${typeof value}.`
                 }
                 const summaryKey = findSummaryTableKey();
                 if (summaryKey) {
-                    await saveIndependentTableToChatHistory_ACU(getLastMessageIndex_ACU(), [summaryKey], [summaryKey]);
+                    const writeSet = [{ kind: 'sheet', sheetKey: summaryKey }];
+                    await runTableUpdateCommit_ACU({
+                        source: 'system',
+                        reason: 'vector_index_v2_rebuild_snapshot',
+                        writeSet,
+                        revisionWriteSet: writeSet,
+                        initialData: currentJsonTableData_ACU,
+                        targetMessageIndex: getLastMessageIndex_ACU(),
+                        targetSheetKeys: [summaryKey],
+                        updateGroupKeys: null,
+                        trackingSheetKeys: [],
+                        trackAsUpdate: false,
+                        operations: [{ kind: 'sheet_replace', sheetKey: summaryKey, sheet: currentJsonTableData_ACU[summaryKey], reason: 'system' }],
+                    }, () => ({
+                        success: true,
+                        value: null,
+                        tableData: currentJsonTableData_ACU,
+                        mutationResult: { changes: 1, errors: [] },
+                    }));
                 }
                 const result = await archiveSummaryVectorIndexNow_ACU({ mode: 'sync' });
                 if (result.success && !result.skipped) {
@@ -84529,7 +87600,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-vector-index-page {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-vector-index-page__panel-stack {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-vector-index-page__number-grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-vector-api-form {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-vector-api-form__section {\r\n  min-width: 0;\r\n  margin: 0;\r\n  padding: 0 0 18px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\n}\n.acu-v2-vector-api-form__section:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-vector-api-form__section + .acu-v2-vector-api-form__section {\r\n  padding-top: 2px;\n}\n.acu-v2-vector-api-form__section legend {\r\n  width: 100%;\r\n  margin: 0 0 2px;\r\n  padding: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  line-height: 1.35;\n}\n.acu-v2-vector-api-form__actions {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__hint {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.55;\n}\n.acu-v2-vector-index-page__maintenance-spacer {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\n}\n.acu-v2-vector-index-page__actions {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__prompt-actions {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-vector-index-page {\r\n    padding: 14px;\n}\n}\n.acu-v2-vector-api-form__instruction-textarea {\r\n  width: 100%;\r\n  min-height: 60px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\r\n", "src/presentation-v2/pages/VectorIndexPage.vue#style-0");
+    injectSfcStyle("\n.acu-v2-vector-index-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-vector-index-page__panel-stack {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n.acu-v2-vector-index-page__number-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\n  gap: 10px;\n}\n.acu-v2-vector-api-form {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-v2-vector-api-form__section {\n  min-width: 0;\n  margin: 0;\n  padding: 0 0 18px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n}\n.acu-v2-vector-api-form__section:last-of-type {\n  padding-bottom: 0;\n  border-bottom: 0;\n}\n.acu-v2-vector-api-form__section + .acu-v2-vector-api-form__section {\n  padding-top: 2px;\n}\n.acu-v2-vector-api-form__section legend {\n  width: 100%;\n  margin: 0 0 2px;\n  padding: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  font-weight: 700;\n  line-height: 1.35;\n}\n.acu-v2-vector-api-form__actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__hint {\n  margin: 0;\n  font-size: var(--acu-font-size-body, 12px);\n  color: var(--acu-text-3);\n  line-height: 1.55;\n}\n.acu-v2-vector-index-page__maintenance-spacer {\n  flex: 1 1 auto;\n  min-height: 0;\n}\n.acu-v2-vector-index-page__actions {\n  display: flex;\n  justify-content: flex-end;\n  flex-wrap: wrap;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__prompt-actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-vector-index-page {\n    padding: 14px;\n}\n}\n.acu-v2-vector-api-form__instruction-textarea {\n  width: 100%;\n  min-height: 60px;\n  padding: 6px 8px;\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\n  border-radius: 4px;\n  background: var(--acu-bg-2, transparent);\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.5;\n  resize: vertical;\n}\n", "src/presentation-v2/pages/VectorIndexPage.vue#style-0");
     var VectorIndexPage_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$g = { class: "acu-v2-vector-index-page" };
@@ -85472,7 +88543,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-data-mgmt-page {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-data-mgmt-page__panel-stack {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-data-mgmt-page__form-grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\n}\n.acu-v2-data-mgmt-page__form-stack {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\n}\n.acu-v2-data-mgmt-page__meta {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-data-mgmt-page__cleanup-section {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  min-width: 0;\n}\n.acu-v2-data-mgmt-page__cleanup-section\r\n  + .acu-v2-data-mgmt-page__cleanup-section {\r\n  margin-top: 4px;\r\n  padding-top: 14px;\r\n  border-top: 1px solid var(--acu-border);\n}\n.acu-v2-data-mgmt-page__section-title {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.35;\n}\n.acu-v2-data-mgmt-page__history {\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-bg-2) 72%, transparent);\n}\n.acu-v2-data-mgmt-page__history :deep(.acu-disclosure-group__header) {\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-data-mgmt-page__history-list {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-data-mgmt-page__history-item {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) auto;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-data-mgmt-page__history-fill {\r\n  width: 100%;\r\n  min-width: 0;\r\n  justify-content: flex-start;\n}\n.acu-v2-data-mgmt-page__history-code {\r\n  flex: 1;\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-align: left;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  font-family: var(--acu-font-mono, Consolas, Menlo, monospace);\n}\n.acu-v2-data-mgmt-page__history-current {\r\n  flex-shrink: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-data-mgmt-page__history-empty {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.5;\n}\n.acu-v2-data-mgmt-page__actions {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  justify-content: flex-end;\n}\n.acu-v2-data-mgmt-page__actions,\r\n.acu-v2-data-mgmt-page__command-grid {\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-data-mgmt-page__command-grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 8px;\n}\n.acu-v2-data-mgmt-page__command-grid--cleanup {\r\n  margin-top: 12px;\n}\n.acu-v2-data-mgmt-page__command-grid :deep(.acu-file-button),\r\n.acu-v2-data-mgmt-page__command-grid :deep(.acu-btn) {\r\n  width: 100%;\r\n  min-width: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-data-mgmt-page {\r\n    padding: 14px;\n}\n.acu-v2-data-mgmt-page__form-grid {\r\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 560px) {\n.acu-v2-data-mgmt-page__command-grid {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/pages/DataMgmtPage.vue#style-0");
+    injectSfcStyle("\n.acu-v2-data-mgmt-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-data-mgmt-page__panel-stack {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n.acu-v2-data-mgmt-page__form-grid {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 12px;\n}\n.acu-v2-data-mgmt-page__form-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n}\n.acu-v2-data-mgmt-page__meta {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-v2-data-mgmt-page__cleanup-section {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  min-width: 0;\n}\n.acu-v2-data-mgmt-page__cleanup-section\n  + .acu-v2-data-mgmt-page__cleanup-section {\n  margin-top: 4px;\n  padding-top: 14px;\n  border-top: 1px solid var(--acu-border);\n}\n.acu-v2-data-mgmt-page__section-title {\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 600;\n  line-height: 1.35;\n}\n.acu-v2-data-mgmt-page__history {\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-bg-2) 72%, transparent);\n}\n.acu-v2-data-mgmt-page__history :deep(.acu-disclosure-group__header) {\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-data-mgmt-page__history-list {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-v2-data-mgmt-page__history-item {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 8px;\n  align-items: center;\n}\n.acu-v2-data-mgmt-page__history-fill {\n  width: 100%;\n  min-width: 0;\n  justify-content: flex-start;\n}\n.acu-v2-data-mgmt-page__history-code {\n  flex: 1;\n  min-width: 0;\n  overflow: hidden;\n  text-align: left;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-family: var(--acu-font-mono, Consolas, Menlo, monospace);\n}\n.acu-v2-data-mgmt-page__history-current {\n  flex-shrink: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-data-mgmt-page__history-empty {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-v2-data-mgmt-page__actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  justify-content: flex-end;\n}\n.acu-v2-data-mgmt-page__actions,\n.acu-v2-data-mgmt-page__command-grid {\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-data-mgmt-page__command-grid {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 8px;\n}\n.acu-v2-data-mgmt-page__command-grid--cleanup {\n  margin-top: 12px;\n}\n.acu-v2-data-mgmt-page__command-grid :deep(.acu-file-button),\n.acu-v2-data-mgmt-page__command-grid :deep(.acu-btn) {\n  width: 100%;\n  min-width: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-data-mgmt-page {\n    padding: 14px;\n}\n.acu-v2-data-mgmt-page__form-grid {\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 560px) {\n.acu-v2-data-mgmt-page__command-grid {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/DataMgmtPage.vue#style-0");
     var DataMgmtPage_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$f = { class: "acu-v2-data-mgmt-page" };
@@ -85801,7 +88872,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-content-replace-preset-drawer__top-actions {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\n}\n.acu-content-replace-preset-drawer__empty {\r\n  margin: 12px 0;\n}\n.acu-v2-manage-list {\r\n  list-style: none;\r\n  margin: 0;\r\n  padding: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-manage-item {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  padding: 10px 12px;\r\n  border: 0;\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-manage-item:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info {\r\n  flex: 1;\r\n  min-width: 0;\n}\n.acu-v2-manage-item__name {\r\n  display: block;\r\n  font-size: var(--acu-font-size-list-title, 13px);\r\n  line-height: var(--acu-line-height-body, 1.45);\r\n  font-weight: 500;\r\n  color: var(--acu-text-1);\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta {\r\n  display: block;\r\n  margin-top: 2px;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions {\r\n  display: flex;\r\n  gap: 4px;\n}\r\n", "src/presentation-v2/components/ContentReplacePresetDrawer.vue#style-0");
+    injectSfcStyle("\n.acu-content-replace-preset-drawer__top-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-content-replace-preset-drawer__empty {\n  margin: 12px 0;\n}\n.acu-v2-manage-list {\n  list-style: none;\n  margin: 0;\n  padding: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-v2-manage-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 10px 12px;\n  border: 0;\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-manage-item:last-child {\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info {\n  flex: 1;\n  min-width: 0;\n}\n.acu-v2-manage-item__name {\n  display: block;\n  font-size: var(--acu-font-size-list-title, 13px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 500;\n  color: var(--acu-text-1);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta {\n  display: block;\n  margin-top: 2px;\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: var(--acu-line-height-caption, 1.5);\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions {\n  display: flex;\n  gap: 4px;\n}\n", "src/presentation-v2/components/ContentReplacePresetDrawer.vue#style-0");
     var ContentReplacePresetDrawer_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$e = { class: "acu-content-replace-preset-drawer__top-actions" };
@@ -85978,7 +89049,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-content-replace-prompt-drawer__meta {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  flex-wrap: wrap;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.5;\n}\n.acu-content-replace-prompt-drawer__meta code {\r\n  padding: 2px 5px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-2);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-content-replace-prompt-drawer__toolbar {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\n}\n.acu-content-replace-prompt-drawer__actions {\r\n  position: sticky;\r\n  bottom: -16px;\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding: 12px 0 0;\r\n  background: var(--acu-bg-1);\n}\r\n", "src/presentation-v2/components/ContentReplacePromptDrawer.vue#style-0");
+    injectSfcStyle("\n.acu-content-replace-prompt-drawer__meta {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  flex-wrap: wrap;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-content-replace-prompt-drawer__meta code {\n  padding: 2px 5px;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  color: var(--acu-text-2);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-content-replace-prompt-drawer__toolbar {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-content-replace-prompt-drawer__actions {\n  position: sticky;\n  bottom: -16px;\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding: 12px 0 0;\n  background: var(--acu-bg-1);\n}\n", "src/presentation-v2/components/ContentReplacePromptDrawer.vue#style-0");
     var ContentReplacePromptDrawer_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$d = { class: "acu-content-replace-prompt-drawer__meta" };
@@ -86882,7 +89953,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-content-replace-page {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-content-replace-page__mini-status span {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.5;\n}\n.acu-v2-content-replace-page__number-grid,\r\n.acu-v2-content-replace-page__form-grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\n}\n.acu-v2-content-replace-page__choice-list,\r\n.acu-v2-content-replace-page__rule-stack {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-content-replace-page__mini-status {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 10px;\r\n  padding: 8px 0;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-content-replace-page__mini-status strong {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-content-replace-page__status-line {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\r\n  margin: 0 0 10px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-content-replace-page__status-line strong {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-content-replace-page__badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  padding: 1px 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 500;\n}\n.acu-v2-content-replace-page__select-row {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  min-width: 0;\n}\n.acu-v2-content-replace-page__actions {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-content-replace-page__test-output {\r\n  margin: 0;\r\n  max-height: 280px;\r\n  overflow: auto;\r\n  padding: 10px 0;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\n}\n@media (max-width: 860px) {\n.acu-v2-content-replace-page {\r\n    padding: 14px;\n}\n.acu-v2-content-replace-page__number-grid,\r\n  .acu-v2-content-replace-page__form-grid {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/pages/ContentReplacePage.vue#style-0");
+    injectSfcStyle("\n.acu-v2-content-replace-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-content-replace-page__mini-status span {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-v2-content-replace-page__number-grid,\n.acu-v2-content-replace-page__form-grid {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 12px;\n}\n.acu-v2-content-replace-page__choice-list,\n.acu-v2-content-replace-page__rule-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-v2-content-replace-page__mini-status {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 10px;\n  padding: 8px 0;\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-content-replace-page__mini-status strong {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-content-replace-page__status-line {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-wrap: wrap;\n  margin: 0 0 10px;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-content-replace-page__status-line strong {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-content-replace-page__badge {\n  display: inline-flex;\n  align-items: center;\n  padding: 1px 8px;\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 500;\n}\n.acu-v2-content-replace-page__select-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\n  gap: 6px;\n  align-items: stretch;\n  min-width: 0;\n}\n.acu-v2-content-replace-page__actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  justify-content: flex-end;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-content-replace-page__test-output {\n  margin: 0;\n  max-height: 280px;\n  overflow: auto;\n  padding: 10px 0;\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.55;\n  white-space: pre-wrap;\n  word-break: break-word;\n}\n@media (max-width: 860px) {\n.acu-v2-content-replace-page {\n    padding: 14px;\n}\n.acu-v2-content-replace-page__number-grid,\n  .acu-v2-content-replace-page__form-grid {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/ContentReplacePage.vue#style-0");
     var ContentReplacePage_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$c = { class: "acu-v2-content-replace-page" };
@@ -87340,17 +90411,17 @@ Expected function or array of functions, received type ${typeof value}.`
         }
         function showTables() {
             setSql("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_acu_%' ORDER BY name;");
-            executeCurrent();
+            void executeCurrent();
         }
         function showSchema() {
             setSql("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_acu_%' ORDER BY name;");
-            executeCurrent();
+            void executeCurrent();
         }
         function useHistoryItem(item) {
             sqlText.value = item.sql;
             toast.info('已把历史 SQL 填入编辑器。');
         }
-        function executeCurrent() {
+        async function executeCurrent() {
             const sql = sqlText.value.trim();
             if (!sql) {
                 toast.warning('SQL 语句不能为空。');
@@ -87365,7 +90436,7 @@ Expected function or array of functions, received type ${typeof value}.`
             busyAction.value = 'execute';
             const startTime = performance.now();
             try {
-                const provider = getStorageProvider();
+                const provider = await ensureStorageProviderReady_ACU();
                 if (isSqlConsoleQuery(sql)) {
                     const queryResult = provider.executeQuery(sql);
                     const elapsedMs = (performance.now() - startTime).toFixed(1);
@@ -87382,10 +90453,25 @@ Expected function or array of functions, received type ${typeof value}.`
                     logDebug_ACU(`[ACU-V2 SQL Console] query ok: ${queryResult.rowCount} rows, ${elapsedMs}ms`);
                     return;
                 }
-                const mutationResult = provider.executeMutation(sql);
+                const commitResult = await runSqliteRuntimeMutationCommit_ACU({
+                    source: 'raw_sql_mutation',
+                    reason: 'sql_console_v2_mutation',
+                    isolationKey: getCurrentIsolationKey_ACU(),
+                    writeSet: [{ kind: 'all' }],
+                    revisionWriteSet: [{ kind: 'all' }],
+                    initialData: currentJsonTableData_ACU,
+                    targetMessageIndex: -1,
+                    targetSheetKeys: null,
+                    updateGroupKeys: null,
+                    trackingSheetKeys: [],
+                    trackAsUpdate: false,
+                    sql,
+                    mapValue: () => null,
+                });
+                const mutationResult = commitResult.mutationResult || { changes: 0, errors: commitResult.error ? [commitResult.error] : [] };
                 const elapsedMs = (performance.now() - startTime).toFixed(1);
-                if (mutationResult.errors.length > 0) {
-                    const error = mutationResult.errors.join('\n');
+                if (!commitResult.success || mutationResult.errors.length > 0) {
+                    const error = mutationResult.errors.join('\n') || commitResult.error || '执行失败';
                     result.value = { ...emptyResult(), kind: 'error', elapsedMs, error };
                     addHistory(sql, false);
                     toast.error('执行失败，请检查结果区中的错误信息。');
@@ -87668,7 +90754,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-advanced-tools-page {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-advanced-tools-page__sql-panel,\r\n.acu-v2-advanced-tools-page__log-panel {\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__quick-actions,\r\n.acu-v2-advanced-tools-page__log-actions {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-textarea {\r\n  font-family: var(--acu-font-mono);\r\n  min-height: 210px;\r\n  white-space: pre;\n}\n.acu-v2-advanced-tools-page__sql-actions {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-advanced-tools-page__sql-status {\r\n  margin-left: auto;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\n}\n.acu-v2-advanced-tools-page__sql-status--success {\r\n  color: var(--acu-success);\n}\n.acu-v2-advanced-tools-page__sql-status--warning {\r\n  color: var(--acu-warning);\n}\n.acu-v2-advanced-tools-page__sql-status--error {\r\n  color: var(--acu-danger);\n}\n.acu-v2-advanced-tools-page__sql-result-section,\r\n.acu-v2-advanced-tools-page__sql-history-section {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-advanced-tools-page__sql-history-section {\r\n  padding-top: 12px;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-v2-advanced-tools-page__section-title {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.35;\n}\n.acu-v2-advanced-tools-page__empty {\r\n  min-height: 96px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__empty--compact {\r\n  min-height: 72px;\n}\n.acu-v2-advanced-tools-page__empty--log {\r\n  min-height: 180px;\r\n  border: 0;\n}\n.acu-v2-advanced-tools-page__sql-table-wrap {\r\n  max-height: 330px;\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-result-table {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-advanced-tools-page__sql-result-table th,\r\n.acu-v2-advanced-tools-page__sql-result-table td {\r\n  max-width: 300px;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  text-align: left;\r\n  white-space: nowrap;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\n}\n.acu-v2-advanced-tools-page__sql-result-table th {\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 1;\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-v2-advanced-tools-page__sql-result-table tbody tr:nth-child(even) {\r\n  background: color-mix(in srgb, var(--acu-text-3) 5%, transparent);\n}\n.acu-v2-advanced-tools-page__cell-null,\r\n.acu-v2-advanced-tools-page__empty-cell {\r\n  color: var(--acu-text-3);\r\n  font-style: italic;\n}\n.acu-v2-advanced-tools-page__sql-result-meta {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: right;\n}\n.acu-v2-advanced-tools-page__sql-error {\r\n  margin: 0;\r\n  min-height: 96px;\r\n  padding: 12px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 8%, transparent);\r\n  color: var(--acu-danger);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__filter-grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\r\n  align-items: stretch;\n}\n.acu-v2-advanced-tools-page__keyword-row {\r\n  grid-column: 1 / -1;\n}\n.acu-v2-advanced-tools-page__log-control-row {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 14px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__toggles {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 14px;\r\n  align-items: center;\r\n  margin-left: auto;\n}\n.acu-v2-advanced-tools-page__hint {\r\n  flex: 1 1 100%;\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-list,\r\n.acu-v2-advanced-tools-page__log-list {\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-list {\r\n  max-height: 230px;\n}\n.acu-v2-advanced-tools-page__log-list {\r\n  min-height: 360px;\r\n  max-height: 58vh;\n}\n.acu-v2-advanced-tools-page__sql-history-item,\r\n.acu-v2-advanced-tools-page__log-row {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\r\n  align-items: baseline;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\r\n  border: 0;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: transparent;\r\n  color: inherit;\r\n  cursor: pointer;\r\n  font: inherit;\r\n  text-align: left;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-advanced-tools-page__log-row {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\n}\n.acu-v2-advanced-tools-page__log-meta {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-history-meta {\r\n  flex-wrap: nowrap;\n}\n.acu-v2-advanced-tools-page__sql-history-item:last-child,\r\n.acu-v2-advanced-tools-page__log-row:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item--failure,\r\n.acu-v2-advanced-tools-page__log-row--error {\r\n  background: color-mix(in srgb, var(--acu-danger) 7%, transparent);\n}\n.acu-v2-advanced-tools-page__log-row--warn {\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, transparent);\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn:hover {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn:focus-visible {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\r\n  outline: none;\n}\n.acu-v2-advanced-tools-page__log-time,\r\n.acu-v2-advanced-tools-page__log-tag,\r\n.acu-v2-advanced-tools-page__log-message {\r\n  min-width: 0;\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-advanced-tools-page__log-time {\r\n  color: var(--acu-text-3);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-tag {\r\n  flex: 1 1 180px;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-message {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__log-body {\r\n  display: block;\r\n  width: 100%;\n}\n@media (max-width: 1080px) {\n.acu-v2-advanced-tools-page {\r\n    padding: 14px;\n}\n.acu-v2-advanced-tools-page__sql-actions {\r\n    justify-content: stretch;\n}\n.acu-v2-advanced-tools-page__sql-status {\r\n    width: 100%;\r\n    margin-left: 0;\r\n    text-align: right;\n}\n.acu-v2-advanced-tools-page__filter-grid {\r\n    grid-template-columns: 1fr;\n}\n.acu-v2-advanced-tools-page__log-control-row {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-v2-advanced-tools-page__toggles {\r\n    margin-left: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item,\r\n  .acu-v2-advanced-tools-page__log-row {\r\n    padding-inline: 9px;\n}\n}\r\n", "src/presentation-v2/pages/AdvancedToolsPage.vue#style-0");
+    injectSfcStyle("\n.acu-v2-advanced-tools-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-advanced-tools-page__sql-panel,\n.acu-v2-advanced-tools-page__log-panel {\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__quick-actions,\n.acu-v2-advanced-tools-page__log-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-textarea {\n  font-family: var(--acu-font-mono);\n  min-height: 210px;\n  white-space: pre;\n}\n.acu-v2-advanced-tools-page__sql-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  align-items: center;\n  justify-content: flex-end;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-advanced-tools-page__sql-status {\n  margin-left: auto;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.5;\n}\n.acu-v2-advanced-tools-page__sql-status--success {\n  color: var(--acu-success);\n}\n.acu-v2-advanced-tools-page__sql-status--warning {\n  color: var(--acu-warning);\n}\n.acu-v2-advanced-tools-page__sql-status--error {\n  color: var(--acu-danger);\n}\n.acu-v2-advanced-tools-page__sql-result-section,\n.acu-v2-advanced-tools-page__sql-history-section {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-v2-advanced-tools-page__sql-history-section {\n  padding-top: 12px;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-v2-advanced-tools-page__section-title {\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 600;\n  line-height: 1.35;\n}\n.acu-v2-advanced-tools-page__empty {\n  min-height: 96px;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: center;\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__empty--compact {\n  min-height: 72px;\n}\n.acu-v2-advanced-tools-page__empty--log {\n  min-height: 180px;\n  border: 0;\n}\n.acu-v2-advanced-tools-page__sql-table-wrap {\n  max-height: 330px;\n  overflow: auto;\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-result-table {\n  width: 100%;\n  border-collapse: collapse;\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-advanced-tools-page__sql-result-table th,\n.acu-v2-advanced-tools-page__sql-result-table td {\n  max-width: 300px;\n  padding: 7px 10px;\n  border-bottom: 1px solid var(--acu-border-2);\n  text-align: left;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n.acu-v2-advanced-tools-page__sql-result-table th {\n  position: sticky;\n  top: 0;\n  z-index: 1;\n  background: var(--acu-bg-1);\n  color: var(--acu-text-1);\n  font-weight: 600;\n}\n.acu-v2-advanced-tools-page__sql-result-table tbody tr:nth-child(even) {\n  background: color-mix(in srgb, var(--acu-text-3) 5%, transparent);\n}\n.acu-v2-advanced-tools-page__cell-null,\n.acu-v2-advanced-tools-page__empty-cell {\n  color: var(--acu-text-3);\n  font-style: italic;\n}\n.acu-v2-advanced-tools-page__sql-result-meta {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: right;\n}\n.acu-v2-advanced-tools-page__sql-error {\n  margin: 0;\n  min-height: 96px;\n  padding: 12px;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-danger) 8%, transparent);\n  color: var(--acu-danger);\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__filter-grid {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 12px;\n  align-items: stretch;\n}\n.acu-v2-advanced-tools-page__keyword-row {\n  grid-column: 1 / -1;\n}\n.acu-v2-advanced-tools-page__log-control-row {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 10px 14px;\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__toggles {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 14px;\n  align-items: center;\n  margin-left: auto;\n}\n.acu-v2-advanced-tools-page__hint {\n  flex: 1 1 100%;\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-list,\n.acu-v2-advanced-tools-page__log-list {\n  overflow: auto;\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-list {\n  max-height: 230px;\n}\n.acu-v2-advanced-tools-page__log-list {\n  min-height: 360px;\n  max-height: 58vh;\n}\n.acu-v2-advanced-tools-page__sql-history-item,\n.acu-v2-advanced-tools-page__log-row {\n  min-width: 0;\n  display: grid;\n  gap: 8px;\n  align-items: baseline;\n  padding: 7px 10px;\n  border-bottom: 1px solid var(--acu-border-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn {\n  display: flex;\n  flex-direction: column;\n  align-items: stretch;\n  gap: 6px;\n  padding-block: 9px;\n  border: 0;\n  border-bottom: 1px solid var(--acu-border-2);\n  background: transparent;\n  color: inherit;\n  cursor: pointer;\n  font: inherit;\n  text-align: left;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-advanced-tools-page__log-row {\n  display: flex;\n  flex-direction: column;\n  align-items: stretch;\n  gap: 6px;\n  padding-block: 9px;\n}\n.acu-v2-advanced-tools-page__log-meta {\n  min-width: 0;\n  display: flex;\n  flex-wrap: wrap;\n  gap: 6px 8px;\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-history-meta {\n  flex-wrap: nowrap;\n}\n.acu-v2-advanced-tools-page__sql-history-item:last-child,\n.acu-v2-advanced-tools-page__log-row:last-child {\n  border-bottom: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item--failure,\n.acu-v2-advanced-tools-page__log-row--error {\n  background: color-mix(in srgb, var(--acu-danger) 7%, transparent);\n}\n.acu-v2-advanced-tools-page__log-row--warn {\n  background: color-mix(in srgb, var(--acu-warning) 6%, transparent);\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn:hover {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn:focus-visible {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n  outline: none;\n}\n.acu-v2-advanced-tools-page__log-time,\n.acu-v2-advanced-tools-page__log-tag,\n.acu-v2-advanced-tools-page__log-message {\n  min-width: 0;\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-advanced-tools-page__log-time {\n  color: var(--acu-text-3);\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-tag {\n  flex: 1 1 180px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-message {\n  margin: 0;\n  color: var(--acu-text-1);\n  white-space: pre-wrap;\n  word-break: break-word;\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__log-body {\n  display: block;\n  width: 100%;\n}\n@media (max-width: 1080px) {\n.acu-v2-advanced-tools-page {\n    padding: 14px;\n}\n.acu-v2-advanced-tools-page__sql-actions {\n    justify-content: stretch;\n}\n.acu-v2-advanced-tools-page__sql-status {\n    width: 100%;\n    margin-left: 0;\n    text-align: right;\n}\n.acu-v2-advanced-tools-page__filter-grid {\n    grid-template-columns: 1fr;\n}\n.acu-v2-advanced-tools-page__log-control-row {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-v2-advanced-tools-page__toggles {\n    margin-left: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item,\n  .acu-v2-advanced-tools-page__log-row {\n    padding-inline: 9px;\n}\n}\n", "src/presentation-v2/pages/AdvancedToolsPage.vue#style-0");
     var AdvancedToolsPage_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$b = { class: "acu-v2-advanced-tools-page" };
@@ -88207,7 +91293,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-developer-page {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-developer-page__toggle-list {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n@media (max-width: 860px) {\n.acu-v2-developer-page {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/DeveloperPage.vue#style-0");
+    injectSfcStyle("\n.acu-v2-developer-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-developer-page__toggle-list {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n@media (max-width: 860px) {\n.acu-v2-developer-page {\n    padding: 14px;\n}\n}\n", "src/presentation-v2/pages/DeveloperPage.vue#style-0");
     var DeveloperPage_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$a = { class: "acu-v2-developer-page" };
@@ -88527,7 +91613,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-main {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: auto;\r\n  scrollbar-gutter: stable;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-main :deep(.acu-v2-dashboard-page),\r\n.acu-v2-main :deep(.acu-v2-advanced-tools-page),\r\n.acu-v2-main :deep(.acu-v2-basic-config-page),\r\n.acu-v2-main :deep(.acu-v2-form-fill-page),\r\n.acu-v2-main :deep(.acu-v2-api-page),\r\n.acu-v2-main :deep(.acu-v2-import-page),\r\n.acu-v2-main :deep(.acu-v2-continuation-page),\r\n.acu-v2-main :deep(.acu-v2-content-replace-page),\r\n.acu-v2-main :deep(.acu-v2-data-mgmt-page),\r\n.acu-v2-main :deep(.acu-v2-developer-page),\r\n.acu-v2-main :deep(.acu-v2-plot-page),\r\n.acu-v2-main :deep(.acu-v2-table-page),\r\n.acu-v2-main :deep(.acu-v2-vector-index-page) {\r\n  padding: 20px;\r\n  gap: 14px;\n}\n.acu-v2-main__empty {\r\n  padding: 24px;\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  color: var(--acu-text-3);\n}\n@media (max-width: 720px) {\n.acu-v2-main :deep(.acu-v2-dashboard-page),\r\n  .acu-v2-main :deep(.acu-v2-advanced-tools-page),\r\n  .acu-v2-main :deep(.acu-v2-basic-config-page),\r\n  .acu-v2-main :deep(.acu-v2-form-fill-page),\r\n  .acu-v2-main :deep(.acu-v2-api-page),\r\n  .acu-v2-main :deep(.acu-v2-import-page),\r\n  .acu-v2-main :deep(.acu-v2-continuation-page),\r\n  .acu-v2-main :deep(.acu-v2-content-replace-page),\r\n  .acu-v2-main :deep(.acu-v2-data-mgmt-page),\r\n  .acu-v2-main :deep(.acu-v2-developer-page),\r\n  .acu-v2-main :deep(.acu-v2-plot-page),\r\n  .acu-v2-main :deep(.acu-v2-table-page),\r\n  .acu-v2-main :deep(.acu-v2-vector-index-page) {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/components/MainArea.vue#style-0");
+    injectSfcStyle("\n.acu-v2-main {\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n  overflow: auto;\n  scrollbar-gutter: stable;\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n}\n.acu-v2-main :deep(.acu-v2-dashboard-page),\n.acu-v2-main :deep(.acu-v2-advanced-tools-page),\n.acu-v2-main :deep(.acu-v2-basic-config-page),\n.acu-v2-main :deep(.acu-v2-form-fill-page),\n.acu-v2-main :deep(.acu-v2-api-page),\n.acu-v2-main :deep(.acu-v2-import-page),\n.acu-v2-main :deep(.acu-v2-continuation-page),\n.acu-v2-main :deep(.acu-v2-content-replace-page),\n.acu-v2-main :deep(.acu-v2-data-mgmt-page),\n.acu-v2-main :deep(.acu-v2-developer-page),\n.acu-v2-main :deep(.acu-v2-plot-page),\n.acu-v2-main :deep(.acu-v2-table-page),\n.acu-v2-main :deep(.acu-v2-vector-index-page) {\n  padding: 20px;\n  gap: 14px;\n}\n.acu-v2-main__empty {\n  padding: 24px;\n  font-size: var(--acu-font-size-body-lg, 13px);\n  color: var(--acu-text-3);\n}\n@media (max-width: 720px) {\n.acu-v2-main :deep(.acu-v2-dashboard-page),\n  .acu-v2-main :deep(.acu-v2-advanced-tools-page),\n  .acu-v2-main :deep(.acu-v2-basic-config-page),\n  .acu-v2-main :deep(.acu-v2-form-fill-page),\n  .acu-v2-main :deep(.acu-v2-api-page),\n  .acu-v2-main :deep(.acu-v2-import-page),\n  .acu-v2-main :deep(.acu-v2-continuation-page),\n  .acu-v2-main :deep(.acu-v2-content-replace-page),\n  .acu-v2-main :deep(.acu-v2-data-mgmt-page),\n  .acu-v2-main :deep(.acu-v2-developer-page),\n  .acu-v2-main :deep(.acu-v2-plot-page),\n  .acu-v2-main :deep(.acu-v2-table-page),\n  .acu-v2-main :deep(.acu-v2-vector-index-page) {\n    padding: 14px;\n}\n}\n", "src/presentation-v2/components/MainArea.vue#style-0");
     var MainArea_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$9 = {
@@ -88576,7 +91662,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-sidebar {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  background: var(--acu-sidebar-bg);\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\n}\n.acu-v2-sidebar--desktop {\r\n  width: 220px;\r\n  flex: 0 0 220px;\r\n  border-right: 1px solid var(--acu-border-2);\n}\n.acu-v2-sidebar--drawer {\r\n  width: 100%;\r\n  flex: 1 1 auto;\n}\n.acu-v2-sidebar__brand {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  padding: 4px 4px 20px;\r\n  margin-bottom: 14px;\n}\n.acu-v2-sidebar__brand-mark {\r\n  width: 34px;\r\n  height: 34px;\r\n  flex: 0 0 34px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 700;\r\n  letter-spacing: 0.04em;\n}\n.acu-v2-sidebar__brand-copy {\r\n  min-width: 0;\r\n  display: block;\n}\n.acu-v2-sidebar__brand-title {\r\n  display: block;\r\n  font-size: var(--acu-font-size-panel-title, 15px);\r\n  line-height: 1.25;\r\n  font-weight: 700;\r\n  color: var(--acu-text-1);\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-sidebar__brand-tag {\r\n  display: block;\r\n  margin-top: 3px;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-sidebar__group {\r\n  margin-bottom: 12px;\n}\n.acu-v2-sidebar__mode {\r\n  width: 100%;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 7px;\r\n  min-height: 32px;\r\n  margin: 0 0 14px;\r\n  padding: 7px 10px;\r\n  border: 1px solid var(--acu-border-2);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-bg-1) 72%, transparent);\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  cursor: pointer;\r\n  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;\n}\n.acu-v2-sidebar__mode:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\r\n  border-color: var(--acu-border);\n}\n.acu-v2-sidebar__group-title {\r\n  padding: 7px 12px 6px;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 600;\r\n  letter-spacing: 0.06em;\r\n  color: var(--acu-text-3);\r\n  text-transform: uppercase;\n}\n.acu-v2-sidebar__item {\r\n  display: block;\r\n  width: 100%;\r\n  padding: 10px 12px;\r\n  border: 0;\r\n  background: transparent;\r\n  text-align: left;\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  color: var(--acu-text-2);\r\n  cursor: pointer;\r\n  border-radius: var(--acu-radius-sm);\r\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-sidebar__item:not(.acu-v2-sidebar__item--active):hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-sidebar__item--active {\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\r\n  font-weight: 600;\n}\r\n", "src/presentation-v2/components/Sidebar.vue#style-0");
+    injectSfcStyle("\n.acu-v2-sidebar {\n  min-width: 0;\n  min-height: 0;\n  background: var(--acu-sidebar-bg);\n  padding: 24px 12px 16px;\n  overflow-y: auto;\n}\n.acu-v2-sidebar--desktop {\n  width: 220px;\n  flex: 0 0 220px;\n  border-right: 1px solid var(--acu-border-2);\n}\n.acu-v2-sidebar--drawer {\n  width: 100%;\n  flex: 1 1 auto;\n}\n.acu-v2-sidebar__brand {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 4px 4px 20px;\n  margin-bottom: 14px;\n}\n.acu-v2-sidebar__brand-mark {\n  width: 34px;\n  height: 34px;\n  flex: 0 0 34px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 700;\n  letter-spacing: 0.04em;\n}\n.acu-v2-sidebar__brand-copy {\n  min-width: 0;\n  display: block;\n}\n.acu-v2-sidebar__brand-title {\n  display: block;\n  font-size: var(--acu-font-size-panel-title, 15px);\n  line-height: 1.25;\n  font-weight: 700;\n  color: var(--acu-text-1);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-sidebar__brand-tag {\n  display: block;\n  margin-top: 3px;\n  font-size: var(--acu-font-size-caption, 11px);\n  color: var(--acu-text-3);\n}\n.acu-v2-sidebar__group {\n  margin-bottom: 12px;\n}\n.acu-v2-sidebar__mode {\n  width: 100%;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 7px;\n  min-height: 32px;\n  margin: 0 0 14px;\n  padding: 7px 10px;\n  border: 1px solid var(--acu-border-2);\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-bg-1) 72%, transparent);\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  cursor: pointer;\n  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;\n}\n.acu-v2-sidebar__mode:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n  border-color: var(--acu-border);\n}\n.acu-v2-sidebar__group-title {\n  padding: 7px 12px 6px;\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 600;\n  letter-spacing: 0.06em;\n  color: var(--acu-text-3);\n  text-transform: uppercase;\n}\n.acu-v2-sidebar__item {\n  display: block;\n  width: 100%;\n  padding: 10px 12px;\n  border: 0;\n  background: transparent;\n  text-align: left;\n  font-size: var(--acu-font-size-body-lg, 13px);\n  color: var(--acu-text-2);\n  cursor: pointer;\n  border-radius: var(--acu-radius-sm);\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-sidebar__item:not(.acu-v2-sidebar__item--active):hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-sidebar__item--active {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-weight: 600;\n}\n", "src/presentation-v2/components/Sidebar.vue#style-0");
     var Sidebar_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$8 = { class: "acu-v2-sidebar__brand" };
@@ -89799,7 +92885,31 @@ Expected function or array of functions, received type ${typeof value}.`
             const idx = Number.parseInt(indexStr, 10);
             if (Number.isNaN(idx))
                 continue;
-            await saveIndependentTableToChatHistory_ACU(idx, keys, null, true);
+            const writeSet = keys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
+            const commitResult = await runTableUpdateCommit_ACU({
+                source: 'manual_crud',
+                reason: 'visualizer_v2_save',
+                isolationKey,
+                writeSet,
+                revisionWriteSet: writeSet,
+                initialData: currentJsonTableData_ACU,
+                targetMessageIndex: idx,
+                targetSheetKeys: keys,
+                updateGroupKeys: null,
+                trackingSheetKeys: [],
+                trackAsUpdate: false,
+                operations: keys
+                    .filter(sheetKey => Boolean(currentJsonTableData_ACU?.[sheetKey]))
+                    .map(sheetKey => ({ kind: 'sheet_replace', sheetKey, sheet: currentJsonTableData_ACU[sheetKey], reason: 'manual_crud' })),
+            }, () => ({
+                success: true,
+                value: null,
+                tableData: currentJsonTableData_ACU,
+                mutationResult: { changes: keys.length, errors: [] },
+            }));
+            if (!commitResult.success) {
+                logWarn_ACU('[ACU-V2 Visualizer] save commit failed:', commitResult.error);
+            }
         }
         if (deletedSheetKeys.length > 0) {
             const result = await purgeSheetKeysFromChatHistoryHard_ACU(deletedSheetKeys);
@@ -90323,7 +93433,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-viz-assistant {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 12px;\n}\n.acu-viz-assistant__controls {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) minmax(140px, 180px);\r\n  gap: 10px;\n}\n.acu-viz-assistant__disclosure {\r\n  min-width: 0;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\n}\n.acu-viz-assistant__disclosure :deep(.acu-disclosure-group__header) {\r\n  min-height: 38px;\r\n  padding: 8px 12px;\n}\n:deep(.acu-viz-assistant__disclosure-body) {\r\n  padding: 0;\n}\n.acu-viz-assistant__folded-panel {\r\n  border: 0;\r\n  border-radius: 0;\n}\n.acu-viz-assistant__action-row,\r\n.acu-viz-assistant__summary,\r\n.acu-viz-assistant__running,\r\n.acu-viz-assistant__turn-head {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\n}\n.acu-viz-assistant__action-row,\r\n.acu-viz-assistant__summary {\r\n  flex-wrap: wrap;\n}\n.acu-viz-assistant__running {\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-viz-assistant__empty {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-viz-assistant__turns,\r\n.acu-viz-assistant__risk-list {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\n}\n.acu-viz-assistant__turn,\r\n.acu-viz-assistant__risk-item,\r\n.acu-viz-assistant__diff-group {\r\n  min-width: 0;\r\n  padding: 10px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\n}\n.acu-viz-assistant__turn strong,\r\n.acu-viz-assistant__diff-group h4,\r\n.acu-viz-assistant__risk-list h4 {\r\n  min-width: 0;\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.35;\n}\n.acu-viz-assistant__turn {\r\n  display: grid;\r\n  gap: 6px;\n}\n.acu-viz-assistant__turn--user {\r\n  box-shadow: inset 3px 0 0 var(--acu-accent);\n}\n.acu-viz-assistant__turn--round {\r\n  background: var(--acu-bg-1);\n}\n.acu-viz-assistant__turn--error {\r\n  box-shadow: inset 3px 0 0 var(--acu-warning);\n}\n.acu-viz-assistant__turn-head {\r\n  justify-content: space-between;\n}\n.acu-viz-assistant__turn-head strong {\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-viz-assistant__turn p {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-viz-assistant__diff-grid {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-viz-assistant__turn-diff {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr);\r\n  gap: 8px;\n}\n.acu-viz-assistant__diff-group {\r\n  display: grid;\r\n  gap: 8px;\n}\n.acu-viz-assistant__diff-group--warning {\r\n  box-shadow: inset 3px 0 0 var(--acu-warning);\n}\n.acu-viz-assistant__diff-group ul,\r\n.acu-viz-assistant__inline-list {\r\n  margin: 0;\r\n  padding-left: 18px;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-viz-assistant__risk-list {\r\n  padding-top: 10px;\r\n  border-top: 1px solid var(--acu-border-2);\n}\n@media (max-width: 860px) {\n.acu-viz-assistant__controls,\r\n  .acu-viz-assistant__diff-grid {\r\n    grid-template-columns: 1fr;\n}\n:deep(.acu-viz-assistant__disclosure-body) {\r\n    max-height: min(68vh, 620px);\r\n    overflow-y: auto;\n}\n}\n@media (max-width: 767px) {\n.acu-viz-assistant__action-row {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-viz-assistant__action-row :deep(.acu-btn) {\r\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-viz-assistant__turn-head {\r\n    align-items: flex-start;\r\n    flex-direction: column;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerAssistantPanel.vue#style-0");
+    injectSfcStyle("\n.acu-viz-assistant {\n  min-width: 0;\n  display: grid;\n  gap: 12px;\n}\n.acu-viz-assistant__controls {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(140px, 180px);\n  gap: 10px;\n}\n.acu-viz-assistant__disclosure {\n  min-width: 0;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-bg-1);\n}\n.acu-viz-assistant__disclosure :deep(.acu-disclosure-group__header) {\n  min-height: 38px;\n  padding: 8px 12px;\n}\n:deep(.acu-viz-assistant__disclosure-body) {\n  padding: 0;\n}\n.acu-viz-assistant__folded-panel {\n  border: 0;\n  border-radius: 0;\n}\n.acu-viz-assistant__action-row,\n.acu-viz-assistant__summary,\n.acu-viz-assistant__running,\n.acu-viz-assistant__turn-head {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.acu-viz-assistant__action-row,\n.acu-viz-assistant__summary {\n  flex-wrap: wrap;\n}\n.acu-viz-assistant__running {\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-viz-assistant__empty {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-viz-assistant__turns,\n.acu-viz-assistant__risk-list {\n  min-width: 0;\n  display: grid;\n  gap: 8px;\n}\n.acu-viz-assistant__turn,\n.acu-viz-assistant__risk-item,\n.acu-viz-assistant__diff-group {\n  min-width: 0;\n  padding: 10px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-assistant__turn strong,\n.acu-viz-assistant__diff-group h4,\n.acu-viz-assistant__risk-list h4 {\n  min-width: 0;\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.35;\n}\n.acu-viz-assistant__turn {\n  display: grid;\n  gap: 6px;\n}\n.acu-viz-assistant__turn--user {\n  box-shadow: inset 3px 0 0 var(--acu-accent);\n}\n.acu-viz-assistant__turn--round {\n  background: var(--acu-bg-1);\n}\n.acu-viz-assistant__turn--error {\n  box-shadow: inset 3px 0 0 var(--acu-warning);\n}\n.acu-viz-assistant__turn-head {\n  justify-content: space-between;\n}\n.acu-viz-assistant__turn-head strong {\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-viz-assistant__turn p {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-viz-assistant__diff-grid {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-viz-assistant__turn-diff {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr);\n  gap: 8px;\n}\n.acu-viz-assistant__diff-group {\n  display: grid;\n  gap: 8px;\n}\n.acu-viz-assistant__diff-group--warning {\n  box-shadow: inset 3px 0 0 var(--acu-warning);\n}\n.acu-viz-assistant__diff-group ul,\n.acu-viz-assistant__inline-list {\n  margin: 0;\n  padding-left: 18px;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-viz-assistant__risk-list {\n  padding-top: 10px;\n  border-top: 1px solid var(--acu-border-2);\n}\n@media (max-width: 860px) {\n.acu-viz-assistant__controls,\n  .acu-viz-assistant__diff-grid {\n    grid-template-columns: 1fr;\n}\n:deep(.acu-viz-assistant__disclosure-body) {\n    max-height: min(68vh, 620px);\n    overflow-y: auto;\n}\n}\n@media (max-width: 767px) {\n.acu-viz-assistant__action-row {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-viz-assistant__action-row :deep(.acu-btn) {\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-viz-assistant__turn-head {\n    align-items: flex-start;\n    flex-direction: column;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerAssistantPanel.vue#style-0");
     var VisualizerAssistantPanel_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$7 = {
@@ -90852,7 +93962,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-viz-placement {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\r\n  padding-top: 10px;\r\n  border-top: 1px solid var(--acu-border-2);\n}\n.acu-viz-placement:first-of-type {\r\n  margin-top: 12px;\n}\n.acu-viz-placement__title {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.35;\n}\n.acu-viz-placement__grid {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) minmax(96px, 120px) minmax(96px, 120px);\r\n  gap: 10px;\n}\n.acu-viz-placement__number {\r\n  max-width: 120px;\n}\n@media (max-width: 860px) {\n.acu-viz-placement__grid {\r\n    grid-template-columns: 1fr;\n}\n.acu-viz-placement__number {\r\n    max-width: 100%;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerPlacementEditor.vue#style-0");
+    injectSfcStyle("\n.acu-viz-placement {\n  min-width: 0;\n  display: grid;\n  gap: 8px;\n  padding-top: 10px;\n  border-top: 1px solid var(--acu-border-2);\n}\n.acu-viz-placement:first-of-type {\n  margin-top: 12px;\n}\n.acu-viz-placement__title {\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.35;\n}\n.acu-viz-placement__grid {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(96px, 120px) minmax(96px, 120px);\n  gap: 10px;\n}\n.acu-viz-placement__number {\n  max-width: 120px;\n}\n@media (max-width: 860px) {\n.acu-viz-placement__grid {\n    grid-template-columns: 1fr;\n}\n.acu-viz-placement__number {\n    max-width: 100%;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerPlacementEditor.vue#style-0");
     var VisualizerPlacementEditor_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$6 = { class: "acu-viz-placement" };
@@ -90948,7 +94058,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-viz-config {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 12px;\n}\n.acu-viz-config__grid {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-viz-config__grid--three {\r\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n}\n.acu-viz-config__columns,\r\n.acu-viz-config__prompts,\r\n.acu-viz-config__toggles,\r\n.acu-viz-config__subsection,\r\n.acu-viz-config__column-modes {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 10px;\n}\n.acu-viz-config__columns {\r\n  margin-top: 12px;\n}\n.acu-viz-config__column-operation {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  padding-top: 2px;\n}\n.acu-viz-config__column-row {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: 42px minmax(0, 1fr) auto;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 8px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-index {\r\n  color: var(--acu-text-3);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: right;\n}\n.acu-viz-config__empty {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-viz-config__inline-actions,\r\n.acu-viz-config__column-mode {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\n}\n.acu-viz-config__inline-actions {\r\n  margin-top: 10px;\n}\n.acu-viz-config__ddl {\r\n  font-family: var(--acu-font-mono);\n}\n.acu-viz-config__column-mode {\r\n  padding: 8px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-mode :deep(.acu-checkbox) {\r\n  flex: 1 1 220px;\n}\n.acu-viz-config__column-mode :deep(.acu-select) {\r\n  flex: 1 1 260px;\n}\n@media (max-width: 860px) {\n.acu-viz-config__grid,\r\n  .acu-viz-config__grid--three {\r\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 767px) {\n.acu-viz-config__column-operation {\r\n    justify-content: stretch;\n}\n.acu-viz-config__column-operation :deep(.acu-btn) {\r\n    width: 100%;\n}\n}\n@media (max-width: 520px) {\n.acu-viz-config__column-row {\r\n    grid-template-columns: 34px minmax(0, 1fr) auto;\r\n    padding: 7px;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerConfigPanels.vue#style-0");
+    injectSfcStyle("\n.acu-viz-config {\n  min-width: 0;\n  display: grid;\n  gap: 12px;\n}\n.acu-viz-config__grid {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-viz-config__grid--three {\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n}\n.acu-viz-config__columns,\n.acu-viz-config__prompts,\n.acu-viz-config__toggles,\n.acu-viz-config__subsection,\n.acu-viz-config__column-modes {\n  min-width: 0;\n  display: grid;\n  gap: 10px;\n}\n.acu-viz-config__columns {\n  margin-top: 12px;\n}\n.acu-viz-config__column-operation {\n  display: flex;\n  justify-content: flex-end;\n  padding-top: 2px;\n}\n.acu-viz-config__column-row {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: 42px minmax(0, 1fr) auto;\n  align-items: center;\n  gap: 8px;\n  padding: 8px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-index {\n  color: var(--acu-text-3);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: right;\n}\n.acu-viz-config__empty {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-viz-config__inline-actions,\n.acu-viz-config__column-mode {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-viz-config__inline-actions {\n  margin-top: 10px;\n}\n.acu-viz-config__ddl {\n  font-family: var(--acu-font-mono);\n}\n.acu-viz-config__column-mode {\n  padding: 8px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-mode :deep(.acu-checkbox) {\n  flex: 1 1 220px;\n}\n.acu-viz-config__column-mode :deep(.acu-select) {\n  flex: 1 1 260px;\n}\n@media (max-width: 860px) {\n.acu-viz-config__grid,\n  .acu-viz-config__grid--three {\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 767px) {\n.acu-viz-config__column-operation {\n    justify-content: stretch;\n}\n.acu-viz-config__column-operation :deep(.acu-btn) {\n    width: 100%;\n}\n}\n@media (max-width: 520px) {\n.acu-viz-config__column-row {\n    grid-template-columns: 34px minmax(0, 1fr) auto;\n    padding: 7px;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerConfigPanels.vue#style-0");
     var VisualizerConfigPanels_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$5 = {
@@ -91416,7 +94526,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-viz-global {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 12px;\n}\r\n\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerGlobalInjectionPanels.vue#style-0");
+    injectSfcStyle("\n.acu-viz-global {\n  min-width: 0;\n  display: grid;\n  gap: 12px;\n}\n\n", "src/presentation-v2/surfaces/visualizer/VisualizerGlobalInjectionPanels.vue#style-0");
     var VisualizerGlobalInjectionPanels_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$4 = {
@@ -91511,7 +94621,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-visualizer-nav {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex: 1 1 auto;\r\n  flex-direction: column;\r\n  gap: 8px;\n}\n.acu-visualizer-nav__brand {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  padding: 4px 4px 20px;\r\n  margin-bottom: 14px;\n}\n.acu-visualizer-nav__brand-mark {\r\n  width: 34px;\r\n  height: 34px;\r\n  flex: 0 0 34px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 700;\r\n  letter-spacing: 0.04em;\n}\n.acu-visualizer-nav__brand-copy {\r\n  min-width: 0;\r\n  display: block;\n}\n.acu-visualizer-nav__brand-title {\r\n  display: block;\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\r\n  font-weight: 700;\r\n  line-height: 1.25;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-nav__brand-tag {\r\n  display: block;\r\n  min-width: 0;\r\n  margin-top: 3px;\r\n  overflow: hidden;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-nav__head {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 8px;\n}\n.acu-visualizer-nav__head--management {\r\n  margin-top: auto;\n}\n.acu-visualizer-nav__head h2 {\r\n  margin: 0;\r\n  padding: 7px 0 6px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 600;\r\n  letter-spacing: 0.06em;\r\n  line-height: 1.3;\r\n  text-transform: uppercase;\n}\n.acu-visualizer-nav__sheet-row {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr);\r\n  align-items: center;\r\n  gap: 6px;\r\n  border-radius: var(--acu-radius-sm);\r\n  color: var(--acu-text-2);\r\n  transition:\r\n    background 0.15s ease,\r\n    color 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-nav__sheet-row:not(.is-active):hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-nav__sheet-row.is-active {\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\r\n  font-weight: 600;\n}\n.acu-visualizer-nav__sheet-select,\r\n.acu-visualizer-nav__global-item {\r\n  font: inherit;\r\n  border: 0;\r\n  cursor: pointer;\r\n  transition:\r\n    background 0.15s ease,\r\n    color 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-nav__sheet-select {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n  padding: 8px 9px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  color: inherit;\r\n  text-align: left;\r\n  box-shadow: none;\n}\n.acu-visualizer-nav__sheet-select.acu-btn:hover:not(:disabled) {\r\n  background: transparent;\n}\n.acu-visualizer-nav__sheet-select span,\r\n.acu-visualizer-nav__sheet-select small {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-nav__sheet-select small {\r\n  color: currentColor;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 400;\r\n  opacity: 0.72;\n}\n.acu-visualizer-nav__global-item {\r\n  padding: 8px 9px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  text-align: left;\n}\n.acu-visualizer-nav__global-item:not(.is-active).acu-btn:hover:not(\r\n    :disabled\r\n  ) {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-nav__global-item.is-active {\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\r\n  font-weight: 600;\n}\n.acu-visualizer-nav__sheet-select:focus-visible,\r\n.acu-visualizer-nav__global-item:focus-visible {\r\n  outline: none;\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerNavigation.vue#style-0");
+    injectSfcStyle("\n.acu-visualizer-nav {\n  min-width: 0;\n  min-height: 0;\n  display: flex;\n  flex: 1 1 auto;\n  flex-direction: column;\n  gap: 8px;\n}\n.acu-visualizer-nav__brand {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 4px 4px 20px;\n  margin-bottom: 14px;\n}\n.acu-visualizer-nav__brand-mark {\n  width: 34px;\n  height: 34px;\n  flex: 0 0 34px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 700;\n  letter-spacing: 0.04em;\n}\n.acu-visualizer-nav__brand-copy {\n  min-width: 0;\n  display: block;\n}\n.acu-visualizer-nav__brand-title {\n  display: block;\n  min-width: 0;\n  overflow: hidden;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-panel-title, 15px);\n  font-weight: 700;\n  line-height: 1.25;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-nav__brand-tag {\n  display: block;\n  min-width: 0;\n  margin-top: 3px;\n  overflow: hidden;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-nav__head {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 8px;\n}\n.acu-visualizer-nav__head--management {\n  margin-top: auto;\n}\n.acu-visualizer-nav__head h2 {\n  margin: 0;\n  padding: 7px 0 6px;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 600;\n  letter-spacing: 0.06em;\n  line-height: 1.3;\n  text-transform: uppercase;\n}\n.acu-visualizer-nav__sheet-row {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr);\n  align-items: center;\n  gap: 6px;\n  border-radius: var(--acu-radius-sm);\n  color: var(--acu-text-2);\n  transition:\n    background 0.15s ease,\n    color 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-nav__sheet-row:not(.is-active):hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-visualizer-nav__sheet-row.is-active {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-weight: 600;\n}\n.acu-visualizer-nav__sheet-select,\n.acu-visualizer-nav__global-item {\n  font: inherit;\n  border: 0;\n  cursor: pointer;\n  transition:\n    background 0.15s ease,\n    color 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-nav__sheet-select {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  padding: 8px 9px;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: inherit;\n  text-align: left;\n  box-shadow: none;\n}\n.acu-visualizer-nav__sheet-select.acu-btn:hover:not(:disabled) {\n  background: transparent;\n}\n.acu-visualizer-nav__sheet-select span,\n.acu-visualizer-nav__sheet-select small {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-nav__sheet-select small {\n  color: currentColor;\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 400;\n  opacity: 0.72;\n}\n.acu-visualizer-nav__global-item {\n  padding: 8px 9px;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: var(--acu-text-2);\n  text-align: left;\n}\n.acu-visualizer-nav__global-item:not(.is-active).acu-btn:hover:not(\n    :disabled\n  ) {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-visualizer-nav__global-item.is-active {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-weight: 600;\n}\n.acu-visualizer-nav__sheet-select:focus-visible,\n.acu-visualizer-nav__global-item:focus-visible {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerNavigation.vue#style-0");
     var VisualizerNavigation_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$3 = {
@@ -91637,7 +94747,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-viz-table-management {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 12px;\n}\n.acu-viz-table-management__list {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\n}\n.acu-viz-table-management__item {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) auto;\r\n  align-items: center;\r\n  gap: 10px;\r\n  padding: 10px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\r\n  transition:\r\n    background 0.15s ease,\r\n    border-color 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-viz-table-management__copy {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 3px;\n}\n.acu-viz-table-management__copy h3 {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.35;\n}\n.acu-viz-table-management__copy h3 > span {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-viz-table-management__copy p,\r\n.acu-viz-table-management__empty {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-viz-table-management__actions,\r\n.acu-viz-table-management__operation {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 6px;\n}\n.acu-viz-table-management__operation {\r\n  justify-content: flex-end;\r\n  padding-top: 2px;\n}\n@media (max-width: 767px) {\n.acu-viz-table-management__item {\r\n    grid-template-columns: minmax(0, 1fr);\r\n    align-items: stretch;\n}\n.acu-viz-table-management__actions {\r\n    justify-content: flex-end;\n}\n.acu-viz-table-management__operation :deep(.acu-btn) {\r\n    width: 100%;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerTableManagementPanel.vue#style-0");
+    injectSfcStyle("\n.acu-viz-table-management {\n  min-width: 0;\n  display: grid;\n  gap: 12px;\n}\n.acu-viz-table-management__list {\n  min-width: 0;\n  display: grid;\n  gap: 8px;\n}\n.acu-viz-table-management__item {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  align-items: center;\n  gap: 10px;\n  padding: 10px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n  transition:\n    background 0.15s ease,\n    border-color 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-viz-table-management__copy {\n  min-width: 0;\n  display: grid;\n  gap: 3px;\n}\n.acu-viz-table-management__copy h3 {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.35;\n}\n.acu-viz-table-management__copy h3 > span {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-viz-table-management__copy p,\n.acu-viz-table-management__empty {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-viz-table-management__actions,\n.acu-viz-table-management__operation {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n}\n.acu-viz-table-management__operation {\n  justify-content: flex-end;\n  padding-top: 2px;\n}\n@media (max-width: 767px) {\n.acu-viz-table-management__item {\n    grid-template-columns: minmax(0, 1fr);\n    align-items: stretch;\n}\n.acu-viz-table-management__actions {\n    justify-content: flex-end;\n}\n.acu-viz-table-management__operation :deep(.acu-btn) {\n    width: 100%;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerTableManagementPanel.vue#style-0");
     var VisualizerTableManagementPanel_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$2 = {
@@ -92340,7 +95450,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-visualizer-surface {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: grid;\r\n  grid-template-columns: 260px minmax(0, 1fr);\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__sidebar {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 1px solid var(--acu-border-2);\r\n  background: var(--acu-sidebar-bg);\n}\n.acu-visualizer-surface__main {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  min-height: 50px;\r\n  padding: 8px 12px 8px 16px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar-context {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  gap: 10px;\n}\n.acu-visualizer-surface__mobile-menu {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-visualizer-surface__mobile-menu:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__context-items {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  justify-content: flex-start;\r\n  gap: 16px;\n}\n.acu-visualizer-surface__context-item {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 2px;\n}\n.acu-visualizer-surface__context-item:first-child {\r\n  flex: 0 1 auto;\r\n  max-width: min(560px, 42vw);\n}\n.acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item {\r\n  flex: 0 0 auto;\r\n  max-width: min(260px, 20vw);\n}\n.acu-visualizer-surface__context-item span {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__context-item strong {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.25;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__context-item:first-child strong {\r\n  overflow: visible;\r\n  text-overflow: clip;\r\n  white-space: normal;\r\n  word-break: break-word;\n}\n.acu-visualizer-surface__context-badge {\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__conflict {\r\n  flex: 0 0 auto;\r\n  margin: 12px 16px 0;\n}\n.acu-visualizer-surface__conflict-actions {\r\n  display: inline-flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px;\r\n  margin-left: 8px;\n}\n.acu-visualizer-surface__data-toolbar,\r\n.acu-visualizer-surface__data-toolbar-actions,\r\n.acu-visualizer-surface__database-toolbar,\r\n.acu-visualizer-surface__pagination,\r\n.acu-visualizer-surface__pagination-pages,\r\n.acu-visualizer-surface__card-header {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__workspace {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  overflow: auto;\r\n  padding: 16px;\n}\n.acu-visualizer-surface__loading {\r\n  min-height: 140px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 8px;\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__mode-tabs {\r\n  flex: 0 0 auto;\r\n  width: min(360px, 42vw);\n}\n.acu-visualizer-surface__close {\r\n  width: 30px;\r\n  height: 30px;\r\n  flex: 0 0 auto;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-visualizer-surface__close:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__data-toolbar {\r\n  flex: 0 0 auto;\r\n  justify-content: space-between;\r\n  padding: 4px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__data-toolbar-actions {\r\n  flex: 0 0 auto;\r\n  justify-content: flex-end;\n}\n.acu-visualizer-surface__pagination {\r\n  flex: 0 0 auto;\r\n  justify-content: center;\r\n  gap: 14px;\r\n  padding: 6px 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-visualizer-surface__pagination-pages {\r\n  min-width: 0;\r\n  flex-wrap: wrap;\r\n  justify-content: center;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__page-button {\r\n  width: 34px;\r\n  min-width: 34px;\r\n  height: 34px;\r\n  padding: 0;\r\n  border: 1px solid var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 500;\n}\n.acu-visualizer-surface__page-button:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__page-button--active,\r\n.acu-visualizer-surface__page-button--active:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\n}\n.acu-visualizer-surface__page-button:disabled:not(\r\n    .acu-visualizer-surface__page-button--active\r\n  ) {\r\n  border-color: var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-2);\r\n  opacity: 1;\r\n  cursor: default;\n}\n.acu-visualizer-surface__page-jump {\r\n  flex: 0 0 64px;\r\n  width: 64px;\n}\n.acu-visualizer-surface__page-jump :deep(.acu-input) {\r\n  min-height: 34px;\r\n  border: 1px solid var(--acu-border) !important;\r\n  background: var(--acu-bg-0) !important;\r\n  text-align: center;\r\n  font-size: var(--acu-font-size-body-lg, 13px) !important;\r\n  font-variant-numeric: tabular-nums;\n}\n.acu-visualizer-surface__data-range {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__database-toolbar {\r\n  flex: 0 0 auto;\r\n  padding: 0 0 4px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar h2 {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__database-toolbar p {\r\n  margin: 5px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-readable, 1.55);\n}\n.acu-visualizer-surface__empty {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-visualizer-surface__card-grid {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));\r\n  gap: 12px;\n}\n.acu-visualizer-surface__data-card {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  height: 100%;\r\n  padding: 16px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\n}\n.acu-visualizer-surface__card-header strong {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-visualizer-surface__card-header span {\r\n  min-width: 0;\r\n  margin-right: auto;\r\n  overflow: hidden;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__card-header :deep(.acu-icon-btn) {\r\n  background: transparent;\n}\n.acu-visualizer-surface__card-header\r\n  :deep(.acu-icon-btn--default:hover:not(:disabled)) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\n}\n.acu-visualizer-surface__card-header :deep(.acu-icon-btn--accent) {\r\n  background: var(--acu-accent-glow);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__card-header\r\n  :deep(.acu-icon-btn--danger:hover:not(:disabled)) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-visualizer-surface__fields {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__field-row {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 8px;\r\n  align-items: stretch;\n}\n.acu-visualizer-surface__field-row.is-wide {\r\n  grid-template-columns: minmax(0, 1fr);\n}\n.acu-visualizer-surface__field {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\r\n  padding: 2px;\r\n  border: 1px solid transparent;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  transition:\r\n    background 0.15s ease,\r\n    border-color 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field :deep(.acu-textarea) {\r\n  flex: 1 1 auto;\r\n  min-height: 34px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\n}\n.acu-visualizer-surface__field-preview {\r\n  width: 100%;\r\n  min-height: 34px;\r\n  box-sizing: border-box;\r\n  padding: 8px 10px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-1);\r\n  cursor: text;\r\n  display: block;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\r\n  transition:\r\n    background 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field-preview:hover,\r\n.acu-visualizer-surface__field-preview:focus-visible {\r\n  outline: none;\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    var(--acu-bg-2);\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field-preview.is-empty {\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__field-label {\r\n  min-width: 0;\r\n  min-height: 24px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 6px;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 600;\n}\n.acu-visualizer-surface__field-label > span:first-child {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__field-locks {\r\n  flex: 0 0 auto;\r\n  min-width: 51px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  gap: 3px;\r\n  opacity: 0.44;\r\n  transition: opacity 0.15s ease;\n}\n.acu-visualizer-surface__field:hover .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field:focus-within\r\n  .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field.is-actions-active\r\n  .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field.is-locked .acu-visualizer-surface__field-locks,\r\n.acu-visualizer-surface__field.is-special-index\r\n  .acu-visualizer-surface__field-locks {\r\n  opacity: 1;\n}\n.acu-visualizer-surface__field-locks :deep(.acu-icon-btn) {\r\n  --acu-icon-btn-size: 24px;\r\n  --acu-icon-btn-font-size: 11px;\r\n  width: 24px;\r\n  height: 24px;\r\n  background: transparent !important;\n}\n.acu-visualizer-surface__field-locks\r\n  :deep(.acu-icon-btn--default:hover:not(:disabled)) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__field-locks :deep(.acu-icon-btn--accent) {\r\n  color: var(--acu-accent);\r\n  background: var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field.is-locked {\r\n  border-color: var(--acu-border);\r\n  background: color-mix(in srgb, var(--acu-warning) 8%, transparent);\n}\n.acu-visualizer-surface__field.is-actions-active:not(.is-locked) {\r\n  background: color-mix(in srgb, var(--acu-accent) 6%, transparent);\n}\n.acu-visualizer-surface__footer {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  padding: 12px 16px;\r\n  border-top: 1px solid var(--acu-border-2);\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__footer-actions {\r\n  display: flex;\r\n  gap: 8px;\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__footer-actions :deep(.acu-btn) {\r\n  min-width: 132px;\n}\n.acu-visualizer-surface__mobile-nav-layer {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9350;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: visualizer-mobile-nav-layer-in 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing {\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-layer-out 0.15s ease-in both;\n}\n.acu-visualizer-surface__mobile-nav {\r\n  width: 280px;\r\n  max-width: calc(100vw - 72px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\r\n  height: 100%;\r\n  max-height: 100%;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 280px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 0;\r\n  background: var(--acu-sidebar-bg);\r\n  box-shadow: var(--acu-shadow);\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-drawer-in 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing\r\n  .acu-visualizer-surface__mobile-nav {\r\n  animation: visualizer-mobile-nav-drawer-out 0.15s ease-in both;\n}\n@supports (width: min(280px, calc(100vw - 72px))) {\n.acu-visualizer-surface__mobile-nav {\r\n    width: min(280px, calc(100vw - 72px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\r\n    flex: 0 0 min(280px, calc(100vw - 72px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n}\n}\n@supports (width: 100dvw) {\n.acu-visualizer-surface__mobile-nav {\r\n    max-width: calc(100dvw - 72px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n}\n}\n@supports (height: 100dvh) {\n.acu-visualizer-surface__mobile-nav {\r\n    height: 100%;\r\n    max-height: 100%;\n}\n}\n@keyframes visualizer-mobile-nav-layer-in {\nfrom {\r\n    opacity: 0;\n}\nto {\r\n    opacity: 1;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-in {\nfrom {\r\n    transform: translateX(-100%);\n}\nto {\r\n    transform: translateX(0);\n}\n}\n@keyframes visualizer-mobile-nav-layer-out {\nfrom {\r\n    opacity: 1;\n}\nto {\r\n    opacity: 0;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-out {\nfrom {\r\n    transform: translateX(0);\n}\nto {\r\n    transform: translateX(-100%);\n}\n}\n@media (max-width: 1024px) {\n.acu-visualizer-surface {\r\n    grid-template-columns: 220px minmax(0, 1fr);\n}\n.acu-visualizer-surface__card-grid {\r\n    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));\n}\n.acu-visualizer-surface__topbar {\r\n    flex-wrap: wrap;\n}\n.acu-visualizer-surface__mode-tabs {\r\n    order: 3;\r\n    width: min(420px, 100%);\n}\n}\n@media (max-width: 767px) {\n.acu-visualizer-surface {\r\n    grid-template-columns: 1fr;\r\n    grid-template-rows: minmax(0, 1fr);\n}\n.acu-visualizer-surface__sidebar {\r\n    display: none;\n}\n.acu-visualizer-surface__topbar {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 1fr) auto;\r\n    gap: 8px;\r\n    min-height: 0;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__topbar-context {\r\n    grid-column: 1;\r\n    display: grid;\r\n    grid-template-columns: auto minmax(0, 1fr) auto;\r\n    align-items: center;\r\n    gap: 8px;\r\n    min-width: 0;\n}\n.acu-visualizer-surface__mobile-menu {\r\n    display: inline-flex;\n}\n.acu-visualizer-surface__context-items {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 8px;\n}\n.acu-visualizer-surface__context-item:first-child,\r\n  .acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item {\r\n    max-width: none;\n}\n.acu-visualizer-surface__mobile-nav-layer {\r\n    display: flex;\n}\n.acu-visualizer-surface__close {\r\n    grid-column: 2;\r\n    grid-row: 1;\r\n    align-self: center;\n}\n.acu-visualizer-surface__mode-tabs {\r\n    grid-column: 1 / -1;\r\n    width: 100%;\n}\n.acu-visualizer-surface__workspace {\r\n    padding: 10px;\n}\n.acu-visualizer-surface__data-toolbar,\r\n  .acu-visualizer-surface__database-toolbar {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__data-toolbar :deep(.acu-btn),\r\n  .acu-visualizer-surface__database-toolbar :deep(.acu-btn) {\r\n    width: 100%;\n}\n.acu-visualizer-surface__data-toolbar-actions {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__pagination {\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 6px;\r\n    padding: 2px 0 6px;\n}\n.acu-visualizer-surface__pagination-pages {\r\n    flex: 0 1 auto;\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 5px;\n}\n.acu-visualizer-surface__page-button {\r\n    width: 36px;\r\n    min-width: 36px;\r\n    height: 34px;\r\n    flex: 0 0 36px;\n}\n.acu-visualizer-surface__page-jump {\r\n    flex: 0 0 54px;\r\n    width: 54px;\n}\n.acu-visualizer-surface__footer {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\r\n    align-items: center;\r\n    gap: 8px;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__footer > span {\r\n    min-width: 0;\r\n    overflow: hidden;\r\n    text-overflow: ellipsis;\r\n    white-space: nowrap;\n}\n.acu-visualizer-surface__footer-actions {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 6px;\n}\n.acu-visualizer-surface__footer-actions :deep(.acu-btn) {\r\n    min-width: 0;\r\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-visualizer-surface__card-grid {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__fields {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__mode-tabs {\r\n    width: 100%;\n}\n.acu-visualizer-surface__conflict-actions {\r\n    display: flex;\r\n    margin: 8px 0 0;\n}\n.acu-visualizer-surface__footer {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__footer > span {\r\n    display: none;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue#style-0");
+    injectSfcStyle("\n.acu-visualizer-surface {\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n  display: grid;\n  grid-template-columns: 260px minmax(0, 1fr);\n  overflow: hidden;\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__sidebar {\n  min-width: 0;\n  min-height: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  padding: 24px 12px 16px;\n  overflow-y: auto;\n  border-right: 1px solid var(--acu-border-2);\n  background: var(--acu-sidebar-bg);\n}\n.acu-visualizer-surface__main {\n  min-width: 0;\n  min-height: 0;\n  display: flex;\n  flex-direction: column;\n  overflow: hidden;\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar {\n  flex: 0 0 auto;\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  min-height: 50px;\n  padding: 8px 12px 8px 16px;\n  border-bottom: 1px solid var(--acu-border-2);\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar-context {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex: 1 1 auto;\n  gap: 10px;\n}\n.acu-visualizer-surface__mobile-menu {\n  display: none;\n  flex: 0 0 auto;\n  background: transparent;\n  color: var(--acu-text-2);\n  box-shadow: none;\n}\n.acu-visualizer-surface__mobile-menu:hover:not(:disabled) {\n  background: transparent;\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__context-items {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex: 1 1 auto;\n  justify-content: flex-start;\n  gap: 16px;\n}\n.acu-visualizer-surface__context-item {\n  min-width: 0;\n  display: grid;\n  gap: 2px;\n}\n.acu-visualizer-surface__context-item:first-child {\n  flex: 0 1 auto;\n  max-width: min(560px, 42vw);\n}\n.acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item {\n  flex: 0 0 auto;\n  max-width: min(260px, 20vw);\n}\n.acu-visualizer-surface__context-item span {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.2;\n}\n.acu-visualizer-surface__context-item strong {\n  min-width: 0;\n  overflow: hidden;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 600;\n  line-height: 1.25;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__context-item:first-child strong {\n  overflow: visible;\n  text-overflow: clip;\n  white-space: normal;\n  word-break: break-word;\n}\n.acu-visualizer-surface__context-badge {\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__conflict {\n  flex: 0 0 auto;\n  margin: 12px 16px 0;\n}\n.acu-visualizer-surface__conflict-actions {\n  display: inline-flex;\n  flex-wrap: wrap;\n  gap: 6px;\n  margin-left: 8px;\n}\n.acu-visualizer-surface__data-toolbar,\n.acu-visualizer-surface__data-toolbar-actions,\n.acu-visualizer-surface__database-toolbar,\n.acu-visualizer-surface__pagination,\n.acu-visualizer-surface__pagination-pages,\n.acu-visualizer-surface__card-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 8px;\n}\n.acu-visualizer-surface__workspace {\n  flex: 1 1 auto;\n  min-height: 0;\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  overflow: auto;\n  padding: 16px;\n}\n.acu-visualizer-surface__loading {\n  min-height: 140px;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  gap: 8px;\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__mode-tabs {\n  flex: 0 0 auto;\n  width: min(360px, 42vw);\n}\n.acu-visualizer-surface__close {\n  width: 30px;\n  height: 30px;\n  flex: 0 0 auto;\n  border: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-page-title, 22px);\n  line-height: 1;\n  border-radius: var(--acu-radius-sm);\n}\n.acu-visualizer-surface__close:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__data-toolbar {\n  flex: 0 0 auto;\n  justify-content: space-between;\n  padding: 4px 0 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__data-toolbar-actions {\n  flex: 0 0 auto;\n  justify-content: flex-end;\n}\n.acu-visualizer-surface__pagination {\n  flex: 0 0 auto;\n  justify-content: center;\n  gap: 14px;\n  padding: 6px 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-visualizer-surface__pagination-pages {\n  min-width: 0;\n  flex-wrap: wrap;\n  justify-content: center;\n  gap: 8px;\n}\n.acu-visualizer-surface__page-button {\n  width: 34px;\n  min-width: 34px;\n  height: 34px;\n  padding: 0;\n  border: 1px solid var(--acu-border);\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n}\n.acu-visualizer-surface__page-button:hover:not(:disabled) {\n  border-color: var(--acu-accent);\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__page-button--active,\n.acu-visualizer-surface__page-button--active:hover:not(:disabled) {\n  border-color: var(--acu-accent);\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-visualizer-surface__page-button:disabled:not(\n    .acu-visualizer-surface__page-button--active\n  ) {\n  border-color: var(--acu-border);\n  background: var(--acu-bg-0);\n  color: var(--acu-text-2);\n  opacity: 1;\n  cursor: default;\n}\n.acu-visualizer-surface__page-jump {\n  flex: 0 0 64px;\n  width: 64px;\n}\n.acu-visualizer-surface__page-jump :deep(.acu-input) {\n  min-height: 34px;\n  border: 1px solid var(--acu-border) !important;\n  background: var(--acu-bg-0) !important;\n  text-align: center;\n  font-size: var(--acu-font-size-body-lg, 13px) !important;\n  font-variant-numeric: tabular-nums;\n}\n.acu-visualizer-surface__data-range {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__database-toolbar {\n  flex: 0 0 auto;\n  padding: 0 0 4px;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar h2 {\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-page-title, 22px);\n  font-weight: 700;\n  line-height: 1.2;\n}\n.acu-visualizer-surface__database-toolbar p {\n  margin: 5px 0 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-readable, 1.55);\n}\n.acu-visualizer-surface__empty {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-visualizer-surface__card-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));\n  gap: 12px;\n}\n.acu-visualizer-surface__data-card {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  height: 100%;\n  padding: 16px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-bg-1);\n}\n.acu-visualizer-surface__card-header strong {\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-visualizer-surface__card-header span {\n  min-width: 0;\n  margin-right: auto;\n  overflow: hidden;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__card-header :deep(.acu-icon-btn) {\n  background: transparent;\n}\n.acu-visualizer-surface__card-header\n  :deep(.acu-icon-btn--default:hover:not(:disabled)) {\n  background:\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\n    transparent;\n}\n.acu-visualizer-surface__card-header :deep(.acu-icon-btn--accent) {\n  background: var(--acu-accent-glow);\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__card-header\n  :deep(.acu-icon-btn--danger:hover:not(:disabled)) {\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-visualizer-surface__fields {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.acu-visualizer-surface__field-row {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 8px;\n  align-items: stretch;\n}\n.acu-visualizer-surface__field-row.is-wide {\n  grid-template-columns: minmax(0, 1fr);\n}\n.acu-visualizer-surface__field {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  padding: 2px;\n  border: 1px solid transparent;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  transition:\n    background 0.15s ease,\n    border-color 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field :deep(.acu-textarea) {\n  flex: 1 1 auto;\n  min-height: 34px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.45;\n  white-space: pre-wrap;\n  word-break: break-word;\n  overflow-wrap: break-word;\n}\n.acu-visualizer-surface__field-preview {\n  width: 100%;\n  min-height: 34px;\n  box-sizing: border-box;\n  padding: 8px 10px;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  color: var(--acu-text-1);\n  cursor: text;\n  display: block;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.45;\n  white-space: pre-wrap;\n  word-break: break-word;\n  overflow-wrap: break-word;\n  transition:\n    background 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field-preview:hover,\n.acu-visualizer-surface__field-preview:focus-visible {\n  outline: none;\n  background:\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\n    var(--acu-bg-2);\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field-preview.is-empty {\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__field-label {\n  min-width: 0;\n  min-height: 24px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 6px;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 600;\n}\n.acu-visualizer-surface__field-label > span:first-child {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__field-locks {\n  flex: 0 0 auto;\n  min-width: 51px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: flex-end;\n  gap: 3px;\n  opacity: 0.44;\n  transition: opacity 0.15s ease;\n}\n.acu-visualizer-surface__field:hover .acu-visualizer-surface__field-locks,\n.acu-visualizer-surface__field:focus-within\n  .acu-visualizer-surface__field-locks,\n.acu-visualizer-surface__field.is-actions-active\n  .acu-visualizer-surface__field-locks,\n.acu-visualizer-surface__field.is-locked .acu-visualizer-surface__field-locks,\n.acu-visualizer-surface__field.is-special-index\n  .acu-visualizer-surface__field-locks {\n  opacity: 1;\n}\n.acu-visualizer-surface__field-locks :deep(.acu-icon-btn) {\n  --acu-icon-btn-size: 24px;\n  --acu-icon-btn-font-size: 11px;\n  width: 24px;\n  height: 24px;\n  background: transparent !important;\n}\n.acu-visualizer-surface__field-locks\n  :deep(.acu-icon-btn--default:hover:not(:disabled)) {\n  background:\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\n    transparent;\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__field-locks :deep(.acu-icon-btn--accent) {\n  color: var(--acu-accent);\n  background: var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field.is-locked {\n  border-color: var(--acu-border);\n  background: color-mix(in srgb, var(--acu-warning) 8%, transparent);\n}\n.acu-visualizer-surface__field.is-actions-active:not(.is-locked) {\n  background: color-mix(in srgb, var(--acu-accent) 6%, transparent);\n}\n.acu-visualizer-surface__footer {\n  flex: 0 0 auto;\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 12px 16px;\n  border-top: 1px solid var(--acu-border-2);\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__footer-actions {\n  display: flex;\n  gap: 8px;\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__footer-actions :deep(.acu-btn) {\n  min-width: 132px;\n}\n.acu-visualizer-surface__mobile-nav-layer {\n  position: fixed;\n  top: 0;\n  right: 0;\n  bottom: 0;\n  left: 0;\n  inset: 0;\n  width: 100%;\n  width: 100vw;\n  width: 100dvw;\n  height: 100%;\n  height: 100vh;\n  height: 100dvh;\n  min-height: 100vh;\n  min-height: 100dvh;\n  z-index: 9350;\n  display: none;\n  align-items: stretch;\n  justify-content: flex-start;\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\n  overflow: hidden;\n  background: rgba(0, 0, 0, 0.58);\n  pointer-events: auto;\n  overscroll-behavior: contain;\n  animation: visualizer-mobile-nav-layer-in 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing {\n  pointer-events: auto;\n  animation: visualizer-mobile-nav-layer-out 0.15s ease-in both;\n}\n.acu-visualizer-surface__mobile-nav {\n  width: 280px;\n  max-width: calc(100vw - 72px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n  height: 100%;\n  max-height: 100%;\n  min-width: 0;\n  min-height: 0;\n  align-self: stretch;\n  flex: 0 1 280px;\n  display: flex;\n  flex-direction: column;\n  padding: 24px 12px 16px;\n  overflow-y: auto;\n  border-right: 0;\n  background: var(--acu-sidebar-bg);\n  box-shadow: var(--acu-shadow);\n  pointer-events: auto;\n  animation: visualizer-mobile-nav-drawer-in 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing\n  .acu-visualizer-surface__mobile-nav {\n  animation: visualizer-mobile-nav-drawer-out 0.15s ease-in both;\n}\n@supports (width: min(280px, calc(100vw - 72px))) {\n.acu-visualizer-surface__mobile-nav {\n    width: min(280px, calc(100vw - 72px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n    flex: 0 0 min(280px, calc(100vw - 72px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n}\n}\n@supports (width: 100dvw) {\n.acu-visualizer-surface__mobile-nav {\n    max-width: calc(100dvw - 72px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n}\n}\n@supports (height: 100dvh) {\n.acu-visualizer-surface__mobile-nav {\n    height: 100%;\n    max-height: 100%;\n}\n}\n@keyframes visualizer-mobile-nav-layer-in {\nfrom {\n    opacity: 0;\n}\nto {\n    opacity: 1;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-in {\nfrom {\n    transform: translateX(-100%);\n}\nto {\n    transform: translateX(0);\n}\n}\n@keyframes visualizer-mobile-nav-layer-out {\nfrom {\n    opacity: 1;\n}\nto {\n    opacity: 0;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-out {\nfrom {\n    transform: translateX(0);\n}\nto {\n    transform: translateX(-100%);\n}\n}\n@media (max-width: 1024px) {\n.acu-visualizer-surface {\n    grid-template-columns: 220px minmax(0, 1fr);\n}\n.acu-visualizer-surface__card-grid {\n    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));\n}\n.acu-visualizer-surface__topbar {\n    flex-wrap: wrap;\n}\n.acu-visualizer-surface__mode-tabs {\n    order: 3;\n    width: min(420px, 100%);\n}\n}\n@media (max-width: 767px) {\n.acu-visualizer-surface {\n    grid-template-columns: 1fr;\n    grid-template-rows: minmax(0, 1fr);\n}\n.acu-visualizer-surface__sidebar {\n    display: none;\n}\n.acu-visualizer-surface__topbar {\n    display: grid;\n    grid-template-columns: minmax(0, 1fr) auto;\n    gap: 8px;\n    min-height: 0;\n    padding: 8px;\n}\n.acu-visualizer-surface__topbar-context {\n    grid-column: 1;\n    display: grid;\n    grid-template-columns: auto minmax(0, 1fr) auto;\n    align-items: center;\n    gap: 8px;\n    min-width: 0;\n}\n.acu-visualizer-surface__mobile-menu {\n    display: inline-flex;\n}\n.acu-visualizer-surface__context-items {\n    display: grid;\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n    gap: 8px;\n}\n.acu-visualizer-surface__context-item:first-child,\n  .acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item {\n    max-width: none;\n}\n.acu-visualizer-surface__mobile-nav-layer {\n    display: flex;\n}\n.acu-visualizer-surface__close {\n    grid-column: 2;\n    grid-row: 1;\n    align-self: center;\n}\n.acu-visualizer-surface__mode-tabs {\n    grid-column: 1 / -1;\n    width: 100%;\n}\n.acu-visualizer-surface__workspace {\n    padding: 10px;\n}\n.acu-visualizer-surface__data-toolbar,\n  .acu-visualizer-surface__database-toolbar {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-visualizer-surface__data-toolbar :deep(.acu-btn),\n  .acu-visualizer-surface__database-toolbar :deep(.acu-btn) {\n    width: 100%;\n}\n.acu-visualizer-surface__data-toolbar-actions {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-visualizer-surface__pagination {\n    align-items: center;\n    flex-direction: row;\n    flex-wrap: wrap;\n    gap: 6px;\n    padding: 2px 0 6px;\n}\n.acu-visualizer-surface__pagination-pages {\n    flex: 0 1 auto;\n    align-items: center;\n    flex-direction: row;\n    flex-wrap: wrap;\n    gap: 5px;\n}\n.acu-visualizer-surface__page-button {\n    width: 36px;\n    min-width: 36px;\n    height: 34px;\n    flex: 0 0 36px;\n}\n.acu-visualizer-surface__page-jump {\n    flex: 0 0 54px;\n    width: 54px;\n}\n.acu-visualizer-surface__footer {\n    display: grid;\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\n    align-items: center;\n    gap: 8px;\n    padding: 8px;\n}\n.acu-visualizer-surface__footer > span {\n    min-width: 0;\n    overflow: hidden;\n    text-overflow: ellipsis;\n    white-space: nowrap;\n}\n.acu-visualizer-surface__footer-actions {\n    display: grid;\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n    gap: 6px;\n}\n.acu-visualizer-surface__footer-actions :deep(.acu-btn) {\n    min-width: 0;\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-visualizer-surface__card-grid {\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__fields {\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__mode-tabs {\n    width: 100%;\n}\n.acu-visualizer-surface__conflict-actions {\n    display: flex;\n    margin: 8px 0 0;\n}\n.acu-visualizer-surface__footer {\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__footer > span {\n    display: none;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue#style-0");
     var VisualizerSurface_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1$1 = {
@@ -93143,7 +96253,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n:global(#acu-app-v2) {\r\n  --acu-safe-top: max(env(safe-area-inset-top, 0px), var(--acu-native-safe-top, 0px));\r\n  --acu-safe-right: max(env(safe-area-inset-right, 0px), var(--acu-native-safe-right, 0px));\r\n  --acu-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--acu-native-safe-bottom, 0px));\r\n  --acu-safe-left: max(env(safe-area-inset-left, 0px), var(--acu-native-safe-left, 0px));\r\n  --acu-font-size-micro: 10px;\r\n  --acu-font-size-caption: 11px;\r\n  --acu-font-size-body: 12px;\r\n  --acu-font-size-body-lg: 13px;\r\n  --acu-font-size-section-title: 12px;\r\n  --acu-font-size-list-title: 13px;\r\n  --acu-font-size-panel-title: 15px;\r\n  --acu-font-size-page-title: 22px;\r\n  --acu-line-height-caption: 1.5;\r\n  --acu-line-height-body: 1.45;\r\n  --acu-line-height-readable: 1.55;\r\n  box-sizing: border-box;\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\n}\n:global(#acu-app-v2),\r\n:global(#acu-app-v2 *) {\r\n  box-sizing: border-box;\n}\n:global(#acu-app-v2 button) {\r\n  appearance: none;\r\n  -webkit-appearance: none;\r\n  -webkit-tap-highlight-color: transparent;\n}\n:global(#acu-app-v2 button:focus:not(:focus-visible)) {\r\n  outline: none;\r\n  box-shadow: none;\n}\n.acu-v2-app {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\n}\n.acu-v2-app__shell {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  z-index: 9000;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: var(--acu-safe-top) var(--acu-safe-right) var(--acu-safe-bottom) var(--acu-safe-left);\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\n}\n.acu-v2-app__header {\r\n  position: relative;\r\n  z-index: 40;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  min-height: 50px;\r\n  padding: 8px 12px 8px 20px;\r\n  background: var(--acu-bg-0);\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  flex: 0 0 auto;\n}\n.acu-v2-app__header-left {\r\n  display: flex;\r\n  align-items: center;\r\n  min-width: 0;\r\n  gap: 8px;\r\n  flex: 1 1 auto;\n}\n.acu-v2-app__menu {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  font-size: 14px;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-v2-app__menu:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__page-title {\r\n  min-width: 0;\r\n  margin: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\r\n  letter-spacing: 0;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-app__close {\r\n  width: 30px;\r\n  height: 30px;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  cursor: pointer;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__close:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__body {\r\n  flex: 1 1 auto;\r\n  display: flex;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: hidden;\n}\n.acu-v2-app__content {\r\n  flex: 1 1 auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: hidden;\n}\n.acu-v2-app__mobile-nav-layer {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9300;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  padding: var(--acu-safe-top) var(--acu-safe-right) var(--acu-safe-bottom) var(--acu-safe-left);\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: mobile-nav-layer-in 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing {\r\n  pointer-events: auto;\r\n  animation: mobile-nav-layer-out 0.15s ease-in both;\n}\n.acu-v2-app__mobile-nav {\r\n  width: 280px;\r\n  max-width: calc(100vw - 72px - var(--acu-safe-left) - var(--acu-safe-right));\r\n  height: 100%;\r\n  max-height: 100%;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 280px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  background: var(--acu-sidebar-bg);\r\n  border-right: 0;\r\n  box-shadow: var(--acu-shadow);\r\n  overflow: hidden;\r\n  pointer-events: auto;\r\n  animation: mobile-nav-drawer-in 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing .acu-v2-app__mobile-nav {\r\n  animation: mobile-nav-drawer-out 0.15s ease-in both;\n}\n@supports (width: min(280px, calc(100vw - 72px))) {\n.acu-v2-app__mobile-nav {\r\n    width: min(280px, calc(100vw - 72px - var(--acu-safe-left) - var(--acu-safe-right)));\r\n    flex: 0 0 min(280px, calc(100vw - 72px - var(--acu-safe-left) - var(--acu-safe-right)));\n}\n}\n@supports (width: 100dvw) {\n.acu-v2-app__mobile-nav {\r\n    max-width: calc(100dvw - 72px - var(--acu-safe-left) - var(--acu-safe-right));\n}\n}\n@supports (height: 100dvh) {\n.acu-v2-app__mobile-nav {\r\n    height: 100%;\r\n    max-height: 100%;\n}\n}\r\n\r\n/* ── Theme switcher ── */\n.acu-v2-app__header-right {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 4px;\r\n  flex: 0 0 auto;\n}\n.acu-v2-app__theme-switcher {\r\n  position: relative;\n}\n.acu-v2-app__theme-btn {\r\n  width: 30px;\r\n  height: 30px;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: 14px;\r\n  cursor: pointer;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__theme-btn:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-menu {\r\n  position: absolute;\r\n  top: calc(100% + 6px);\r\n  right: 0;\r\n  z-index: 10;\r\n  list-style: none;\r\n  margin: 0;\r\n  padding: 4px;\r\n  width: min(280px, calc(100vw - 24px));\r\n  min-width: 240px;\r\n  background: var(--acu-bg-1);\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  box-shadow: var(--acu-shadow);\r\n  animation: theme-menu-in 0.12s ease-out both;\n}\n.acu-v2-app__theme-menu.is-closing {\r\n  pointer-events: none;\r\n  animation: theme-menu-out 0.12s ease-in both;\n}\n.acu-v2-app__theme-option {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 8px;\r\n  padding: 7px 10px;\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  color: var(--acu-text-2);\r\n  border-radius: var(--acu-radius-sm);\r\n  cursor: pointer;\r\n  user-select: none;\n}\n.acu-v2-app__theme-option:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active {\r\n  color: var(--acu-on-accent);\r\n  background: var(--acu-accent);\r\n  font-weight: 600;\n}\n.acu-v2-app__theme-option-main {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  min-width: 0;\r\n  flex: 1 1 auto;\n}\n.acu-v2-app__theme-name {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-app__theme-tag {\r\n  flex: 0 0 auto;\r\n  padding: 1px 5px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-accent) 12%, transparent);\r\n  color: var(--acu-accent);\r\n  font-size: var(--acu-font-size-micro, 10px);\r\n  font-weight: 600;\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tag {\r\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 4px;\r\n  flex: 0 0 auto;\r\n  opacity: 0.72;\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn) {\r\n  background: transparent;\r\n  color: inherit;\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn:hover:not(:disabled)) {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools :deep(.acu-icon-btn:hover:not(:disabled)) {\r\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn--danger:hover:not(:disabled)) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\r\n  color: var(--acu-danger);\n}\n.acu-v2-app__theme-option:hover .acu-v2-app__theme-tools,\r\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools {\r\n  opacity: 1;\n}\n.acu-v2-app__theme-swatch {\r\n  display: block;\r\n  width: 18px;\r\n  height: 18px;\r\n  border-radius: 999px;\r\n  flex: 0 0 18px;\r\n  background: linear-gradient(\r\n    135deg,\r\n    var(--acu-theme-swatch-bg) 0 56%,\r\n    var(--acu-theme-swatch-accent) 56% 100%\r\n  );\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-border-2) 72%, transparent);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-swatch {\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-on-accent) 62%, transparent);\n}\n.acu-v2-app__theme-menu-footer {\r\n  display: flex;\r\n  justify-content: stretch;\r\n  margin-top: 4px;\r\n  padding: 7px 6px 4px;\r\n  border-top: 1px solid var(--acu-border);\n}\n.acu-v2-app__theme-menu-footer :deep(.acu-file-button),\r\n.acu-v2-app__theme-menu-footer :deep(.acu-btn) {\r\n  width: 100%;\n}\n@keyframes theme-menu-in {\nfrom {\r\n    opacity: 0;\r\n    transform: translateY(-4px);\n}\nto {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\n}\n@keyframes theme-menu-out {\nfrom {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\nto {\r\n    opacity: 0;\r\n    transform: translateY(-4px);\n}\n}\n@keyframes mobile-nav-layer-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes mobile-nav-drawer-in {\nfrom { transform: translateX(-100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes mobile-nav-layer-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes mobile-nav-drawer-out {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(-100%);\n}\n}\n@media (max-width: 720px) {\n.acu-v2-app__header {\r\n    min-height: 48px;\r\n    padding: 8px 10px;\n}\n.acu-v2-app__header-left {\r\n    gap: 6px;\n}\n.acu-v2-app__menu {\r\n    display: inline-flex;\n}\n.acu-v2-app__page-title {\r\n    font-size: 18px;\n}\n.acu-v2-app__desktop-sidebar {\r\n    display: none;\n}\n.acu-v2-app__mobile-nav-layer {\r\n    display: flex;\n}\n}\r\n", "src/presentation-v2/App.vue#style-0");
+    injectSfcStyle("\n:global(#acu-app-v2) {\n  --acu-safe-top: max(env(safe-area-inset-top, 0px), var(--acu-native-safe-top, 0px));\n  --acu-safe-right: max(env(safe-area-inset-right, 0px), var(--acu-native-safe-right, 0px));\n  --acu-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--acu-native-safe-bottom, 0px));\n  --acu-safe-left: max(env(safe-area-inset-left, 0px), var(--acu-native-safe-left, 0px));\n  --acu-font-size-micro: 10px;\n  --acu-font-size-caption: 11px;\n  --acu-font-size-body: 12px;\n  --acu-font-size-body-lg: 13px;\n  --acu-font-size-section-title: 12px;\n  --acu-font-size-list-title: 13px;\n  --acu-font-size-panel-title: 15px;\n  --acu-font-size-page-title: 22px;\n  --acu-line-height-caption: 1.5;\n  --acu-line-height-body: 1.45;\n  --acu-line-height-readable: 1.55;\n  box-sizing: border-box;\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-ui);\n  font-size: var(--acu-font-size-body);\n}\n:global(#acu-app-v2),\n:global(#acu-app-v2 *) {\n  box-sizing: border-box;\n}\n:global(#acu-app-v2 button) {\n  appearance: none;\n  -webkit-appearance: none;\n  -webkit-tap-highlight-color: transparent;\n}\n:global(#acu-app-v2 button:focus:not(:focus-visible)) {\n  outline: none;\n  box-shadow: none;\n}\n.acu-v2-app {\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-ui);\n  font-size: var(--acu-font-size-body);\n}\n.acu-v2-app__shell {\n  position: fixed;\n  top: 0;\n  right: 0;\n  bottom: 0;\n  left: 0;\n  inset: 0;\n  z-index: 9000;\n  width: 100%;\n  width: 100vw;\n  width: 100dvw;\n  height: 100%;\n  height: 100vh;\n  height: 100dvh;\n  min-width: 0;\n  min-height: 0;\n  display: flex;\n  flex-direction: column;\n  padding: var(--acu-safe-top) var(--acu-safe-right) var(--acu-safe-bottom) var(--acu-safe-left);\n  overflow: hidden;\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-ui);\n  font-size: var(--acu-font-size-body);\n}\n.acu-v2-app__header {\n  position: relative;\n  z-index: 40;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  min-height: 50px;\n  padding: 8px 12px 8px 20px;\n  background: var(--acu-bg-0);\n  border-bottom: 1px solid var(--acu-border-2);\n  flex: 0 0 auto;\n}\n.acu-v2-app__header-left {\n  display: flex;\n  align-items: center;\n  min-width: 0;\n  gap: 8px;\n  flex: 1 1 auto;\n}\n.acu-v2-app__menu {\n  display: none;\n  flex: 0 0 auto;\n  font-size: 14px;\n  background: transparent;\n  color: var(--acu-text-2);\n  box-shadow: none;\n}\n.acu-v2-app__menu:hover:not(:disabled) {\n  background: transparent;\n  color: var(--acu-text-1);\n}\n.acu-v2-app__page-title {\n  min-width: 0;\n  margin: 0;\n  overflow: hidden;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-page-title, 22px);\n  font-weight: 700;\n  line-height: 1.2;\n  letter-spacing: 0;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-app__close {\n  width: 30px;\n  height: 30px;\n  border: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-page-title, 22px);\n  line-height: 1;\n  cursor: pointer;\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__close:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-app__body {\n  flex: 1 1 auto;\n  display: flex;\n  min-width: 0;\n  min-height: 0;\n  overflow: hidden;\n}\n.acu-v2-app__content {\n  flex: 1 1 auto;\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  min-height: 0;\n  overflow: hidden;\n}\n.acu-v2-app__mobile-nav-layer {\n  position: fixed;\n  top: 0;\n  right: 0;\n  bottom: 0;\n  left: 0;\n  inset: 0;\n  width: 100%;\n  width: 100vw;\n  width: 100dvw;\n  height: 100%;\n  height: 100vh;\n  height: 100dvh;\n  min-height: 100vh;\n  min-height: 100dvh;\n  z-index: 9300;\n  display: none;\n  align-items: stretch;\n  justify-content: flex-start;\n  padding: var(--acu-safe-top) var(--acu-safe-right) var(--acu-safe-bottom) var(--acu-safe-left);\n  overflow: hidden;\n  background: rgba(0, 0, 0, 0.58);\n  pointer-events: auto;\n  overscroll-behavior: contain;\n  animation: mobile-nav-layer-in 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing {\n  pointer-events: auto;\n  animation: mobile-nav-layer-out 0.15s ease-in both;\n}\n.acu-v2-app__mobile-nav {\n  width: 280px;\n  max-width: calc(100vw - 72px - var(--acu-safe-left) - var(--acu-safe-right));\n  height: 100%;\n  max-height: 100%;\n  min-width: 0;\n  min-height: 0;\n  align-self: stretch;\n  flex: 0 1 280px;\n  display: flex;\n  flex-direction: column;\n  background: var(--acu-sidebar-bg);\n  border-right: 0;\n  box-shadow: var(--acu-shadow);\n  overflow: hidden;\n  pointer-events: auto;\n  animation: mobile-nav-drawer-in 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing .acu-v2-app__mobile-nav {\n  animation: mobile-nav-drawer-out 0.15s ease-in both;\n}\n@supports (width: min(280px, calc(100vw - 72px))) {\n.acu-v2-app__mobile-nav {\n    width: min(280px, calc(100vw - 72px - var(--acu-safe-left) - var(--acu-safe-right)));\n    flex: 0 0 min(280px, calc(100vw - 72px - var(--acu-safe-left) - var(--acu-safe-right)));\n}\n}\n@supports (width: 100dvw) {\n.acu-v2-app__mobile-nav {\n    max-width: calc(100dvw - 72px - var(--acu-safe-left) - var(--acu-safe-right));\n}\n}\n@supports (height: 100dvh) {\n.acu-v2-app__mobile-nav {\n    height: 100%;\n    max-height: 100%;\n}\n}\n\n/* ── Theme switcher ── */\n.acu-v2-app__header-right {\n  display: flex;\n  align-items: center;\n  gap: 4px;\n  flex: 0 0 auto;\n}\n.acu-v2-app__theme-switcher {\n  position: relative;\n}\n.acu-v2-app__theme-btn {\n  width: 30px;\n  height: 30px;\n  border: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font-size: 14px;\n  cursor: pointer;\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__theme-btn:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-menu {\n  position: absolute;\n  top: calc(100% + 6px);\n  right: 0;\n  z-index: 10;\n  list-style: none;\n  margin: 0;\n  padding: 4px;\n  width: min(280px, calc(100vw - 24px));\n  min-width: 240px;\n  background: var(--acu-bg-1);\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  box-shadow: var(--acu-shadow);\n  animation: theme-menu-in 0.12s ease-out both;\n}\n.acu-v2-app__theme-menu.is-closing {\n  pointer-events: none;\n  animation: theme-menu-out 0.12s ease-in both;\n}\n.acu-v2-app__theme-option {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 8px;\n  padding: 7px 10px;\n  font-size: var(--acu-font-size-body-lg, 13px);\n  color: var(--acu-text-2);\n  border-radius: var(--acu-radius-sm);\n  cursor: pointer;\n  user-select: none;\n}\n.acu-v2-app__theme-option:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active {\n  color: var(--acu-on-accent);\n  background: var(--acu-accent);\n  font-weight: 600;\n}\n.acu-v2-app__theme-option-main {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  min-width: 0;\n  flex: 1 1 auto;\n}\n.acu-v2-app__theme-name {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-app__theme-tag {\n  flex: 0 0 auto;\n  padding: 1px 5px;\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-accent) 12%, transparent);\n  color: var(--acu-accent);\n  font-size: var(--acu-font-size-micro, 10px);\n  font-weight: 600;\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tag {\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools {\n  display: inline-flex;\n  align-items: center;\n  gap: 4px;\n  flex: 0 0 auto;\n  opacity: 0.72;\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn) {\n  background: transparent;\n  color: inherit;\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn:hover:not(:disabled)) {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools :deep(.acu-icon-btn:hover:not(:disabled)) {\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn--danger:hover:not(:disabled)) {\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n  color: var(--acu-danger);\n}\n.acu-v2-app__theme-option:hover .acu-v2-app__theme-tools,\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools {\n  opacity: 1;\n}\n.acu-v2-app__theme-swatch {\n  display: block;\n  width: 18px;\n  height: 18px;\n  border-radius: 999px;\n  flex: 0 0 18px;\n  background: linear-gradient(\n    135deg,\n    var(--acu-theme-swatch-bg) 0 56%,\n    var(--acu-theme-swatch-accent) 56% 100%\n  );\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-border-2) 72%, transparent);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-swatch {\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-on-accent) 62%, transparent);\n}\n.acu-v2-app__theme-menu-footer {\n  display: flex;\n  justify-content: stretch;\n  margin-top: 4px;\n  padding: 7px 6px 4px;\n  border-top: 1px solid var(--acu-border);\n}\n.acu-v2-app__theme-menu-footer :deep(.acu-file-button),\n.acu-v2-app__theme-menu-footer :deep(.acu-btn) {\n  width: 100%;\n}\n@keyframes theme-menu-in {\nfrom {\n    opacity: 0;\n    transform: translateY(-4px);\n}\nto {\n    opacity: 1;\n    transform: translateY(0);\n}\n}\n@keyframes theme-menu-out {\nfrom {\n    opacity: 1;\n    transform: translateY(0);\n}\nto {\n    opacity: 0;\n    transform: translateY(-4px);\n}\n}\n@keyframes mobile-nav-layer-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes mobile-nav-drawer-in {\nfrom { transform: translateX(-100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes mobile-nav-layer-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes mobile-nav-drawer-out {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(-100%);\n}\n}\n@media (max-width: 720px) {\n.acu-v2-app__header {\n    min-height: 48px;\n    padding: 8px 10px;\n}\n.acu-v2-app__header-left {\n    gap: 6px;\n}\n.acu-v2-app__menu {\n    display: inline-flex;\n}\n.acu-v2-app__page-title {\n    font-size: 18px;\n}\n.acu-v2-app__desktop-sidebar {\n    display: none;\n}\n.acu-v2-app__mobile-nav-layer {\n    display: flex;\n}\n}\n", "src/presentation-v2/App.vue#style-0");
     var App_vue_vue_type_style_index_0_lang = null;
 
     const _hoisted_1 = { class: "acu-v2-app" };
