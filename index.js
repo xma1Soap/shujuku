@@ -15836,16 +15836,18 @@ $CONTENT
         let result = text;
         // 如果排除用户消息，则需要按行处理
         if (excludeUserMessages) {
-            const lines = result.split('\n');
+            const lines = result.split("\n");
             const processedLines = lines.map((line) => {
                 // 检查是否是用户消息行（通常以特定格式标识）
-                if (line.includes('[User]') || line.includes('User:') || line.includes('用户:')) {
+                if (line.includes("[User]") ||
+                    line.includes("User:") ||
+                    line.includes("用户:")) {
                     return line; // 用户消息不处理
                 }
                 // 对非用户消息行进行标签提取
                 return extractTagsFromLine(line, tagNames);
             });
-            result = processedLines.join('\n');
+            result = processedLines.join("\n");
         }
         else {
             result = extractTagsFromLine(result, tagNames);
@@ -15866,7 +15868,7 @@ $CONTENT
             }
         });
         if (extractedParts.length > 0) {
-            result = extractedParts.join('\n\n');
+            result = extractedParts.join("\n\n");
         }
         return result;
     }
@@ -15888,15 +15890,15 @@ $CONTENT
         return content;
     }
     function getDefaultPlotContextExtractRules_ACU() {
-        return normalizeExtractRules_ACU(DEFAULT_PLOT_SETTINGS_ACU.contextExtractRules, DEFAULT_PLOT_SETTINGS_ACU.contextExtractTags || '');
+        return normalizeExtractRules_ACU(DEFAULT_PLOT_SETTINGS_ACU.contextExtractRules, DEFAULT_PLOT_SETTINGS_ACU.contextExtractTags || "");
     }
     function getDefaultPlotContextExcludeRules_ACU() {
-        return normalizeExcludeRules_ACU(DEFAULT_PLOT_SETTINGS_ACU.contextExcludeRules, DEFAULT_PLOT_SETTINGS_ACU.contextExcludeTags || '');
+        return normalizeExcludeRules_ACU(DEFAULT_PLOT_SETTINGS_ACU.contextExcludeRules, DEFAULT_PLOT_SETTINGS_ACU.contextExcludeTags || "");
     }
     function removeLastMatchedBoundary_ACU(text, startBoundary, endBoundary) {
-        const source = String(text ?? '');
-        const start = String(startBoundary || '');
-        const end = String(endBoundary || '');
+        const source = String(text ?? "");
+        const start = String(startBoundary || "");
+        const end = String(endBoundary || "");
         if (!source || !start || !end)
             return source;
         const lowerSource = source.toLowerCase();
@@ -15913,20 +15915,20 @@ $CONTENT
             return source;
         return source.slice(0, startIdx) + source.slice(removeTo);
     }
-    function applyExcludeRulesToText_ACU(text, { excludeRules = [], excludeTags = '' } = {}) {
-        let result = String(text ?? '');
+    function applyExcludeRulesToText_ACU(text, { excludeRules = [], excludeTags = "" } = {}) {
+        let result = String(text ?? "");
         const rules = normalizeExcludeRules_ACU(excludeRules, excludeTags);
         if (!result || rules.length === 0)
             return result;
-        rules.forEach(rule => {
+        rules.forEach((rule) => {
             result = removeLastMatchedBoundary_ACU(result, rule.start, rule.end);
         });
-        return result.replace(/\n{3,}/g, '\n\n').trim();
+        return result.replace(/\n{3,}/g, "\n\n").trim();
     }
     function extractLastMatchedBoundary_ACU(text, startBoundary, endBoundary) {
-        const source = String(text ?? '');
-        const start = String(startBoundary || '');
-        const end = String(endBoundary || '');
+        const source = String(text ?? "");
+        const start = String(startBoundary || "");
+        const end = String(endBoundary || "");
         if (!source || !start || !end)
             return null;
         const lowerSource = source.toLowerCase();
@@ -15943,8 +15945,8 @@ $CONTENT
             return null;
         return source.slice(startIdx, rangeEnd);
     }
-    function applyExtractRulesToText_ACU(text, { extractRules = [], extractTags = '' } = {}) {
-        const source = String(text ?? '');
+    function applyExtractRulesToText_ACU(text, { extractRules = [], extractTags = "" } = {}) {
+        const source = String(text ?? "");
         const rules = normalizeExtractRules_ACU(extractRules, extractTags);
         if (!source || rules.length === 0)
             return source;
@@ -15956,10 +15958,10 @@ $CONTENT
         });
         if (parts.length === 0)
             return source;
-        return parts.join('\n\n');
+        return parts.join("\n\n");
     }
-    function applyContextTagFilters_ACU(text, { extractTags = '', extractRules = [], excludeTags = '', excludeRules = [] } = {}) {
-        let result = String(text ?? '');
+    function applyContextTagFilters_ACU(text, { extractTags = "", extractRules = [], excludeTags = "", excludeRules = [], } = {}) {
+        let result = String(text ?? "");
         result = applyExtractRulesToText_ACU(result, { extractRules, extractTags });
         result = applyExcludeRulesToText_ACU(result, { excludeRules, excludeTags });
         return result;
@@ -17298,6 +17300,41 @@ $CONTENT
             settings_ACU.specialIndexLocks[scopeKey] = {};
         settings_ACU.specialIndexLocks[scopeKey][sheetKey] = !!enabled;
         saveSettings_ACU();
+    }
+    function clearCurrentTableLocks_ACU({ save = true } = {}) {
+        const scopeKey = getTableLockScopeKey_ACU();
+        const result = {
+            scopeKey,
+            removedTableLocks: false,
+            removedSpecialIndexLocks: false,
+            changed: false,
+        };
+        if (settings_ACU.tableUpdateLocks && typeof settings_ACU.tableUpdateLocks === 'object' && !Array.isArray(settings_ACU.tableUpdateLocks)) {
+            if (Object.prototype.hasOwnProperty.call(settings_ACU.tableUpdateLocks, scopeKey)) {
+                delete settings_ACU.tableUpdateLocks[scopeKey];
+                result.removedTableLocks = true;
+                result.changed = true;
+            }
+        }
+        else if (settings_ACU.tableUpdateLocks !== undefined) {
+            settings_ACU.tableUpdateLocks = {};
+            result.changed = true;
+        }
+        if (settings_ACU.specialIndexLocks && typeof settings_ACU.specialIndexLocks === 'object' && !Array.isArray(settings_ACU.specialIndexLocks)) {
+            if (Object.prototype.hasOwnProperty.call(settings_ACU.specialIndexLocks, scopeKey)) {
+                delete settings_ACU.specialIndexLocks[scopeKey];
+                result.removedSpecialIndexLocks = true;
+                result.changed = true;
+            }
+        }
+        else if (settings_ACU.specialIndexLocks !== undefined) {
+            settings_ACU.specialIndexLocks = {};
+            result.changed = true;
+        }
+        if (save && result.changed) {
+            saveSettings_ACU();
+        }
+        return result;
     }
     function getSummaryIndexColumnIndex_ACU(table) {
         try {
@@ -25679,6 +25716,135 @@ $CONTENT
         }
         return getCurrentChatTemplateScopeState_ACU({ chat, isolationKey: normalizedKey });
     }
+    function clearLegacyHeaderGuideForIsolationKey_ACU({ chat = getChatArray_ACU(), isolationKey = getCurrentIsolationKey_ACU() } = {}) {
+        const first = getChatFirstLayerMessage_ACU(chat);
+        if (!first)
+            return false;
+        const raw = first[LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU];
+        if (!raw)
+            return false;
+        const legacyObj = typeof raw === 'string'
+            ? safeJsonParse_ACU(raw, null)
+            : cloneScopedConfigData_ACU(raw, null);
+        if (!legacyObj || typeof legacyObj !== 'object' || Array.isArray(legacyObj))
+            return false;
+        const tags = legacyObj.tags;
+        if (!tags || typeof tags !== 'object' || Array.isArray(tags))
+            return false;
+        const normalizedKey = normalizeTemplateScopeIsolationKey_ACU(isolationKey);
+        if (!Object.prototype.hasOwnProperty.call(tags, normalizedKey))
+            return false;
+        delete tags[normalizedKey];
+        if (Object.keys(tags).length === 0) {
+            delete first[LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU];
+            return true;
+        }
+        legacyObj.tags = tags;
+        if (typeof raw === 'string') {
+            const nextRaw = safeJsonStringify_ACU(legacyObj, '');
+            if (nextRaw) {
+                first[LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU] = nextRaw;
+            }
+            else {
+                delete first[LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU];
+            }
+        }
+        else {
+            first[LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU] = legacyObj;
+        }
+        return true;
+    }
+    async function clearCurrentChatTemplateSnapshots_ACU({ chat = getChatArray_ACU(), isolationKey = getCurrentIsolationKey_ACU(), clearCurrentOverride = true, clearArchives = true, clearGuide = true, clearLegacyGuide = true, save = true } = {}) {
+        const normalizedKey = normalizeTemplateScopeIsolationKey_ACU(isolationKey);
+        const first = getChatFirstLayerMessage_ACU(chat);
+        const result = {
+            isolationKey: normalizedKey,
+            removedCurrentScope: false,
+            removedArchives: 0,
+            removedGuide: false,
+            removedLegacyGuide: false,
+            changed: false,
+        };
+        if (!first)
+            return result;
+        const hadScopedConfigField = Object.prototype.hasOwnProperty.call(first, CHAT_SCOPED_CONFIG_FIELD_ACU);
+        const container = normalizeChatScopedConfigContainer_ACU(getChatScopedConfigContainer_ACU(chat));
+        let scopedConfigChanged = false;
+        if (clearCurrentOverride) {
+            if (container.template && typeof container.template === 'object' && !Array.isArray(container.template)) {
+                const slots = container.template;
+                if (Object.prototype.hasOwnProperty.call(slots, normalizedKey)) {
+                    delete slots[normalizedKey];
+                    result.removedCurrentScope = true;
+                    result.changed = true;
+                    scopedConfigChanged = true;
+                }
+                if (Object.keys(slots).length === 0)
+                    delete container.template;
+            }
+            else if (container.template !== undefined) {
+                delete container.template;
+                result.removedCurrentScope = true;
+                result.changed = true;
+                scopedConfigChanged = true;
+            }
+        }
+        if (clearArchives) {
+            if (container.templateArchives && typeof container.templateArchives === 'object' && !Array.isArray(container.templateArchives)) {
+                const archiveSlots = container.templateArchives;
+                if (Object.prototype.hasOwnProperty.call(archiveSlots, normalizedKey)) {
+                    const rawEntries = archiveSlots[normalizedKey];
+                    result.removedArchives = Array.isArray(rawEntries) ? rawEntries.length : 1;
+                    delete archiveSlots[normalizedKey];
+                    result.changed = true;
+                    scopedConfigChanged = true;
+                }
+                if (Object.keys(archiveSlots).length === 0)
+                    delete container.templateArchives;
+            }
+            else if (container.templateArchives !== undefined) {
+                delete container.templateArchives;
+                result.removedArchives = 1;
+                result.changed = true;
+                scopedConfigChanged = true;
+            }
+        }
+        const hasScopedPayload = Object.keys(container).some(key => key !== 'version');
+        if (scopedConfigChanged && hasScopedPayload) {
+            first[CHAT_SCOPED_CONFIG_FIELD_ACU] = container;
+        }
+        else if (!hasScopedPayload && hadScopedConfigField) {
+            delete first[CHAT_SCOPED_CONFIG_FIELD_ACU];
+            result.changed = true;
+        }
+        if (clearGuide) {
+            try {
+                result.removedGuide = !!clearChatSheetGuideDataForIsolationKey_ACU({ chat, isolationKey: normalizedKey });
+                result.changed = result.changed || result.removedGuide;
+            }
+            catch (e) {
+                logWarn_ACU('[模板作用域] clearChatSheetGuide 失败:', e);
+            }
+        }
+        if (clearLegacyGuide) {
+            try {
+                result.removedLegacyGuide = clearLegacyHeaderGuideForIsolationKey_ACU({ chat, isolationKey: normalizedKey });
+                result.changed = result.changed || result.removedLegacyGuide;
+            }
+            catch (e) {
+                logWarn_ACU('[模板作用域] clearLegacyHeaderGuide 失败:', e);
+            }
+        }
+        if (save && result.changed) {
+            try {
+                await saveChatToHost_ACU();
+            }
+            catch (error) {
+                logWarn_ACU('[TemplateScope] 保存聊天级模板快照清理失败:', error);
+            }
+        }
+        return result;
+    }
     function clearCurrentChatTemplateScopeState_ACU({ isolationKey = getCurrentIsolationKey_ACU(), clearGuide = true, archiveCurrent = true } = {}) {
         const normalizedKey = normalizeTemplateScopeIsolationKey_ACU(isolationKey);
         if (archiveCurrent) {
@@ -26409,6 +26575,40 @@ $CONTENT
             }
         }
         return result;
+    }
+    async function clearCurrentChatPlotPresetOverride_ACU({ source = 'reset_all_defaults', save = true, saveSettings, saveChat, } = {}) {
+        const shouldSaveSettings = saveSettings ?? save;
+        const shouldSaveChat = saveChat ?? save;
+        const hadChatScopeSnapshot = !!getCurrentChatPlotScopeState_ACU();
+        const hadBinding = !!getPlotPresetBindingForChat_ACU(currentChatFileIdentifier_ACU);
+        const result = switchCurrentChatPlotPreset_ACU('', { source, save: false });
+        if (!result || typeof result !== 'object') {
+            return {
+                changed: false,
+                clearedChatScope: false,
+                clearedBinding: false,
+                activePresetName: '',
+                followsGlobal: false,
+            };
+        }
+        if (shouldSaveSettings) {
+            saveSettings_ACU();
+        }
+        if (shouldSaveChat && hadChatScopeSnapshot) {
+            try {
+                await saveChatToHost_ACU();
+            }
+            catch (error) {
+                logWarn_ACU('[剧情推进] 保存当前聊天剧情推进预设清理失败:', error);
+            }
+        }
+        return {
+            changed: hadChatScopeSnapshot || hadBinding,
+            clearedChatScope: hadChatScopeSnapshot,
+            clearedBinding: hadBinding,
+            activePresetName: result.activePresetName || '',
+            followsGlobal: result.followsGlobal === true,
+        };
     }
     function buildPlotSettingsPreviewFromPreset_ACU(presetName) {
         const normalizedPresetName = normalizePlotPresetSelectionValue_ACU(presetName);
@@ -43743,7 +43943,7 @@ $CONTENT
             return false;
         // 收集候选 sourceTableKey：当前值 + 所有纪要/大纲表键 + 兜底 'summary'
         const candidateTableKeys = new Set();
-        const currentTableKey = getCurrentSummaryVectorIndexSourceTableKey_ACU();
+        const currentTableKey = getCurrentSummaryVectorIndexSourceTableKey_ACU$1();
         candidateTableKeys.add(currentTableKey);
         candidateTableKeys.add('summary');
         const tables = currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object' ? currentJsonTableData_ACU : null;
@@ -43821,7 +44021,7 @@ $CONTENT
         }
         return false;
     }
-    function getCurrentSummaryVectorIndexSourceTableKey_ACU() {
+    function getCurrentSummaryVectorIndexSourceTableKey_ACU$1() {
         const tables = currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object'
             ? currentJsonTableData_ACU
             : null;
@@ -43850,7 +44050,7 @@ $CONTENT
                     const hint = {
                         chatKey: manifest.chatKey || currentChatFileIdentifier_ACU,
                         isolationKey: manifest.isolationKey || layer.isolationKey,
-                        sourceTableKey: manifest.sourceTableKey || getCurrentSummaryVectorIndexSourceTableKey_ACU(),
+                        sourceTableKey: manifest.sourceTableKey || getCurrentSummaryVectorIndexSourceTableKey_ACU$1(),
                     };
                     scopeHints.set(`${hint.chatKey || ''}\n${hint.isolationKey}\n${hint.sourceTableKey}`, hint);
                 }
@@ -57539,28 +57739,37 @@ $CONTENT
      * "console marker 正常但页面无内容"。
      *
      * 解析规则：
-     * 1. window.parent 存在且 !== window，且能访问 parent.document → host
-     * 2. 否则（顶层窗口或跨域不可访问）→ 当前 window/document
-     * 3. 全程 try/catch；跨域抛错时降级到当前文档并打印可检索 warning
+     * 1. 从当前 window 沿 parent 链向上探测所有可访问 document
+     * 2. 选择最外层可访问 document
+     * 3. 否则（顶层窗口或跨域不可访问）→ 当前 window/document
+     * 4. 全程 try/catch；跨域抛错时降级到当前文档并打印可检索 warning
      */
     const PARENT_PROBE_MARKER = '[ACU-V2] host-document parent probe';
     let cachedHost = null;
-    function probeParent() {
-        try {
-            if (typeof window === 'undefined')
-                return null;
-            const parent = window.parent;
-            if (!parent || parent === window)
-                return null;
-            const parentDoc = parent.document;
-            if (!parentDoc || !parentDoc.body)
-                return null;
-            return { window: parent, document: parentDoc, source: 'parent-document' };
-        }
-        catch (err) {
-            logWarn_ACU(`${PARENT_PROBE_MARKER}: parent inaccessible (likely cross-origin), falling back. ${err?.message ?? err}`);
+    function probeOutermostAccessibleHost() {
+        if (typeof window === 'undefined')
             return null;
+        let current = window;
+        let outermost = null;
+        while (current) {
+            try {
+                const doc = current.document;
+                if (!doc || !doc.body)
+                    break;
+                outermost = { window: current, document: doc };
+                const parent = current.parent;
+                if (!parent || parent === current)
+                    break;
+                current = parent;
+            }
+            catch (err) {
+                logWarn_ACU(`${PARENT_PROBE_MARKER}: parent inaccessible (likely cross-origin), falling back. ${err?.message ?? err}`);
+                break;
+            }
         }
+        if (!outermost || outermost.window === window)
+            return null;
+        return { window: outermost.window, document: outermost.document, source: 'parent-document' };
     }
     /**
      * 解析并缓存 host window/document。后续重复调用直接返回缓存。
@@ -57572,7 +57781,7 @@ $CONTENT
     function resolveAcuHost() {
         if (cachedHost)
             return cachedHost;
-        const fromParent = probeParent();
+        const fromParent = probeOutermostAccessibleHost();
         if (fromParent) {
             cachedHost = fromParent;
             return cachedHost;
@@ -73386,14 +73595,21 @@ Expected function or array of functions, received type ${typeof value}.`
             active: null,
             queue: [],
             inputValue: "",
+            checkedValues: {},
         }),
         getters: {
-            promptConfirmDisabled(state) {
-                if (state.active?.kind !== "prompt")
-                    return false;
-                if (state.active.requireNonEmpty === false)
-                    return false;
-                return !String(state.inputValue || "").trim();
+            confirmDisabled(state) {
+                if (state.active?.kind === "prompt") {
+                    if (state.active.requireNonEmpty === false)
+                        return false;
+                    return !String(state.inputValue || "").trim();
+                }
+                if (state.active?.kind === "multiselect") {
+                    if (state.active.requireNonEmpty === false)
+                        return false;
+                    return !Object.values(state.checkedValues).some(Boolean);
+                }
+                return false;
             },
         },
         actions: {
@@ -73439,10 +73655,32 @@ Expected function or array of functions, received type ${typeof value}.`
                     resolve: () => { },
                 }).then((value) => (typeof value === "string" ? value : null));
             },
+            selectMany(options) {
+                return this.enqueue({
+                    id: makeDialogId(),
+                    kind: "multiselect",
+                    title: options.title,
+                    message: options.message,
+                    checkboxOptions: options.options,
+                    confirmLabel: options.confirmLabel || "确认",
+                    cancelLabel: options.cancelLabel || "取消",
+                    confirmVariant: options.confirmVariant || "primary",
+                    badge: options.badge,
+                    requireNonEmpty: options.requireNonEmpty !== false,
+                    resolve: () => { },
+                }).then((value) => (Array.isArray(value) ? value : null));
+            },
+            setCheckedValue(value, checked) {
+                this.checkedValues = {
+                    ...this.checkedValues,
+                    [value]: checked,
+                };
+            },
             cancelActive() {
                 const dialog = this.active;
                 this.active = null;
                 this.inputValue = "";
+                this.checkedValues = {};
                 dialog?.resolve(dialog.kind === "confirm" ? false : null);
                 this.activateNext();
             },
@@ -73456,6 +73694,7 @@ Expected function or array of functions, received type ${typeof value}.`
                         return;
                     this.active = null;
                     this.inputValue = "";
+                    this.checkedValues = {};
                     dialog.resolve(next);
                     this.activateNext();
                     return;
@@ -73463,12 +73702,27 @@ Expected function or array of functions, received type ${typeof value}.`
                 if (dialog.kind === "confirm") {
                     this.active = null;
                     this.inputValue = "";
+                    this.checkedValues = {};
                     dialog.resolve(true);
+                    this.activateNext();
+                    return;
+                }
+                if (dialog.kind === "multiselect") {
+                    const selected = (dialog.checkboxOptions || [])
+                        .filter(option => this.checkedValues[option.value] === true)
+                        .map(option => option.value);
+                    if (dialog.requireNonEmpty !== false && selected.length === 0)
+                        return;
+                    this.active = null;
+                    this.inputValue = "";
+                    this.checkedValues = {};
+                    dialog.resolve(selected);
                     this.activateNext();
                     return;
                 }
                 this.active = null;
                 this.inputValue = "";
+                this.checkedValues = {};
                 dialog.resolve(value ?? null);
                 this.activateNext();
             },
@@ -73480,6 +73734,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 this.active = null;
                 this.queue = [];
                 this.inputValue = "";
+                this.checkedValues = {};
             },
             enqueue(request) {
                 return new Promise((resolve) => {
@@ -73496,6 +73751,12 @@ Expected function or array of functions, received type ${typeof value}.`
             activateRequest(request) {
                 this.active = request;
                 this.inputValue = request?.kind === "prompt" ? String(request.initialValue || "") : "";
+                if (request?.kind === "multiselect") {
+                    this.checkedValues = Object.fromEntries((request.checkboxOptions || []).map(option => [option.value, option.defaultChecked === true]));
+                }
+                else {
+                    this.checkedValues = {};
+                }
             },
         },
     });
@@ -73515,8 +73776,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-badge {\n  display: inline-flex; align-items: center;\n  padding: 2px 8px; border-radius: var(--acu-radius-sm);\n  font-size: var(--acu-font-size-caption, 11px); font-weight: 500;\n  white-space: nowrap; line-height: 1.6;\n}\n.acu-badge--neutral {\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  color: var(--acu-text-2);\n}\n.acu-badge--accent {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-badge--success,\n.acu-badge--warning,\n.acu-badge--danger {\n  font-weight: 600;\n}\n.acu-badge--success {\n  background: color-mix(in srgb, var(--acu-success) 16%, transparent);\n  color: var(--acu-success);\n}\n.acu-badge--warning {\n  background: color-mix(in srgb, var(--acu-warning) 16%, transparent);\n  color: var(--acu-warning);\n}\n.acu-badge--danger {\n  background: color-mix(in srgb, var(--acu-danger) 16%, transparent);\n  color: var(--acu-danger);\n}\n", "src/presentation-v2/components/_lib/AcuBadge.vue#style-0");
-    var AcuBadge_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-badge[data-v-5146419e] {\n  display: inline-flex; align-items: center;\n  padding: 2px 8px; border-radius: var(--acu-radius-sm);\n  font-size: var(--acu-font-size-caption, 11px); font-weight: 500;\n  white-space: nowrap; line-height: 1.6;\n}\n.acu-badge--neutral[data-v-5146419e] {\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  color: var(--acu-text-2);\n}\n.acu-badge--accent[data-v-5146419e] {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-badge--success[data-v-5146419e],\n.acu-badge--warning[data-v-5146419e],\n.acu-badge--danger[data-v-5146419e] {\n  font-weight: 600;\n}\n.acu-badge--success[data-v-5146419e] {\n  background: color-mix(in srgb, var(--acu-success) 16%, transparent);\n  color: var(--acu-success);\n}\n.acu-badge--warning[data-v-5146419e] {\n  background: color-mix(in srgb, var(--acu-warning) 16%, transparent);\n  color: var(--acu-warning);\n}\n.acu-badge--danger[data-v-5146419e] {\n  background: color-mix(in srgb, var(--acu-danger) 16%, transparent);\n  color: var(--acu-danger);\n}\n", "src/presentation-v2/components/_lib/AcuBadge.vue#style-0-5146419e");
+    var AcuBadge_vue_vue_type_style_index_0_scoped_5146419e_lang = null;
 
     var _export_sfc = (sfc, props) => {
       const target = sfc.__vccOpts || sfc;
@@ -73530,12 +73791,12 @@ Expected function or array of functions, received type ${typeof value}.`
     	return openBlock(), createElementBlock(
     		"span",
     		{ class: normalizeClass(["acu-badge", $setup.variantClass]) },
-    		[renderSlot(_ctx.$slots, "default")],
+    		[renderSlot(_ctx.$slots, "default", {}, undefined, true)],
     		2
     		/* CLASS */
     	);
     }
-    var AcuBadge = /* @__PURE__ */ _export_sfc(_sfc_main$15, [["render", _sfc_render$15]]);
+    var AcuBadge = /* @__PURE__ */ _export_sfc(_sfc_main$15, [["render", _sfc_render$15], ["__scopeId", "data-v-5146419e"]]);
 
     var _sfc_main$14 = /*@__PURE__*/ defineComponent({
         __name: 'AcuButton',
@@ -73560,8 +73821,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-btn {\n  font: inherit;\n  border: 0;\n  background: var(--acu-bg-2);\n  color: var(--acu-text-1);\n  border-radius: var(--acu-radius-sm);\n  cursor: pointer;\n  display: inline-flex; align-items: center; justify-content: center; gap: 6px;\n  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;\n}\n.acu-btn--md { min-height: 32px; padding: 6px 9px; font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-btn--sm { min-height: 28px; padding: 4px 10px; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-btn--block { width: 100%; min-width: 0;\n}\n.acu-btn--icon-only { min-width: 32px; padding: 6px 8px;\n}\n.acu-btn--icon-only.acu-btn--sm { min-width: 28px; padding: 4px 8px;\n}\n.acu-btn:hover:not(:disabled) {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);\n}\n.acu-btn:disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-btn--primary {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-weight: 500;\n  box-shadow: none;\n}\n.acu-btn--primary:hover:not(:disabled) {\n  background: var(--acu-accent-2);\n  box-shadow: none;\n}\n.acu-btn--danger {\n  background: color-mix(in srgb, var(--acu-danger) 10%, transparent);\n  color: var(--acu-danger);\n}\n.acu-btn--danger:hover:not(:disabled) {\n  background: color-mix(in srgb, var(--acu-danger) 18%, transparent);\n}\n.acu-btn:focus-visible {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-btn--loading { cursor: wait;\n}\n.acu-btn__spinner { font-size: 0.85em;\n}\n", "src/presentation-v2/components/_lib/AcuButton.vue#style-0");
-    var AcuButton_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-btn[data-v-f9fe21a7] {\n  font: inherit;\n  border: 0;\n  background: var(--acu-bg-2);\n  color: var(--acu-text-1);\n  border-radius: var(--acu-radius-sm);\n  cursor: pointer;\n  display: inline-flex; align-items: center; justify-content: center; gap: 6px;\n  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;\n}\n.acu-btn--md[data-v-f9fe21a7] { min-height: 32px; padding: 6px 9px; font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-btn--sm[data-v-f9fe21a7] { min-height: 28px; padding: 4px 10px; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-btn--block[data-v-f9fe21a7] { width: 100%; min-width: 0;\n}\n.acu-btn--icon-only[data-v-f9fe21a7] { min-width: 32px; padding: 6px 8px;\n}\n.acu-btn--icon-only.acu-btn--sm[data-v-f9fe21a7] { min-width: 28px; padding: 4px 8px;\n}\n.acu-btn[data-v-f9fe21a7]:hover:not(:disabled) {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);\n}\n.acu-btn[data-v-f9fe21a7]:disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-btn--primary[data-v-f9fe21a7] {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-weight: 500;\n  box-shadow: none;\n}\n.acu-btn--primary[data-v-f9fe21a7]:hover:not(:disabled) {\n  background: var(--acu-accent-2);\n  box-shadow: none;\n}\n.acu-btn--danger[data-v-f9fe21a7] {\n  background: color-mix(in srgb, var(--acu-danger) 10%, transparent);\n  color: var(--acu-danger);\n}\n.acu-btn--danger[data-v-f9fe21a7]:hover:not(:disabled) {\n  background: color-mix(in srgb, var(--acu-danger) 18%, transparent);\n}\n.acu-btn[data-v-f9fe21a7]:focus-visible {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-btn--loading[data-v-f9fe21a7] { cursor: wait;\n}\n.acu-btn__spinner[data-v-f9fe21a7] { font-size: 0.85em;\n}\n", "src/presentation-v2/components/_lib/AcuButton.vue#style-0-f9fe21a7");
+    var AcuButton_vue_vue_type_style_index_0_scoped_f9fe21a7_lang = null;
 
     const _hoisted_1$10 = [
     	"type",
@@ -73587,11 +73848,76 @@ Expected function or array of functions, received type ${typeof value}.`
     			}
     		]]),
     		onClick: _cache[0] || (_cache[0] = ($event) => _ctx.$emit("click", $event))
-    	}, [$props.loading ? (openBlock(), createElementBlock("i", _hoisted_2$R)) : createCommentVNode("v-if", true), !$props.loading ? renderSlot(_ctx.$slots, "default", { key: 1 }) : renderSlot(_ctx.$slots, "loading-text", { key: 2 })], 10, _hoisted_1$10);
+    	}, [$props.loading ? (openBlock(), createElementBlock("i", _hoisted_2$R)) : createCommentVNode("v-if", true), !$props.loading ? renderSlot(_ctx.$slots, "default", { key: 1 }, undefined, true) : renderSlot(_ctx.$slots, "loading-text", { key: 2 }, undefined, true)], 10, _hoisted_1$10);
     }
-    var AcuButton = /* @__PURE__ */ _export_sfc(_sfc_main$14, [["render", _sfc_render$14]]);
+    var AcuButton = /* @__PURE__ */ _export_sfc(_sfc_main$14, [["render", _sfc_render$14], ["__scopeId", "data-v-f9fe21a7"]]);
 
     var _sfc_main$13 = /*@__PURE__*/ defineComponent({
+        ...{ inheritAttrs: false },
+        __name: 'AcuCheckbox',
+        props: {
+            modelValue: { type: Boolean },
+            label: { default: undefined },
+            disabled: { type: Boolean, default: false }
+        },
+        emits: ["update:modelValue"],
+        setup(__props, { expose: __expose, emit: __emit }) {
+            __expose();
+            const props = __props;
+            const emit = __emit;
+            function onClick() {
+                if (props.disabled)
+                    return;
+                emit('update:modelValue', !props.modelValue);
+            }
+            const __returned__ = { props, emit, onClick };
+            Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
+            return __returned__;
+        }
+    });
+
+    injectSfcStyle("\n.acu-checkbox[data-v-3b5e636f] {\n  display: inline-flex; align-items: flex-start; gap: 7px;\n  padding: 0; border: 0; background: transparent;\n  font: inherit; font-size: var(--acu-font-size-body, 12px); color: var(--acu-text-2);\n  cursor: pointer; user-select: none;\n  line-height: 1.5; text-align: left;\n}\n.acu-checkbox--disabled[data-v-3b5e636f] { opacity: 0.5; cursor: not-allowed;\n}\n.acu-checkbox__box[data-v-3b5e636f] {\n  flex-shrink: 0;\n  width: 16px; height: 16px; margin-top: 1px;\n  display: flex; align-items: center; justify-content: center;\n  border: 0;\n  border-radius: 3px;\n  background: var(--acu-bg-2);\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-checkbox--checked .acu-checkbox__box[data-v-3b5e636f] {\n  background: var(--acu-accent);\n}\n.acu-checkbox__icon[data-v-3b5e636f] {\n  display: block;\n  width: 12px; height: 12px;\n  color: #fff;\n  fill: none;\n  stroke: currentColor;\n  stroke-width: 2.15;\n  stroke-linecap: round;\n  stroke-linejoin: round;\n  opacity: 0;\n  transform: scale(0.82);\n  transition: opacity 0.15s ease, transform 0.15s ease;\n}\n.acu-checkbox--checked .acu-checkbox__icon[data-v-3b5e636f] {\n  opacity: 1;\n  transform: scale(1);\n}\n.acu-checkbox__label[data-v-3b5e636f] { min-width: 0;\n}\n.acu-checkbox:hover:not(:disabled) .acu-checkbox__box[data-v-3b5e636f] {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);\n}\n.acu-checkbox--checked:hover:not(:disabled) .acu-checkbox__box[data-v-3b5e636f] {\n  background: var(--acu-accent-2);\n}\n.acu-checkbox[data-v-3b5e636f]:focus-visible {\n  outline: none;\n}\n.acu-checkbox:focus-visible .acu-checkbox__box[data-v-3b5e636f] {\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n", "src/presentation-v2/components/_lib/AcuCheckbox.vue#style-0-3b5e636f");
+    var AcuCheckbox_vue_vue_type_style_index_0_scoped_3b5e636f_lang = null;
+
+    const _hoisted_1$$ = ["aria-checked", "disabled"];
+    const _hoisted_2$Q = {
+    	key: 0,
+    	class: "acu-checkbox__label"
+    };
+    function _sfc_render$13(_ctx, _cache, $props, $setup, $data, $options) {
+    	return openBlock(), createElementBlock("button", mergeProps({
+    		type: "button",
+    		class: ["acu-checkbox", {
+    			"acu-checkbox--disabled": $props.disabled,
+    			"acu-checkbox--checked": $props.modelValue
+    		}],
+    		role: "checkbox",
+    		"aria-checked": $props.modelValue ? "true" : "false",
+    		disabled: $props.disabled
+    	}, _ctx.$attrs, { onClick: $setup.onClick }), [_cache[0] || (_cache[0] = createBaseVNode(
+    		"span",
+    		{
+    			class: "acu-checkbox__box",
+    			"aria-hidden": "true"
+    		},
+    		[createBaseVNode("svg", {
+    			class: "acu-checkbox__icon",
+    			viewBox: "0 0 16 16",
+    			focusable: "false"
+    		}, [createBaseVNode("path", { d: "M3.75 8.25 6.75 11.25 12.25 5.45" })])],
+    		-1
+    		/* CACHED */
+    	)), $props.label ? (openBlock(), createElementBlock(
+    		"span",
+    		_hoisted_2$Q,
+    		toDisplayString($props.label),
+    		1
+    		/* TEXT */
+    	)) : renderSlot(_ctx.$slots, "default", { key: 1 }, undefined, true)], 16, _hoisted_1$$);
+    }
+    var AcuCheckbox = /* @__PURE__ */ _export_sfc(_sfc_main$13, [["render", _sfc_render$13], ["__scopeId", "data-v-3b5e636f"]]);
+
+    var _sfc_main$12 = /*@__PURE__*/ defineComponent({
         __name: 'AcuInput',
         props: {
             modelValue: {},
@@ -73642,10 +73968,10 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-input-shell {\n  position: relative;\n  display: block;\n  width: 100%;\n  min-width: 0;\n}\n.acu-input {\n  width: 100%; box-sizing: border-box;\n  border: 0 !important;\n  border-radius: var(--acu-radius-sm) !important;\n  background: var(--acu-bg-2) !important;\n  color: var(--acu-text-1) !important;\n  font: inherit !important;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-input--md { min-height: 32px; padding: 6px 9px !important; font-size: var(--acu-font-size-body, 12px) !important;\n}\n.acu-input--sm { min-height: 26px; padding: 3px 7px !important; font-size: var(--acu-font-size-caption, 11px) !important;\n}\n.acu-input-shell--number .acu-input--md { padding-right: 30px !important;\n}\n.acu-input-shell--number .acu-input--sm { padding-right: 25px !important;\n}\n.acu-input:hover:not(:disabled) {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2) !important;\n}\n.acu-input:focus {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow) !important;\n}\n.acu-input:disabled,\n.acu-input--disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-input[type=\"number\"] {\n  -moz-appearance: textfield;\n  font-variant-numeric: tabular-nums;\n}\n.acu-input[type=\"number\"]::-webkit-inner-spin-button,\n.acu-input[type=\"number\"]::-webkit-outer-spin-button {\n  -webkit-appearance: none; margin: 0;\n}\n.acu-input__number-indicator {\n  position: absolute;\n  top: 50%;\n  right: 9px;\n  width: 10px;\n  display: flex;\n  flex-direction: column;\n  align-items: center;\n  justify-content: center;\n  gap: 2px;\n  color: var(--acu-text-3);\n  pointer-events: none;\n  transform: translateY(-50%);\n  opacity: 0.8;\n}\n.acu-input-shell--sm .acu-input__number-indicator {\n  right: 7px;\n  width: 8px;\n  gap: 1px;\n}\n.acu-input__number-caret {\n  width: 0;\n  height: 0;\n  border-left: 4px solid transparent;\n  border-right: 4px solid transparent;\n}\n.acu-input__number-caret--up { border-bottom: 4px solid currentColor;\n}\n.acu-input__number-caret--down { border-top: 4px solid currentColor;\n}\n.acu-input-shell--sm .acu-input__number-caret {\n  border-left-width: 3px;\n  border-right-width: 3px;\n}\n.acu-input-shell--sm .acu-input__number-caret--up { border-bottom-width: 3px;\n}\n.acu-input-shell--sm .acu-input__number-caret--down { border-top-width: 3px;\n}\n", "src/presentation-v2/components/_lib/AcuInput.vue#style-0");
-    var AcuInput_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-input-shell[data-v-c5ed4c1e] {\n  position: relative;\n  display: block;\n  width: 100%;\n  min-width: 0;\n}\n.acu-input[data-v-c5ed4c1e] {\n  width: 100%; box-sizing: border-box;\n  border: 0 !important;\n  border-radius: var(--acu-radius-sm) !important;\n  background: var(--acu-bg-2) !important;\n  color: var(--acu-text-1) !important;\n  font: inherit !important;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-input--md[data-v-c5ed4c1e] { min-height: 32px; padding: 6px 9px !important; font-size: var(--acu-font-size-body, 12px) !important;\n}\n.acu-input--sm[data-v-c5ed4c1e] { min-height: 26px; padding: 3px 7px !important; font-size: var(--acu-font-size-caption, 11px) !important;\n}\n.acu-input-shell--number .acu-input--md[data-v-c5ed4c1e] { padding-right: 30px !important;\n}\n.acu-input-shell--number .acu-input--sm[data-v-c5ed4c1e] { padding-right: 25px !important;\n}\n.acu-input[data-v-c5ed4c1e]:hover:not(:disabled) {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2) !important;\n}\n.acu-input[data-v-c5ed4c1e]:focus {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow) !important;\n}\n.acu-input[data-v-c5ed4c1e]:disabled,\n.acu-input--disabled[data-v-c5ed4c1e] { opacity: 0.5; cursor: not-allowed;\n}\n.acu-input[type=\"number\"][data-v-c5ed4c1e] {\n  -moz-appearance: textfield;\n  font-variant-numeric: tabular-nums;\n}\n.acu-input[type=\"number\"][data-v-c5ed4c1e]::-webkit-inner-spin-button,\n.acu-input[type=\"number\"][data-v-c5ed4c1e]::-webkit-outer-spin-button {\n  -webkit-appearance: none; margin: 0;\n}\n.acu-input__number-indicator[data-v-c5ed4c1e] {\n  position: absolute;\n  top: 50%;\n  right: 9px;\n  width: 10px;\n  display: flex;\n  flex-direction: column;\n  align-items: center;\n  justify-content: center;\n  gap: 2px;\n  color: var(--acu-text-3);\n  pointer-events: none;\n  transform: translateY(-50%);\n  opacity: 0.8;\n}\n.acu-input-shell--sm .acu-input__number-indicator[data-v-c5ed4c1e] {\n  right: 7px;\n  width: 8px;\n  gap: 1px;\n}\n.acu-input__number-caret[data-v-c5ed4c1e] {\n  width: 0;\n  height: 0;\n  border-left: 4px solid transparent;\n  border-right: 4px solid transparent;\n}\n.acu-input__number-caret--up[data-v-c5ed4c1e] { border-bottom: 4px solid currentColor;\n}\n.acu-input__number-caret--down[data-v-c5ed4c1e] { border-top: 4px solid currentColor;\n}\n.acu-input-shell--sm .acu-input__number-caret[data-v-c5ed4c1e] {\n  border-left-width: 3px;\n  border-right-width: 3px;\n}\n.acu-input-shell--sm .acu-input__number-caret--up[data-v-c5ed4c1e] { border-bottom-width: 3px;\n}\n.acu-input-shell--sm .acu-input__number-caret--down[data-v-c5ed4c1e] { border-top-width: 3px;\n}\n", "src/presentation-v2/components/_lib/AcuInput.vue#style-0-c5ed4c1e");
+    var AcuInput_vue_vue_type_style_index_0_scoped_c5ed4c1e_lang = null;
 
-    const _hoisted_1$$ = [
+    const _hoisted_1$_ = [
     	"type",
     	"value",
     	"placeholder",
@@ -73655,12 +73981,12 @@ Expected function or array of functions, received type ${typeof value}.`
     	"step",
     	"autocomplete"
     ];
-    const _hoisted_2$Q = {
+    const _hoisted_2$P = {
     	key: 0,
     	class: "acu-input__number-indicator",
     	"aria-hidden": "true"
     };
-    function _sfc_render$13(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$12(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock(
     		"span",
     		{ class: normalizeClass(["acu-input-shell", [
@@ -73681,7 +74007,7 @@ Expected function or array of functions, received type ${typeof value}.`
     			onInput: $setup.onInput,
     			onChange: $setup.onChangeEvent,
     			onWheel: $setup.onWheel
-    		}, null, 42, _hoisted_1$$), $props.type === "number" ? (openBlock(), createElementBlock("span", _hoisted_2$Q, [..._cache[0] || (_cache[0] = [createBaseVNode(
+    		}, null, 42, _hoisted_1$_), $props.type === "number" ? (openBlock(), createElementBlock("span", _hoisted_2$P, [..._cache[0] || (_cache[0] = [createBaseVNode(
     			"span",
     			{ class: "acu-input__number-caret acu-input__number-caret--up" },
     			null,
@@ -73698,11 +74024,11 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* CLASS */
     	);
     }
-    var AcuInput = /* @__PURE__ */ _export_sfc(_sfc_main$13, [["render", _sfc_render$13]]);
+    var AcuInput = /* @__PURE__ */ _export_sfc(_sfc_main$12, [["render", _sfc_render$12], ["__scopeId", "data-v-c5ed4c1e"]]);
 
     const DIALOG_LEAVE_MS = 160;
     const titleId = "acu-dialog-title";
-    var _sfc_main$12 = /*@__PURE__*/ defineComponent({
+    var _sfc_main$11 = /*@__PURE__*/ defineComponent({
         __name: 'AcuDialogHost',
         setup(__props, { expose: __expose }) {
             __expose();
@@ -73736,22 +74062,32 @@ Expected function or array of functions, received type ${typeof value}.`
                     closeTimer = undefined;
                 }, DIALOG_LEAVE_MS);
             }, { immediate: true });
-            const __returned__ = { DIALOG_LEAVE_MS, dialog, titleId, renderedDialog, isClosing, isChoiceDialog, portalTarget, get closeTimer() { return closeTimer; }, set closeTimer(v) { closeTimer = v; }, AcuBadge, AcuButton, AcuInput };
+            const __returned__ = { DIALOG_LEAVE_MS, dialog, titleId, renderedDialog, isClosing, isChoiceDialog, portalTarget, get closeTimer() { return closeTimer; }, set closeTimer(v) { closeTimer = v; }, AcuBadge, AcuButton, AcuCheckbox, AcuInput };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-dialog-layer {\n  position: fixed;\n  inset: 0;\n  z-index: 9600;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  width: 100vw;\n  width: 100dvw;\n  height: 100vh;\n  height: 100dvh;\n  padding:\n    calc(18px + var(--acu-safe-top, 0px))\n    calc(18px + var(--acu-safe-right, 0px))\n    calc(18px + var(--acu-safe-bottom, 0px))\n    calc(18px + var(--acu-safe-left, 0px));\n  background: rgba(0, 0, 0, 0.52);\n  pointer-events: auto;\n  animation: acu-dialog-layer-in 0.16s ease-out both;\n}\n.acu-dialog-layer.is-closing {\n  pointer-events: none;\n  animation: acu-dialog-layer-out 0.16s ease-in both;\n}\n.acu-dialog {\n  width: min(440px, 100%);\n  max-height: min(560px, calc(100vh - 36px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));\n  max-height: min(560px, calc(100dvh - 36px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n  padding: 16px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-bg-1);\n  color: var(--acu-text-1);\n  box-shadow: var(--acu-shadow);\n  overflow: auto;\n  animation: acu-dialog-panel-in 0.16s ease-out both;\n}\n.acu-dialog__header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n}\n.acu-dialog__header h2 {\n  min-width: 0;\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-panel-title, 15px);\n  line-height: 1.35;\n  font-weight: 700;\n}\n.acu-dialog__message {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n  white-space: pre-wrap;\n}\n.acu-dialog__field {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.4;\n}\n.acu-dialog__actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  flex-wrap: wrap;\n  padding-top: 2px;\n}\n.acu-dialog__actions--stacked :deep(.acu-btn) {\n  flex: 1 1 128px;\n}\n.acu-dialog-layer.is-closing .acu-dialog {\n  animation: acu-dialog-panel-out 0.16s ease-in both;\n}\n@keyframes acu-dialog-layer-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-dialog-layer-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-dialog-panel-in {\nfrom {\n    opacity: 0;\n    transform: translateY(6px);\n}\nto {\n    opacity: 1;\n    transform: translateY(0);\n}\n}\n@keyframes acu-dialog-panel-out {\nfrom {\n    opacity: 1;\n    transform: translateY(0);\n}\nto {\n    opacity: 0;\n    transform: translateY(6px);\n}\n}\n@media (max-width: 520px) {\n.acu-dialog-layer {\n    align-items: flex-end;\n    padding:\n      calc(12px + var(--acu-safe-top, 0px))\n      calc(12px + var(--acu-safe-right, 0px))\n      calc(12px + var(--acu-safe-bottom, 0px))\n      calc(12px + var(--acu-safe-left, 0px));\n}\n.acu-dialog {\n    width: 100%;\n    max-height: calc(100vh - 24px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n    max-height: calc(100dvh - 24px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n}\n.acu-dialog__actions,\n  .acu-dialog__actions--stacked {\n    display: grid;\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/components/_lib/AcuDialogHost.vue#style-0");
-    var AcuDialogHost_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-dialog-layer[data-v-ffc9b9e9] {\n  position: fixed;\n  inset: 0;\n  z-index: 9600;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  width: 100vw;\n  width: 100dvw;\n  height: 100vh;\n  height: 100dvh;\n  padding:\n    calc(18px + var(--acu-safe-top, 0px))\n    calc(18px + var(--acu-safe-right, 0px))\n    calc(18px + var(--acu-safe-bottom, 0px))\n    calc(18px + var(--acu-safe-left, 0px));\n  background: rgba(0, 0, 0, 0.52);\n  pointer-events: auto;\n  animation: acu-dialog-layer-in-ffc9b9e9 0.16s ease-out both;\n}\n.acu-dialog-layer.is-closing[data-v-ffc9b9e9] {\n  pointer-events: none;\n  animation: acu-dialog-layer-out-ffc9b9e9 0.16s ease-in both;\n}\n.acu-dialog[data-v-ffc9b9e9] {\n  width: min(440px, 100%);\n  max-height: min(560px, calc(100vh - 36px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));\n  max-height: min(560px, calc(100dvh - 36px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n  padding: 16px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-bg-1);\n  color: var(--acu-text-1);\n  box-shadow: var(--acu-shadow);\n  overflow: auto;\n  animation: acu-dialog-panel-in-ffc9b9e9 0.16s ease-out both;\n}\n.acu-dialog__header[data-v-ffc9b9e9] {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n}\n.acu-dialog__header h2[data-v-ffc9b9e9] {\n  min-width: 0;\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-panel-title, 15px);\n  line-height: 1.35;\n  font-weight: 700;\n}\n.acu-dialog__message[data-v-ffc9b9e9] {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n  white-space: pre-wrap;\n}\n.acu-dialog__field[data-v-ffc9b9e9] {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.4;\n}\n.acu-dialog__checklist[data-v-ffc9b9e9] {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  min-width: 0;\n  padding: 10px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-bg-2) 74%, transparent);\n}\n.acu-dialog__checklist[data-v-ffc9b9e9] .acu-checkbox {\n  width: 100%;\n}\n.acu-dialog__check-option[data-v-ffc9b9e9] {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  min-width: 0;\n}\n.acu-dialog__check-label[data-v-ffc9b9e9] {\n  color: var(--acu-text-1);\n  font-weight: 600;\n}\n.acu-dialog__check-description[data-v-ffc9b9e9] {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.45;\n}\n.acu-dialog__actions[data-v-ffc9b9e9] {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  flex-wrap: wrap;\n  padding-top: 2px;\n}\n.acu-dialog__actions--stacked[data-v-ffc9b9e9] .acu-btn {\n  flex: 1 1 128px;\n}\n.acu-dialog-layer.is-closing .acu-dialog[data-v-ffc9b9e9] {\n  animation: acu-dialog-panel-out-ffc9b9e9 0.16s ease-in both;\n}\n@keyframes acu-dialog-layer-in-ffc9b9e9 {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-dialog-layer-out-ffc9b9e9 {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-dialog-panel-in-ffc9b9e9 {\nfrom {\n    opacity: 0;\n    transform: translateY(6px);\n}\nto {\n    opacity: 1;\n    transform: translateY(0);\n}\n}\n@keyframes acu-dialog-panel-out-ffc9b9e9 {\nfrom {\n    opacity: 1;\n    transform: translateY(0);\n}\nto {\n    opacity: 0;\n    transform: translateY(6px);\n}\n}\n@media (max-width: 520px) {\n.acu-dialog-layer[data-v-ffc9b9e9] {\n    align-items: flex-end;\n    padding:\n      calc(12px + var(--acu-safe-top, 0px))\n      calc(12px + var(--acu-safe-right, 0px))\n      calc(12px + var(--acu-safe-bottom, 0px))\n      calc(12px + var(--acu-safe-left, 0px));\n}\n.acu-dialog[data-v-ffc9b9e9] {\n    width: 100%;\n    max-height: calc(100vh - 24px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n    max-height: calc(100dvh - 24px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n}\n.acu-dialog__actions[data-v-ffc9b9e9],\n  .acu-dialog__actions--stacked[data-v-ffc9b9e9] {\n    display: grid;\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/components/_lib/AcuDialogHost.vue#style-0-ffc9b9e9");
+    var AcuDialogHost_vue_vue_type_style_index_0_scoped_ffc9b9e9_lang = null;
 
-    const _hoisted_1$_ = { class: "acu-dialog__header" };
-    const _hoisted_2$P = { class: "acu-dialog__message" };
+    const _hoisted_1$Z = { class: "acu-dialog__header" };
+    const _hoisted_2$O = { class: "acu-dialog__message" };
     const _hoisted_3$F = {
     	key: 0,
     	class: "acu-dialog__field"
     };
-    function _sfc_render$12(_ctx, _cache, $props, $setup, $data, $options) {
+    const _hoisted_4$w = {
+    	key: 1,
+    	class: "acu-dialog__checklist"
+    };
+    const _hoisted_5$p = { class: "acu-dialog__check-option" };
+    const _hoisted_6$m = { class: "acu-dialog__check-label" };
+    const _hoisted_7$k = {
+    	key: 0,
+    	class: "acu-dialog__check-description"
+    };
+    function _sfc_render$11(_ctx, _cache, $props, $setup, $data, $options) {
     	return $setup.portalTarget ? (openBlock(), createBlock(Teleport, {
     		key: 0,
     		to: $setup.portalTarget
@@ -73770,7 +74106,7 @@ Expected function or array of functions, received type ${typeof value}.`
     			"aria-labelledby": $setup.titleId,
     			onClick: _cache[3] || (_cache[3] = withModifiers(() => {}, ["stop"]))
     		}, [
-    			createBaseVNode("header", _hoisted_1$_, [createBaseVNode(
+    			createBaseVNode("header", _hoisted_1$Z, [createBaseVNode(
     				"h2",
     				{ id: $setup.titleId },
     				toDisplayString($setup.renderedDialog.title),
@@ -73789,7 +74125,7 @@ Expected function or array of functions, received type ${typeof value}.`
     			}, 8, ["variant"])) : createCommentVNode("v-if", true)]),
     			createBaseVNode(
     				"p",
-    				_hoisted_2$P,
+    				_hoisted_2$O,
     				toDisplayString($setup.renderedDialog.message),
     				1
     				/* TEXT */
@@ -73807,6 +74143,39 @@ Expected function or array of functions, received type ${typeof value}.`
     				placeholder: $setup.renderedDialog.placeholder,
     				onKeyup: _cache[1] || (_cache[1] = withKeys(($event) => $setup.dialog.submitActive(), ["enter"]))
     			}, null, 8, ["modelValue", "placeholder"])])) : createCommentVNode("v-if", true),
+    			$setup.renderedDialog.kind === "multiselect" ? (openBlock(), createElementBlock("div", _hoisted_4$w, [(openBlock(true), createElementBlock(
+    				Fragment,
+    				null,
+    				renderList($setup.renderedDialog.checkboxOptions || [], (option) => {
+    					return openBlock(), createBlock($setup["AcuCheckbox"], {
+    						key: option.value,
+    						"model-value": $setup.dialog.checkedValues[option.value] === true,
+    						disabled: option.disabled,
+    						"onUpdate:modelValue": ($event) => $setup.dialog.setCheckedValue(option.value, $event)
+    					}, {
+    						default: withCtx(() => [createBaseVNode("span", _hoisted_5$p, [createBaseVNode(
+    							"span",
+    							_hoisted_6$m,
+    							toDisplayString(option.label),
+    							1
+    							/* TEXT */
+    						), option.description ? (openBlock(), createElementBlock(
+    							"span",
+    							_hoisted_7$k,
+    							toDisplayString(option.description),
+    							1
+    							/* TEXT */
+    						)) : createCommentVNode("v-if", true)])]),
+    						_: 2
+    					}, 1032, [
+    						"model-value",
+    						"disabled",
+    						"onUpdate:modelValue"
+    					]);
+    				}),
+    				128
+    				/* KEYED_FRAGMENT */
+    			))])) : createCommentVNode("v-if", true),
     			createBaseVNode(
     				"footer",
     				{ class: normalizeClass(["acu-dialog__actions", { "acu-dialog__actions--stacked": $setup.isChoiceDialog }]) },
@@ -73854,7 +74223,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						_: 1
     					}, 8, ["onClick"]), createVNode($setup["AcuButton"], {
     						variant: $setup.renderedDialog.confirmVariant || "primary",
-    						disabled: $setup.dialog.promptConfirmDisabled,
+    						disabled: $setup.dialog.confirmDisabled,
     						onClick: _cache[2] || (_cache[2] = ($event) => $setup.dialog.submitActive())
     					}, {
     						default: withCtx(() => [createTextVNode(
@@ -73875,9 +74244,9 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* CLASS */
     	)) : createCommentVNode("v-if", true)], 8, ["to"])) : createCommentVNode("v-if", true);
     }
-    var AcuDialogHost = /* @__PURE__ */ _export_sfc(_sfc_main$12, [["render", _sfc_render$12]]);
+    var AcuDialogHost = /* @__PURE__ */ _export_sfc(_sfc_main$11, [["render", _sfc_render$11], ["__scopeId", "data-v-ffc9b9e9"]]);
 
-    var _sfc_main$11 = /*@__PURE__*/ defineComponent({
+    var _sfc_main$10 = /*@__PURE__*/ defineComponent({
         __name: 'AcuFileButton',
         props: {
             accept: { default: undefined },
@@ -73922,11 +74291,11 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-file-button { display: inline-flex;\n}\n.acu-file-button--block { width: 100%; min-width: 0;\n}\n.acu-file-button__input { display: none;\n}\n.acu-file-button__button--icon-only-default {\n  background: transparent;\n  color: var(--acu-text-2);\n}\n.acu-file-button__button--icon-only-default:hover:not(:disabled) {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);\n  color: var(--acu-text-1);\n}\n.acu-file-button__button--icon-only-default.acu-file-button__button--md {\n  width: 32px;\n  min-width: 32px;\n}\n.acu-file-button__button--icon-only-default.acu-file-button__button--sm {\n  width: 22px;\n  min-width: 22px;\n  min-height: 22px;\n  padding: 4px;\n  font-size: var(--acu-font-size-micro, 10px);\n}\n", "src/presentation-v2/components/_lib/AcuFileButton.vue#style-0");
-    var AcuFileButton_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-file-button[data-v-a613c7da] { display: inline-flex;\n}\n.acu-file-button--block[data-v-a613c7da] { width: 100%; min-width: 0;\n}\n.acu-file-button__input[data-v-a613c7da] { display: none;\n}\n.acu-file-button__button--icon-only-default[data-v-a613c7da] {\n  background: transparent;\n  color: var(--acu-text-2);\n}\n.acu-file-button__button--icon-only-default[data-v-a613c7da]:hover:not(:disabled) {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);\n  color: var(--acu-text-1);\n}\n.acu-file-button__button--icon-only-default.acu-file-button__button--md[data-v-a613c7da] {\n  width: 32px;\n  min-width: 32px;\n}\n.acu-file-button__button--icon-only-default.acu-file-button__button--sm[data-v-a613c7da] {\n  width: 22px;\n  min-width: 22px;\n  min-height: 22px;\n  padding: 4px;\n  font-size: var(--acu-font-size-micro, 10px);\n}\n", "src/presentation-v2/components/_lib/AcuFileButton.vue#style-0-a613c7da");
+    var AcuFileButton_vue_vue_type_style_index_0_scoped_a613c7da_lang = null;
 
-    const _hoisted_1$Z = ["accept"];
-    function _sfc_render$11(_ctx, _cache, $props, $setup, $data, $options) {
+    const _hoisted_1$Y = ["accept"];
+    function _sfc_render$10(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock(
     		"span",
     		{ class: normalizeClass(["acu-file-button", { "acu-file-button--block": $props.block }]) },
@@ -73934,7 +74303,7 @@ Expected function or array of functions, received type ${typeof value}.`
     			class: ["acu-file-button__button", $setup.buttonClass],
     			onClick: $setup.trigger
     		}), {
-    			default: withCtx(() => [renderSlot(_ctx.$slots, "default")]),
+    			default: withCtx(() => [renderSlot(_ctx.$slots, "default", {}, undefined, true)]),
     			_: 3
     		}, 16, ["class"]), createBaseVNode("input", {
     			ref: "inputRef",
@@ -73942,14 +74311,14 @@ Expected function or array of functions, received type ${typeof value}.`
     			accept: $props.accept,
     			class: "acu-file-button__input",
     			onChange: $setup.onChange
-    		}, null, 40, _hoisted_1$Z)],
+    		}, null, 40, _hoisted_1$Y)],
     		2
     		/* CLASS */
     	);
     }
-    var AcuFileButton = /* @__PURE__ */ _export_sfc(_sfc_main$11, [["render", _sfc_render$11]]);
+    var AcuFileButton = /* @__PURE__ */ _export_sfc(_sfc_main$10, [["render", _sfc_render$10], ["__scopeId", "data-v-a613c7da"]]);
 
-    var _sfc_main$10 = /*@__PURE__*/ defineComponent({
+    var _sfc_main$$ = /*@__PURE__*/ defineComponent({
         __name: 'AcuIconButton',
         props: {
             icon: {},
@@ -73968,15 +74337,15 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-icon-btn {\n  --acu-icon-btn-size: 32px;\n  --acu-icon-btn-font-size: var(--acu-font-size-body-lg, 13px);\n  appearance: none !important;\n  -webkit-appearance: none !important;\n  flex: 0 0 auto;\n  display: inline-flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n  width: var(--acu-icon-btn-size) !important;\n  min-width: var(--acu-icon-btn-size) !important;\n  max-width: var(--acu-icon-btn-size) !important;\n  height: var(--acu-icon-btn-size) !important;\n  min-height: var(--acu-icon-btn-size) !important;\n  max-height: var(--acu-icon-btn-size) !important;\n  box-sizing: border-box !important;\n  margin: 0 !important;\n  padding: 0 !important;\n  border: 0 !important;\n  background: transparent !important;\n  color: var(--acu-text-2) !important;\n  border-radius: var(--acu-radius-sm) !important;\n  cursor: pointer;\n  font: inherit !important;\n  font-size: var(--acu-icon-btn-font-size) !important;\n  line-height: 1 !important;\n  text-align: center !important;\n  vertical-align: middle !important;\n  box-shadow: none !important;\n  outline: none !important;\n  -webkit-tap-highlight-color: transparent;\n  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;\n}\n.acu-icon-btn > i {\n  flex: 0 0 auto !important;\n  display: inline-block !important;\n  width: 1em !important;\n  min-width: 1em !important;\n  height: 1em !important;\n  min-height: 1em !important;\n  color: inherit !important;\n  font-size: inherit !important;\n  line-height: 1 !important;\n  text-align: center !important;\n  vertical-align: -0.125em !important;\n}\n.acu-icon-btn > i::before {\n  display: block !important;\n  width: 1em !important;\n  height: 1em !important;\n  color: inherit !important;\n  font-size: inherit !important;\n  line-height: 1 !important;\n}\n.acu-icon-btn--md {\n  --acu-icon-btn-size: 32px;\n  --acu-icon-btn-font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-icon-btn--sm {\n  --acu-icon-btn-size: 22px;\n  --acu-icon-btn-font-size: var(--acu-font-size-micro, 10px);\n  background: var(--acu-bg-2) !important;\n}\n.acu-icon-btn--default:hover:not(:disabled) {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2) !important;\n  color: var(--acu-text-1) !important;\n}\n.acu-icon-btn--danger:hover:not(:disabled) {\n  color: var(--acu-danger) !important;\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent) !important;\n}\n.acu-icon-btn--accent {\n  background: var(--acu-bg-2) !important;\n  color: var(--acu-text-1) !important;\n}\n.acu-icon-btn--accent:hover:not(:disabled) {\n  background: var(--acu-accent-glow) !important; color: var(--acu-accent) !important;\n}\n.acu-icon-btn:focus-visible {\n  outline: none !important;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow) !important;\n}\n.acu-icon-btn:disabled { opacity: 0.4; cursor: not-allowed;\n}\n", "src/presentation-v2/components/_lib/AcuIconButton.vue#style-0");
-    var AcuIconButton_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-icon-btn[data-v-e9eb73ff] {\n  --acu-icon-btn-size: 32px;\n  --acu-icon-btn-font-size: var(--acu-font-size-body-lg, 13px);\n  appearance: none !important;\n  -webkit-appearance: none !important;\n  flex: 0 0 auto;\n  display: inline-flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n  width: var(--acu-icon-btn-size) !important;\n  min-width: var(--acu-icon-btn-size) !important;\n  max-width: var(--acu-icon-btn-size) !important;\n  height: var(--acu-icon-btn-size) !important;\n  min-height: var(--acu-icon-btn-size) !important;\n  max-height: var(--acu-icon-btn-size) !important;\n  box-sizing: border-box !important;\n  margin: 0 !important;\n  padding: 0 !important;\n  border: 0 !important;\n  background: transparent !important;\n  color: var(--acu-text-2) !important;\n  border-radius: var(--acu-radius-sm) !important;\n  cursor: pointer;\n  font: inherit !important;\n  font-size: var(--acu-icon-btn-font-size) !important;\n  line-height: 1 !important;\n  text-align: center !important;\n  vertical-align: middle !important;\n  box-shadow: none !important;\n  outline: none !important;\n  -webkit-tap-highlight-color: transparent;\n  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;\n}\n.acu-icon-btn > i[data-v-e9eb73ff] {\n  flex: 0 0 auto !important;\n  display: inline-block !important;\n  width: 1em !important;\n  min-width: 1em !important;\n  height: 1em !important;\n  min-height: 1em !important;\n  color: inherit !important;\n  font-size: inherit !important;\n  line-height: 1 !important;\n  text-align: center !important;\n  vertical-align: -0.125em !important;\n}\n.acu-icon-btn > i[data-v-e9eb73ff]::before {\n  display: block !important;\n  width: 1em !important;\n  height: 1em !important;\n  color: inherit !important;\n  font-size: inherit !important;\n  line-height: 1 !important;\n}\n.acu-icon-btn--md[data-v-e9eb73ff] {\n  --acu-icon-btn-size: 32px;\n  --acu-icon-btn-font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-icon-btn--sm[data-v-e9eb73ff] {\n  --acu-icon-btn-size: 22px;\n  --acu-icon-btn-font-size: var(--acu-font-size-micro, 10px);\n  background: var(--acu-bg-2) !important;\n}\n.acu-icon-btn--default[data-v-e9eb73ff]:hover:not(:disabled) {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2) !important;\n  color: var(--acu-text-1) !important;\n}\n.acu-icon-btn--danger[data-v-e9eb73ff]:hover:not(:disabled) {\n  color: var(--acu-danger) !important;\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent) !important;\n}\n.acu-icon-btn--accent[data-v-e9eb73ff] {\n  background: var(--acu-bg-2) !important;\n  color: var(--acu-text-1) !important;\n}\n.acu-icon-btn--accent[data-v-e9eb73ff]:hover:not(:disabled) {\n  background: var(--acu-accent-glow) !important; color: var(--acu-accent) !important;\n}\n.acu-icon-btn[data-v-e9eb73ff]:focus-visible {\n  outline: none !important;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow) !important;\n}\n.acu-icon-btn[data-v-e9eb73ff]:disabled { opacity: 0.4; cursor: not-allowed;\n}\n", "src/presentation-v2/components/_lib/AcuIconButton.vue#style-0-e9eb73ff");
+    var AcuIconButton_vue_vue_type_style_index_0_scoped_e9eb73ff_lang = null;
 
-    const _hoisted_1$Y = [
+    const _hoisted_1$X = [
     	"disabled",
     	"title",
     	"aria-label"
     ];
-    function _sfc_render$10(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$$(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock("button", {
     		type: "button",
     		disabled: $props.disabled,
@@ -73990,9 +74359,9 @@ Expected function or array of functions, received type ${typeof value}.`
     		null,
     		2
     		/* CLASS */
-    	)], 10, _hoisted_1$Y);
+    	)], 10, _hoisted_1$X);
     }
-    var AcuIconButton = /* @__PURE__ */ _export_sfc(_sfc_main$10, [["render", _sfc_render$10]]);
+    var AcuIconButton = /* @__PURE__ */ _export_sfc(_sfc_main$$, [["render", _sfc_render$$], ["__scopeId", "data-v-e9eb73ff"]]);
 
     const DEFAULT_DURATION_BY_KIND = {
         info: 2600,
@@ -74118,7 +74487,7 @@ Expected function or array of functions, received type ${typeof value}.`
 
     const TOAST_LEAVE_MS = 160;
     const DEFAULT_VISIBLE_TOAST_LIMIT = 4;
-    var _sfc_main$$ = /*@__PURE__*/ defineComponent({
+    var _sfc_main$_ = /*@__PURE__*/ defineComponent({
         __name: 'AcuToastViewport',
         setup(__props, { expose: __expose }) {
             __expose();
@@ -74212,28 +74581,28 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-toast-viewport {\n  position: fixed;\n  top: 0;\n  right: 0;\n  bottom: 0;\n  left: 0;\n  inset: 0;\n  z-index: 9410;\n  box-sizing: border-box;\n  width: 100%;\n  width: 100vw;\n  width: 100dvw;\n  min-height: 100%;\n  min-height: 100vh;\n  min-height: 100dvh;\n  overflow: hidden;\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-ui);\n  font-size: var(--acu-font-size-body);\n  pointer-events: none;\n}\n.acu-toast-viewport,\n.acu-toast-viewport * {\n  box-sizing: border-box;\n}\n.acu-toast-viewport__list {\n  position: absolute;\n  top: calc(62px + var(--acu-safe-top, 0px));\n  right: calc(18px + var(--acu-safe-right, 0px));\n  bottom: auto;\n  width: min(360px, calc(100% - 36px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n  max-height: calc(100% - 80px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  margin: 0;\n  padding: 0;\n  overflow: visible;\n  list-style: none;\n}\n.acu-v2-toast {\n  --acu-toast-tone: var(--acu-accent);\n  position: relative;\n  min-width: 0;\n  display: grid;\n  grid-template-columns: 26px minmax(0, 1fr) auto auto;\n  align-items: center;\n  gap: 8px;\n  padding: 10px 12px;\n  overflow: hidden;\n  border: 1px solid color-mix(in srgb, var(--acu-toast-tone) 22%, var(--acu-border-2));\n  border-radius: var(--acu-radius-md);\n  background:\n    linear-gradient(\n      90deg,\n      color-mix(in srgb, var(--acu-toast-tone) 7%, transparent),\n      transparent 48%\n    ),\n    color-mix(in srgb, var(--acu-bg-1) 97%, var(--acu-text-1) 3%);\n  box-shadow:\n    0 18px 46px rgba(0, 0, 0, 0.18),\n    0 4px 16px rgba(0, 0, 0, 0.12),\n    inset 0 1px 0 color-mix(in srgb, var(--acu-text-1) 8%, transparent);\n  color: var(--acu-text-1);\n  pointer-events: auto;\n  animation: acu-toast-in 0.16s ease-out both;\n}\n.acu-v2-toast--success {\n  --acu-toast-tone: var(--acu-success);\n}\n.acu-v2-toast--warning {\n  --acu-toast-tone: var(--acu-warning);\n}\n.acu-v2-toast--error {\n  --acu-toast-tone: var(--acu-danger);\n}\n.acu-v2-toast.is-closing {\n  pointer-events: none;\n  animation: acu-toast-out 0.16s ease-in both;\n}\n.acu-v2-toast__icon {\n  --acu-icon-color: var(--acu-toast-tone);\n  min-width: 0;\n  width: 26px;\n  height: 26px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-toast-tone) 13%, transparent);\n  color: var(--acu-toast-tone);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1;\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-toast-tone) 18%, transparent);\n}\n.acu-v2-toast__text {\n  min-width: 0;\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.45;\n  overflow-wrap: anywhere;\n}\n.acu-v2-toast__action {\n  white-space: nowrap;\n}\n.acu-v2-toast__dismiss {\n  flex: 0 0 auto;\n}\n@keyframes acu-toast-in {\nfrom {\n    opacity: 0;\n    transform: translateY(-6px);\n}\nto {\n    opacity: 1;\n    transform: translateY(0);\n}\n}\n@keyframes acu-toast-out {\nfrom {\n    opacity: 1;\n    transform: translateY(0);\n}\nto {\n    opacity: 0;\n    transform: translateY(-6px);\n}\n}\n@media (max-width: 640px) {\n.acu-toast-viewport__list {\n    top: calc(58px + var(--acu-safe-top, 0px));\n    right: auto;\n    bottom: auto;\n    left: calc(50% + (var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)) / 2);\n    width: clamp(240px, 70vw, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n    max-height: calc(100% - 70px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n    transform: translateX(-50%);\n}\n.acu-v2-toast {\n    grid-template-columns: 22px minmax(0, 1fr) auto;\n    gap: 7px;\n    padding: 8px 9px;\n}\n.acu-v2-toast__icon {\n    width: 22px;\n    height: 22px;\n    font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-toast__text {\n    font-size: var(--acu-font-size-caption, 11px);\n    line-height: 1.4;\n}\n.acu-v2-toast__action {\n    grid-column: 2 / 4;\n    justify-self: start;\n}\n}\n", "src/presentation-v2/components/_lib/AcuToastViewport.vue#style-0");
-    var AcuToastViewport_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-toast-viewport[data-v-35598fa9] {\n  position: fixed;\n  top: 0;\n  right: 0;\n  bottom: 0;\n  left: 0;\n  inset: 0;\n  z-index: 9410;\n  box-sizing: border-box;\n  width: 100%;\n  width: 100vw;\n  width: 100dvw;\n  min-height: 100%;\n  min-height: 100vh;\n  min-height: 100dvh;\n  overflow: hidden;\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-ui);\n  font-size: var(--acu-font-size-body);\n  pointer-events: none;\n}\n.acu-toast-viewport[data-v-35598fa9],\n.acu-toast-viewport[data-v-35598fa9] * {\n  box-sizing: border-box;\n}\n.acu-toast-viewport__list[data-v-35598fa9] {\n  position: absolute;\n  top: calc(62px + var(--acu-safe-top, 0px));\n  right: calc(18px + var(--acu-safe-right, 0px));\n  bottom: auto;\n  width: min(360px, calc(100% - 36px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n  max-height: calc(100% - 80px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  margin: 0;\n  padding: 0;\n  overflow: visible;\n  list-style: none;\n}\n.acu-v2-toast[data-v-35598fa9] {\n  --acu-toast-tone: var(--acu-accent);\n  position: relative;\n  min-width: 0;\n  display: grid;\n  grid-template-columns: 26px minmax(0, 1fr) auto auto;\n  align-items: center;\n  gap: 8px;\n  padding: 10px 12px;\n  overflow: hidden;\n  border: 1px solid color-mix(in srgb, var(--acu-toast-tone) 22%, var(--acu-border-2));\n  border-radius: var(--acu-radius-md);\n  background:\n    linear-gradient(\n      90deg,\n      color-mix(in srgb, var(--acu-toast-tone) 7%, transparent),\n      transparent 48%\n    ),\n    color-mix(in srgb, var(--acu-bg-1) 97%, var(--acu-text-1) 3%);\n  box-shadow:\n    0 18px 46px rgba(0, 0, 0, 0.18),\n    0 4px 16px rgba(0, 0, 0, 0.12),\n    inset 0 1px 0 color-mix(in srgb, var(--acu-text-1) 8%, transparent);\n  color: var(--acu-text-1);\n  pointer-events: auto;\n  animation: acu-toast-in-35598fa9 0.16s ease-out both;\n}\n.acu-v2-toast--success[data-v-35598fa9] {\n  --acu-toast-tone: var(--acu-success);\n}\n.acu-v2-toast--warning[data-v-35598fa9] {\n  --acu-toast-tone: var(--acu-warning);\n}\n.acu-v2-toast--error[data-v-35598fa9] {\n  --acu-toast-tone: var(--acu-danger);\n}\n.acu-v2-toast.is-closing[data-v-35598fa9] {\n  pointer-events: none;\n  animation: acu-toast-out-35598fa9 0.16s ease-in both;\n}\n.acu-v2-toast__icon[data-v-35598fa9] {\n  --acu-icon-color: var(--acu-toast-tone);\n  min-width: 0;\n  width: 26px;\n  height: 26px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-toast-tone) 13%, transparent);\n  color: var(--acu-toast-tone);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1;\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-toast-tone) 18%, transparent);\n}\n.acu-v2-toast__text[data-v-35598fa9] {\n  min-width: 0;\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.45;\n  overflow-wrap: anywhere;\n}\n.acu-v2-toast__action[data-v-35598fa9] {\n  white-space: nowrap;\n}\n.acu-v2-toast__dismiss[data-v-35598fa9] {\n  flex: 0 0 auto;\n}\n@keyframes acu-toast-in-35598fa9 {\nfrom {\n    opacity: 0;\n    transform: translateY(-6px);\n}\nto {\n    opacity: 1;\n    transform: translateY(0);\n}\n}\n@keyframes acu-toast-out-35598fa9 {\nfrom {\n    opacity: 1;\n    transform: translateY(0);\n}\nto {\n    opacity: 0;\n    transform: translateY(-6px);\n}\n}\n@media (max-width: 640px) {\n.acu-toast-viewport__list[data-v-35598fa9] {\n    top: calc(58px + var(--acu-safe-top, 0px));\n    right: auto;\n    bottom: auto;\n    left: calc(50% + (var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)) / 2);\n    width: clamp(240px, 70vw, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n    max-height: calc(100% - 70px - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n    transform: translateX(-50%);\n}\n.acu-v2-toast[data-v-35598fa9] {\n    grid-template-columns: 22px minmax(0, 1fr) auto;\n    gap: 7px;\n    padding: 8px 9px;\n}\n.acu-v2-toast__icon[data-v-35598fa9] {\n    width: 22px;\n    height: 22px;\n    font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-toast__text[data-v-35598fa9] {\n    font-size: var(--acu-font-size-caption, 11px);\n    line-height: 1.4;\n}\n.acu-v2-toast__action[data-v-35598fa9] {\n    grid-column: 2 / 4;\n    justify-self: start;\n}\n}\n", "src/presentation-v2/components/_lib/AcuToastViewport.vue#style-0-35598fa9");
+    var AcuToastViewport_vue_vue_type_style_index_0_scoped_35598fa9_lang = null;
 
-    const _hoisted_1$X = {
+    const _hoisted_1$W = {
     	key: 0,
     	class: "acu-toast-viewport",
     	role: "status",
     	"aria-label": "通知",
     	style: { zIndex: 9410 }
     };
-    const _hoisted_2$O = { class: "acu-toast-viewport__list" };
+    const _hoisted_2$N = { class: "acu-toast-viewport__list" };
     const _hoisted_3$E = ["role"];
     const _hoisted_4$v = {
     	class: "acu-v2-toast__icon",
     	"aria-hidden": "true"
     };
     const _hoisted_5$o = { class: "acu-v2-toast__text" };
-    function _sfc_render$$(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$_(_ctx, _cache, $props, $setup, $data, $options) {
     	return $setup.portalTarget ? (openBlock(), createBlock(Teleport, {
     		key: 0,
     		to: $setup.portalTarget
-    	}, [$setup.renderedItems.length ? (openBlock(), createElementBlock("div", _hoisted_1$X, [createBaseVNode("ol", _hoisted_2$O, [(openBlock(true), createElementBlock(
+    	}, [$setup.renderedItems.length ? (openBlock(), createElementBlock("div", _hoisted_1$W, [createBaseVNode("ol", _hoisted_2$N, [(openBlock(true), createElementBlock(
     		Fragment,
     		null,
     		renderList($setup.renderedItems, (entry) => {
@@ -74288,9 +74657,9 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* KEYED_FRAGMENT */
     	))])])) : createCommentVNode("v-if", true)], 8, ["to"])) : createCommentVNode("v-if", true);
     }
-    var AcuToastViewport = /* @__PURE__ */ _export_sfc(_sfc_main$$, [["render", _sfc_render$$]]);
+    var AcuToastViewport = /* @__PURE__ */ _export_sfc(_sfc_main$_, [["render", _sfc_render$_], ["__scopeId", "data-v-35598fa9"]]);
 
-    var _sfc_main$_ = /*@__PURE__*/ defineComponent({
+    var _sfc_main$Z = /*@__PURE__*/ defineComponent({
         __name: 'AcuMobilePanelNav',
         props: {
             items: {}
@@ -74468,27 +74837,27 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-mobile-panel-nav {\n  display: none;\n}\n@media (max-width: 860px) {\n.acu-mobile-panel-nav {\n    position: sticky;\n    top: 0;\n    z-index: 30;\n    display: block;\n    margin: -20px -20px 4px;\n    padding: 0;\n    border-top: 0;\n    border-bottom: 1px solid var(--acu-border-2);\n    background: color-mix(in srgb, var(--acu-bg-0) 94%, transparent);\n    backdrop-filter: blur(10px);\n    -webkit-backdrop-filter: blur(10px);\n}\n.acu-mobile-panel-nav::before,\n  .acu-mobile-panel-nav::after {\n    content: \"\";\n    position: absolute;\n    top: 0;\n    bottom: 1px;\n    z-index: 2;\n    width: 22px;\n    pointer-events: none;\n}\n.acu-mobile-panel-nav::before {\n    left: 0;\n    background: linear-gradient(to right, var(--acu-bg-0), transparent);\n}\n.acu-mobile-panel-nav::after {\n    right: 0;\n    background: linear-gradient(to left, var(--acu-bg-0), transparent);\n}\n.acu-mobile-panel-nav__track {\n    min-width: 0;\n    display: flex;\n    gap: 0;\n    overflow-x: auto;\n    overscroll-behavior-x: contain;\n    scroll-padding-inline: 18px;\n    scrollbar-width: none;\n    padding: 0 18px;\n    border: 0;\n    border-radius: 0;\n    background: transparent;\n}\n.acu-mobile-panel-nav__track::-webkit-scrollbar {\n    display: none;\n}\n.acu-mobile-panel-nav__item {\n    flex: 0 0 auto;\n    position: relative;\n    min-width: 84px;\n    min-height: 44px;\n    max-width: none;\n    padding: 0 12px;\n    border: 0;\n    border-radius: 0;\n    background: transparent;\n    color: var(--acu-text-3);\n    font: inherit;\n    font-size: var(--acu-font-size-body, 12px);\n    font-weight: 650;\n    line-height: 1.2;\n    white-space: nowrap;\n    overflow: hidden;\n    text-overflow: ellipsis;\n    cursor: pointer;\n    transition:\n      background 0.15s ease,\n      border-color 0.15s ease,\n      color 0.15s ease,\n      box-shadow 0.15s ease;\n}\n.acu-mobile-panel-nav__item:hover {\n    background: var(--acu-hover-overlay);\n    color: var(--acu-text-1);\n}\n.acu-mobile-panel-nav__item::after {\n    content: \"\";\n    position: absolute;\n    right: 12px;\n    bottom: 0;\n    left: 12px;\n    height: 2px;\n    border-radius: 2px 2px 0 0;\n    background: transparent;\n    transition: background 0.15s ease, opacity 0.15s ease;\n}\n.acu-mobile-panel-nav__item.is-active {\n    background: transparent;\n    color: var(--acu-text-1);\n    box-shadow: none;\n}\n.acu-mobile-panel-nav__item.is-active::after {\n    background: var(--acu-accent);\n}\n.acu-mobile-panel-nav__item:focus-visible {\n    outline: none;\n    box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-mobile-panel-nav__item.is-active:focus-visible {\n    box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n}\n@media (max-width: 720px) {\n.acu-mobile-panel-nav {\n    margin: -14px -14px 4px;\n}\n}\n", "src/presentation-v2/components/_lib/AcuMobilePanelNav.vue#style-0");
-    var AcuMobilePanelNav_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-mobile-panel-nav[data-v-222fb53e] {\n  display: none;\n}\n@media (max-width: 860px) {\n.acu-mobile-panel-nav[data-v-222fb53e] {\n    position: sticky;\n    top: 0;\n    z-index: 30;\n    display: block;\n    margin: -20px -20px 4px;\n    padding: 0;\n    border-top: 0;\n    border-bottom: 1px solid var(--acu-border-2);\n    background: color-mix(in srgb, var(--acu-bg-0) 94%, transparent);\n    backdrop-filter: blur(10px);\n    -webkit-backdrop-filter: blur(10px);\n}\n.acu-mobile-panel-nav[data-v-222fb53e]::before,\n  .acu-mobile-panel-nav[data-v-222fb53e]::after {\n    content: \"\";\n    position: absolute;\n    top: 0;\n    bottom: 1px;\n    z-index: 2;\n    width: 22px;\n    pointer-events: none;\n}\n.acu-mobile-panel-nav[data-v-222fb53e]::before {\n    left: 0;\n    background: linear-gradient(to right, var(--acu-bg-0), transparent);\n}\n.acu-mobile-panel-nav[data-v-222fb53e]::after {\n    right: 0;\n    background: linear-gradient(to left, var(--acu-bg-0), transparent);\n}\n.acu-mobile-panel-nav__track[data-v-222fb53e] {\n    min-width: 0;\n    display: flex;\n    gap: 0;\n    overflow-x: auto;\n    overscroll-behavior-x: contain;\n    scroll-padding-inline: 18px;\n    scrollbar-width: none;\n    padding: 0 18px;\n    border: 0;\n    border-radius: 0;\n    background: transparent;\n}\n.acu-mobile-panel-nav__track[data-v-222fb53e]::-webkit-scrollbar {\n    display: none;\n}\n.acu-mobile-panel-nav__item[data-v-222fb53e] {\n    flex: 0 0 auto;\n    position: relative;\n    min-width: 84px;\n    min-height: 44px;\n    max-width: none;\n    padding: 0 12px;\n    border: 0;\n    border-radius: 0;\n    background: transparent;\n    color: var(--acu-text-3);\n    font: inherit;\n    font-size: var(--acu-font-size-body, 12px);\n    font-weight: 650;\n    line-height: 1.2;\n    white-space: nowrap;\n    overflow: hidden;\n    text-overflow: ellipsis;\n    cursor: pointer;\n    transition:\n      background 0.15s ease,\n      border-color 0.15s ease,\n      color 0.15s ease,\n      box-shadow 0.15s ease;\n}\n.acu-mobile-panel-nav__item[data-v-222fb53e]:hover {\n    background: var(--acu-hover-overlay);\n    color: var(--acu-text-1);\n}\n.acu-mobile-panel-nav__item[data-v-222fb53e]::after {\n    content: \"\";\n    position: absolute;\n    right: 12px;\n    bottom: 0;\n    left: 12px;\n    height: 2px;\n    border-radius: 2px 2px 0 0;\n    background: transparent;\n    transition: background 0.15s ease, opacity 0.15s ease;\n}\n.acu-mobile-panel-nav__item.is-active[data-v-222fb53e] {\n    background: transparent;\n    color: var(--acu-text-1);\n    box-shadow: none;\n}\n.acu-mobile-panel-nav__item.is-active[data-v-222fb53e]::after {\n    background: var(--acu-accent);\n}\n.acu-mobile-panel-nav__item[data-v-222fb53e]:focus-visible {\n    outline: none;\n    box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-mobile-panel-nav__item.is-active[data-v-222fb53e]:focus-visible {\n    box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n}\n@media (max-width: 720px) {\n.acu-mobile-panel-nav[data-v-222fb53e] {\n    margin: -14px -14px 4px;\n}\n}\n", "src/presentation-v2/components/_lib/AcuMobilePanelNav.vue#style-0-222fb53e");
+    var AcuMobilePanelNav_vue_vue_type_style_index_0_scoped_222fb53e_lang = null;
 
-    const _hoisted_1$W = {
+    const _hoisted_1$V = {
     	ref: "rootRef",
     	class: "acu-mobile-panel-nav",
     	"aria-label": "页面板块"
     };
-    const _hoisted_2$N = {
+    const _hoisted_2$M = {
     	ref: "trackRef",
     	class: "acu-mobile-panel-nav__track",
     	role: "list"
     };
     const _hoisted_3$D = ["aria-current", "onClick"];
-    function _sfc_render$_(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$Z(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock(
     		"nav",
-    		_hoisted_1$W,
+    		_hoisted_1$V,
     		[createBaseVNode(
     			"div",
-    			_hoisted_2$N,
+    			_hoisted_2$M,
     			[(openBlock(true), createElementBlock(
     				Fragment,
     				null,
@@ -74511,9 +74880,9 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* NEED_PATCH */
     	);
     }
-    var AcuMobilePanelNav = /* @__PURE__ */ _export_sfc(_sfc_main$_, [["render", _sfc_render$_]]);
+    var AcuMobilePanelNav = /* @__PURE__ */ _export_sfc(_sfc_main$Z, [["render", _sfc_render$Z], ["__scopeId", "data-v-222fb53e"]]);
 
-    var _sfc_main$Z = /*@__PURE__*/ defineComponent({
+    var _sfc_main$Y = /*@__PURE__*/ defineComponent({
         __name: 'AcuPanelGrid',
         props: {
             columns: { default: 2 },
@@ -74531,22 +74900,22 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-panel-grid {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(var(--acu-panel-grid-columns), minmax(0, 1fr));\n  gap: 16px;\n  align-items: stretch;\n}\n.acu-panel-grid > :deep(*) {\n  min-width: 0;\n}\n@media (max-width: 860px) {\n.acu-panel-grid--collapse-md {\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 1080px) {\n.acu-panel-grid--collapse-lg {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/components/_lib/AcuPanelGrid.vue#style-0");
-    var AcuPanelGrid_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-panel-grid[data-v-b5881be4] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(var(--acu-panel-grid-columns), minmax(0, 1fr));\n  gap: 16px;\n  align-items: stretch;\n}\n.acu-panel-grid[data-v-b5881be4] >  * {\n  min-width: 0;\n}\n@media (max-width: 860px) {\n.acu-panel-grid--collapse-md[data-v-b5881be4] {\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 1080px) {\n.acu-panel-grid--collapse-lg[data-v-b5881be4] {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/components/_lib/AcuPanelGrid.vue#style-0-b5881be4");
+    var AcuPanelGrid_vue_vue_type_style_index_0_scoped_b5881be4_lang = null;
 
-    function _sfc_render$Z(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$Y(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock(
     		"div",
     		{
     			class: normalizeClass(["acu-panel-grid", `acu-panel-grid--collapse-${$props.collapseAt}`]),
     			style: normalizeStyle($setup.gridStyle)
     		},
-    		[renderSlot(_ctx.$slots, "default")],
+    		[renderSlot(_ctx.$slots, "default", {}, undefined, true)],
     		6
     		/* CLASS, STYLE */
     	);
     }
-    var AcuPanelGrid = /* @__PURE__ */ _export_sfc(_sfc_main$Z, [["render", _sfc_render$Z]]);
+    var AcuPanelGrid = /* @__PURE__ */ _export_sfc(_sfc_main$Y, [["render", _sfc_render$Y], ["__scopeId", "data-v-b5881be4"]]);
 
     function connectionModeFromDraft(draft) {
         if (draft.apiMode === 'tavern')
@@ -74975,7 +75344,7 @@ Expected function or array of functions, received type ${typeof value}.`
         },
     });
 
-    var _sfc_main$Y = /*@__PURE__*/ defineComponent({
+    var _sfc_main$X = /*@__PURE__*/ defineComponent({
         __name: 'AcuFormRow',
         props: {
             label: {},
@@ -74989,11 +75358,11 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-form-row {\n  display: flex; flex-direction: column; gap: 5px;\n  color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n  min-width: 0;\n}\n.acu-form-row__label { font-weight: 500;\n}\n.acu-form-row__hint { color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px); line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-form-row :deep(input[type=\"text\"]),\n.acu-form-row :deep(input[type=\"password\"]),\n.acu-form-row :deep(input[type=\"number\"]),\n.acu-form-row :deep(select),\n.acu-form-row :deep(textarea) {\n  min-width: 0; min-height: 32px; padding: 6px 9px;\n  border: 0 !important;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2) !important;\n  color: var(--acu-text-1) !important;\n  font: inherit;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-form-row :deep(textarea) {\n  min-height: unset;\n  resize: none;\n}\n.acu-form-row :deep(select) {\n  appearance: none;\n  -webkit-appearance: none;\n  padding-right: 28px;\n  background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\") !important;\n  background-repeat: no-repeat !important;\n  background-position: right 9px center !important;\n  background-size: 10px 6px !important;\n  cursor: pointer;\n}\n.acu-form-row :deep(input:focus),\n.acu-form-row :deep(select:focus),\n.acu-form-row :deep(textarea:focus) {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n", "src/presentation-v2/components/_lib/AcuFormRow.vue#style-0");
-    var AcuFormRow_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-form-row[data-v-5d410b85] {\n  display: flex; flex-direction: column; gap: 5px;\n  color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n  min-width: 0;\n}\n.acu-form-row__label[data-v-5d410b85] { font-weight: 500;\n}\n.acu-form-row__hint[data-v-5d410b85] { color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px); line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-form-row[data-v-5d410b85] input[type=\"text\"],\n.acu-form-row[data-v-5d410b85] input[type=\"password\"],\n.acu-form-row[data-v-5d410b85] input[type=\"number\"],\n.acu-form-row[data-v-5d410b85] select,\n.acu-form-row[data-v-5d410b85] textarea {\n  min-width: 0; min-height: 32px; padding: 6px 9px;\n  border: 0 !important;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2) !important;\n  color: var(--acu-text-1) !important;\n  font: inherit;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-form-row[data-v-5d410b85] textarea {\n  min-height: unset;\n  resize: none;\n}\n.acu-form-row[data-v-5d410b85] select {\n  appearance: none;\n  -webkit-appearance: none;\n  padding-right: 28px;\n  background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\") !important;\n  background-repeat: no-repeat !important;\n  background-position: right 9px center !important;\n  background-size: 10px 6px !important;\n  cursor: pointer;\n}\n.acu-form-row[data-v-5d410b85] input:focus,\n.acu-form-row[data-v-5d410b85] select:focus,\n.acu-form-row[data-v-5d410b85] textarea:focus {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n", "src/presentation-v2/components/_lib/AcuFormRow.vue#style-0-5d410b85");
+    var AcuFormRow_vue_vue_type_style_index_0_scoped_5d410b85_lang = null;
 
-    const _hoisted_1$V = { class: "acu-form-row" };
-    const _hoisted_2$M = {
+    const _hoisted_1$U = { class: "acu-form-row" };
+    const _hoisted_2$L = {
     	key: 0,
     	class: "acu-form-row__label"
     };
@@ -75001,16 +75370,16 @@ Expected function or array of functions, received type ${typeof value}.`
     	key: 1,
     	class: "acu-form-row__hint"
     };
-    function _sfc_render$Y(_ctx, _cache, $props, $setup, $data, $options) {
-    	return openBlock(), createElementBlock("div", _hoisted_1$V, [
+    function _sfc_render$X(_ctx, _cache, $props, $setup, $data, $options) {
+    	return openBlock(), createElementBlock("div", _hoisted_1$U, [
     		$props.label ? (openBlock(), createElementBlock(
     			"span",
-    			_hoisted_2$M,
+    			_hoisted_2$L,
     			toDisplayString($props.label),
     			1
     			/* TEXT */
     		)) : createCommentVNode("v-if", true),
-    		renderSlot(_ctx.$slots, "default"),
+    		renderSlot(_ctx.$slots, "default", {}, undefined, true),
     		$props.hint ? (openBlock(), createElementBlock(
     			"span",
     			_hoisted_3$C,
@@ -75020,9 +75389,9 @@ Expected function or array of functions, received type ${typeof value}.`
     		)) : createCommentVNode("v-if", true)
     	]);
     }
-    var AcuFormRow = /* @__PURE__ */ _export_sfc(_sfc_main$Y, [["render", _sfc_render$Y]]);
+    var AcuFormRow = /* @__PURE__ */ _export_sfc(_sfc_main$X, [["render", _sfc_render$X], ["__scopeId", "data-v-5d410b85"]]);
 
-    var _sfc_main$X = /*@__PURE__*/ defineComponent({
+    var _sfc_main$W = /*@__PURE__*/ defineComponent({
         __name: 'AcuMessage',
         props: {
             kind: { default: 'info' },
@@ -75038,10 +75407,10 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-message {\n  padding: 8px 0 8px 10px;\n  border-radius: 0;\n  font-size: var(--acu-font-size-body, 12px);\n  border: 0;\n  border-left: 2px solid color-mix(in srgb, var(--acu-text-3) 28%, transparent);\n  line-height: 1.5;\n  background: transparent;\n  color: var(--acu-text-2);\n}\n.acu-message--info {\n  border-left-color: color-mix(in srgb, var(--acu-text-3) 28%, transparent);\n}\n.acu-message--success {\n  border-left-color: var(--acu-success);\n}\n.acu-message--warning {\n  border-left-color: var(--acu-warning);\n}\n.acu-message--error {\n  border-left-color: var(--acu-danger);\n}\n", "src/presentation-v2/components/_lib/AcuMessage.vue#style-0");
-    var AcuMessage_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-message[data-v-e401ef0e] {\n  padding: 8px 0 8px 10px;\n  border-radius: 0;\n  font-size: var(--acu-font-size-body, 12px);\n  border: 0;\n  border-left: 2px solid color-mix(in srgb, var(--acu-text-3) 28%, transparent);\n  line-height: 1.5;\n  background: transparent;\n  color: var(--acu-text-2);\n}\n.acu-message--info[data-v-e401ef0e] {\n  border-left-color: color-mix(in srgb, var(--acu-text-3) 28%, transparent);\n}\n.acu-message--success[data-v-e401ef0e] {\n  border-left-color: var(--acu-success);\n}\n.acu-message--warning[data-v-e401ef0e] {\n  border-left-color: var(--acu-warning);\n}\n.acu-message--error[data-v-e401ef0e] {\n  border-left-color: var(--acu-danger);\n}\n", "src/presentation-v2/components/_lib/AcuMessage.vue#style-0-e401ef0e");
+    var AcuMessage_vue_vue_type_style_index_0_scoped_e401ef0e_lang = null;
 
-    function _sfc_render$X(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$W(_ctx, _cache, $props, $setup, $data, $options) {
     	return $setup.visible ? (openBlock(), createElementBlock(
     		"div",
     		{
@@ -75049,14 +75418,14 @@ Expected function or array of functions, received type ${typeof value}.`
     			class: normalizeClass(["acu-message", `acu-message--${$props.kind}`]),
     			role: "status"
     		},
-    		[renderSlot(_ctx.$slots, "default")],
+    		[renderSlot(_ctx.$slots, "default", {}, undefined, true)],
     		2
     		/* CLASS */
     	)) : createCommentVNode("v-if", true);
     }
-    var AcuMessage = /* @__PURE__ */ _export_sfc(_sfc_main$X, [["render", _sfc_render$X]]);
+    var AcuMessage = /* @__PURE__ */ _export_sfc(_sfc_main$W, [["render", _sfc_render$W], ["__scopeId", "data-v-e401ef0e"]]);
 
-    var _sfc_main$W = /*@__PURE__*/ defineComponent({
+    var _sfc_main$V = /*@__PURE__*/ defineComponent({
         __name: 'AcuInfoBanner',
         props: {
             text: { default: '' },
@@ -75077,11 +75446,11 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-info-banner {\n  display: flex;\n  align-items: flex-start;\n  gap: 10px;\n  padding: 9px 10px;\n  border-radius: var(--acu-radius-sm);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n  background: color-mix(in srgb, var(--acu-text-3) 12%, transparent);\n  color: var(--acu-text-2);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-text-3) 18%, transparent);\n  min-width: 0;\n}\n.acu-info-banner__icon {\n  flex-shrink: 0;\n  margin-top: 2px;\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-info-banner__content {\n  min-width: 0;\n  width: 100%;\n  word-wrap: break-word;\n  overflow-wrap: anywhere;\n}\n.acu-info-banner--info {\n  background: color-mix(in srgb, var(--acu-text-3) 12%, transparent);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-text-3) 18%, transparent);\n}\n.acu-info-banner--info .acu-info-banner__icon {\n  --acu-icon-color: var(--acu-text-3);\n  color: var(--acu-text-3);\n}\n.acu-info-banner--tip {\n  background: color-mix(in srgb, var(--acu-accent) 10%, transparent);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 18%, transparent);\n}\n.acu-info-banner--tip .acu-info-banner__icon {\n  --acu-icon-color: var(--acu-accent);\n  color: var(--acu-accent);\n}\n.acu-info-banner--warning {\n  background: color-mix(in srgb, var(--acu-warning) 10%, transparent);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-warning) 20%, transparent);\n}\n.acu-info-banner--warning .acu-info-banner__icon {\n  --acu-icon-color: var(--acu-warning);\n  color: var(--acu-warning);\n}\n", "src/presentation-v2/components/_lib/AcuInfoBanner.vue#style-0");
-    var AcuInfoBanner_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-info-banner[data-v-d5f9cf21] {\n  display: flex;\n  align-items: flex-start;\n  gap: 10px;\n  padding: 9px 10px;\n  border-radius: var(--acu-radius-sm);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n  background: color-mix(in srgb, var(--acu-text-3) 12%, transparent);\n  color: var(--acu-text-2);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-text-3) 18%, transparent);\n  min-width: 0;\n}\n.acu-info-banner__icon[data-v-d5f9cf21] {\n  flex-shrink: 0;\n  margin-top: 2px;\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-info-banner__content[data-v-d5f9cf21] {\n  min-width: 0;\n  width: 100%;\n  word-wrap: break-word;\n  overflow-wrap: anywhere;\n}\n.acu-info-banner--info[data-v-d5f9cf21] {\n  background: color-mix(in srgb, var(--acu-text-3) 12%, transparent);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-text-3) 18%, transparent);\n}\n.acu-info-banner--info .acu-info-banner__icon[data-v-d5f9cf21] {\n  --acu-icon-color: var(--acu-text-3);\n  color: var(--acu-text-3);\n}\n.acu-info-banner--tip[data-v-d5f9cf21] {\n  background: color-mix(in srgb, var(--acu-accent) 10%, transparent);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 18%, transparent);\n}\n.acu-info-banner--tip .acu-info-banner__icon[data-v-d5f9cf21] {\n  --acu-icon-color: var(--acu-accent);\n  color: var(--acu-accent);\n}\n.acu-info-banner--warning[data-v-d5f9cf21] {\n  background: color-mix(in srgb, var(--acu-warning) 10%, transparent);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-warning) 20%, transparent);\n}\n.acu-info-banner--warning .acu-info-banner__icon[data-v-d5f9cf21] {\n  --acu-icon-color: var(--acu-warning);\n  color: var(--acu-warning);\n}\n", "src/presentation-v2/components/_lib/AcuInfoBanner.vue#style-0-d5f9cf21");
+    var AcuInfoBanner_vue_vue_type_style_index_0_scoped_d5f9cf21_lang = null;
 
-    const _hoisted_1$U = { class: "acu-info-banner__content" };
-    function _sfc_render$W(_ctx, _cache, $props, $setup, $data, $options) {
+    const _hoisted_1$T = { class: "acu-info-banner__content" };
+    function _sfc_render$V(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock(
     		"div",
     		{
@@ -75098,16 +75467,16 @@ Expected function or array of functions, received type ${typeof value}.`
     			null,
     			2
     			/* CLASS */
-    		)) : createCommentVNode("v-if", true), createBaseVNode("div", _hoisted_1$U, [renderSlot(_ctx.$slots, "default", {}, () => [createTextVNode(
+    		)) : createCommentVNode("v-if", true), createBaseVNode("div", _hoisted_1$T, [renderSlot(_ctx.$slots, "default", {}, () => [createTextVNode(
     			toDisplayString($props.text),
     			1
     			/* TEXT */
-    		)])])],
+    		)], true)])],
     		2
     		/* CLASS */
     	);
     }
-    var AcuInfoBanner = /* @__PURE__ */ _export_sfc(_sfc_main$W, [["render", _sfc_render$W]]);
+    var AcuInfoBanner = /* @__PURE__ */ _export_sfc(_sfc_main$V, [["render", _sfc_render$V], ["__scopeId", "data-v-d5f9cf21"]]);
 
     const MIN_DURATION_MS = 100;
     const MAX_DURATION_MS = 200;
@@ -75236,7 +75605,7 @@ Expected function or array of functions, received type ${typeof value}.`
         };
     }
 
-    var _sfc_main$V = /*@__PURE__*/ defineComponent({
+    var _sfc_main$U = /*@__PURE__*/ defineComponent({
         __name: 'AcuPanel',
         props: {
             title: { default: undefined },
@@ -75285,11 +75654,11 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-panel {\n  min-width: 0; padding: 16px;\n  background: var(--acu-bg-1);\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  display: flex; flex-direction: column; gap: 0;\n  height: 100%;\n}\n.acu-panel__header {\n  display: flex; align-items: center; justify-content: space-between;\n  gap: 12px; margin-bottom: 12px;\n  min-height: 32px;\n  transition: margin-bottom 0.15s ease;\n}\n.acu-panel__header--description-open {\n  margin-bottom: 8px;\n}\n.acu-panel__title {\n  margin: 0;\n  min-width: 0;\n  flex: 1 1 auto;\n  font-size: var(--acu-font-size-panel-title, 15px);\n  line-height: 1.3;\n  color: var(--acu-text-1);\n}\n.acu-panel__header-right {\n  margin-left: auto;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-shrink: 0;\n}\n.acu-panel__actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0;\n}\n.acu-panel__description-button {\n  width: 28px;\n  height: 28px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: var(--acu-text-3);\n  cursor: pointer;\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;\n}\n.acu-panel__description-button:hover {\n  background: var(--acu-bg-2);\n  color: var(--acu-text-1);\n}\n.acu-panel__description-button--open {\n  background: color-mix(in srgb, var(--acu-text-3) 12%, transparent);\n  color: var(--acu-text-1);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-text-3) 18%, transparent);\n}\n.acu-panel__description-button:focus-visible {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-panel__body { display: flex; flex-direction: column; gap: 12px; min-width: 0; flex: 1 1 auto;\n}\n.acu-panel__description-region {\n  min-width: 0;\n  overflow: hidden;\n}\n.acu-panel__description-region-inner {\n  padding-bottom: 12px;\n  overflow: hidden;\n}\n", "src/presentation-v2/components/_lib/AcuPanel.vue#style-0");
-    var AcuPanel_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-panel[data-v-79a060ff] {\n  min-width: 0; padding: 16px;\n  background: var(--acu-bg-1);\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  display: flex; flex-direction: column; gap: 0;\n  height: 100%;\n}\n.acu-panel__header[data-v-79a060ff] {\n  display: flex; align-items: center; justify-content: space-between;\n  gap: 12px; margin-bottom: 12px;\n  min-height: 32px;\n  transition: margin-bottom 0.15s ease;\n}\n.acu-panel__header--description-open[data-v-79a060ff] {\n  margin-bottom: 8px;\n}\n.acu-panel__title[data-v-79a060ff] {\n  margin: 0;\n  min-width: 0;\n  flex: 1 1 auto;\n  font-size: var(--acu-font-size-panel-title, 15px);\n  line-height: 1.3;\n  color: var(--acu-text-1);\n}\n.acu-panel__header-right[data-v-79a060ff] {\n  margin-left: auto;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-shrink: 0;\n}\n.acu-panel__actions[data-v-79a060ff] { display: flex; align-items: center; gap: 8px; flex-shrink: 0;\n}\n.acu-panel__description-button[data-v-79a060ff] {\n  width: 28px;\n  height: 28px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: var(--acu-text-3);\n  cursor: pointer;\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;\n}\n.acu-panel__description-button[data-v-79a060ff]:hover {\n  background: var(--acu-bg-2);\n  color: var(--acu-text-1);\n}\n.acu-panel__description-button--open[data-v-79a060ff] {\n  background: color-mix(in srgb, var(--acu-text-3) 12%, transparent);\n  color: var(--acu-text-1);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-text-3) 18%, transparent);\n}\n.acu-panel__description-button[data-v-79a060ff]:focus-visible {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-panel__body[data-v-79a060ff] { display: flex; flex-direction: column; gap: 12px; min-width: 0; flex: 1 1 auto;\n}\n.acu-panel__description-region[data-v-79a060ff] {\n  min-width: 0;\n  overflow: hidden;\n}\n.acu-panel__description-region-inner[data-v-79a060ff] {\n  padding-bottom: 12px;\n  overflow: hidden;\n}\n", "src/presentation-v2/components/_lib/AcuPanel.vue#style-0-79a060ff");
+    var AcuPanel_vue_vue_type_style_index_0_scoped_79a060ff_lang = null;
 
-    const _hoisted_1$T = { class: "acu-panel" };
-    const _hoisted_2$L = {
+    const _hoisted_1$S = { class: "acu-panel" };
+    const _hoisted_2$K = {
     	key: 0,
     	class: "acu-panel__title"
     };
@@ -75304,19 +75673,19 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_5$n = ["id", "aria-hidden"];
     const _hoisted_6$l = { class: "acu-panel__description-region-inner" };
     const _hoisted_7$j = { class: "acu-panel__body" };
-    function _sfc_render$V(_ctx, _cache, $props, $setup, $data, $options) {
-    	return openBlock(), createElementBlock("section", _hoisted_1$T, [
+    function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
+    	return openBlock(), createElementBlock("section", _hoisted_1$S, [
     		$props.title || _ctx.$slots.title || _ctx.$slots.actions || $setup.hasDescription ? (openBlock(), createElementBlock(
     			"header",
     			{
     				key: 0,
     				class: normalizeClass(["acu-panel__header", { "acu-panel__header--description-open": $setup.descriptionOpen }])
     			},
-    			[$props.title || _ctx.$slots.title ? (openBlock(), createElementBlock("h3", _hoisted_2$L, [renderSlot(_ctx.$slots, "title", {}, () => [createTextVNode(
+    			[$props.title || _ctx.$slots.title ? (openBlock(), createElementBlock("h3", _hoisted_2$K, [renderSlot(_ctx.$slots, "title", {}, () => [createTextVNode(
     				toDisplayString($props.title),
     				1
     				/* TEXT */
-    			)])])) : createCommentVNode("v-if", true), _ctx.$slots.actions || $setup.hasDescription ? (openBlock(), createElementBlock("div", _hoisted_3$B, [_ctx.$slots.actions ? (openBlock(), createElementBlock("div", _hoisted_4$u, [renderSlot(_ctx.$slots, "actions")])) : createCommentVNode("v-if", true), $setup.hasDescription ? (openBlock(), createBlock($setup["AcuIconButton"], {
+    			)], true)])) : createCommentVNode("v-if", true), _ctx.$slots.actions || $setup.hasDescription ? (openBlock(), createElementBlock("div", _hoisted_3$B, [_ctx.$slots.actions ? (openBlock(), createElementBlock("div", _hoisted_4$u, [renderSlot(_ctx.$slots, "actions", {}, undefined, true)])) : createCommentVNode("v-if", true), $setup.hasDescription ? (openBlock(), createBlock($setup["AcuIconButton"], {
     				key: 1,
     				class: normalizeClass(["acu-panel__description-button", { "acu-panel__description-button--open": $setup.descriptionOpen }]),
     				icon: "fa-solid fa-circle-info",
@@ -75359,17 +75728,17 @@ Expected function or array of functions, received type ${typeof value}.`
     					toDisplayString($props.description),
     					1
     					/* TEXT */
-    				)])]),
+    				)], true)]),
     				_: 3
     			}, 8, ["tone"])])], 8, _hoisted_5$n)), [[vShow, $setup.descriptionOpen]]) : createCommentVNode("v-if", true)]),
     			_: 3
     		}),
-    		createBaseVNode("div", _hoisted_7$j, [renderSlot(_ctx.$slots, "default")])
+    		createBaseVNode("div", _hoisted_7$j, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])
     	]);
     }
-    var AcuPanel = /* @__PURE__ */ _export_sfc(_sfc_main$V, [["render", _sfc_render$V]]);
+    var AcuPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-79a060ff"]]);
 
-    var _sfc_main$U = /*@__PURE__*/ defineComponent({
+    var _sfc_main$T = /*@__PURE__*/ defineComponent({
         __name: 'AcuTextarea',
         props: {
             modelValue: {},
@@ -75505,16 +75874,16 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-textarea {\n  appearance: none !important;\n  -webkit-appearance: none !important;\n  display: block !important;\n  width: 100% !important;\n  min-width: 0 !important;\n  box-sizing: border-box !important;\n  margin: 0 !important;\n  padding: 8px 10px !important;\n  border: 0 !important;\n  border-radius: var(--acu-radius-sm) !important;\n  background: var(--acu-bg-2) !important;\n  color: var(--acu-text-1) !important;\n  font: inherit !important;\n  font-size: var(--acu-font-size-body, 12px) !important;\n  line-height: 1.45 !important;\n  letter-spacing: 0 !important;\n  text-align: start !important;\n  resize: none !important;\n  outline: none !important;\n  box-shadow: none !important;\n  caret-color: var(--acu-text-1);\n  -webkit-tap-highlight-color: transparent;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-textarea--auto-resize {\n  overflow-x: hidden !important;\n  overflow-y: auto;\n}\n.acu-textarea:hover:not(:disabled) {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2) !important;\n}\n.acu-textarea:focus {\n  outline: none !important;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow) !important;\n}\n.acu-textarea:disabled {\n  opacity: 0.5; cursor: not-allowed;\n}\n", "src/presentation-v2/components/_lib/AcuTextarea.vue#style-0");
-    var AcuTextarea_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-textarea[data-v-1ce6c804] {\n  appearance: none !important;\n  -webkit-appearance: none !important;\n  display: block !important;\n  width: 100% !important;\n  min-width: 0 !important;\n  box-sizing: border-box !important;\n  margin: 0 !important;\n  padding: 8px 10px !important;\n  border: 0 !important;\n  border-radius: var(--acu-radius-sm) !important;\n  background: var(--acu-bg-2) !important;\n  color: var(--acu-text-1) !important;\n  font: inherit !important;\n  font-size: var(--acu-font-size-body, 12px) !important;\n  line-height: 1.45 !important;\n  letter-spacing: 0 !important;\n  text-align: start !important;\n  resize: none !important;\n  outline: none !important;\n  box-shadow: none !important;\n  caret-color: var(--acu-text-1);\n  -webkit-tap-highlight-color: transparent;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-textarea--auto-resize[data-v-1ce6c804] {\n  overflow-x: hidden !important;\n  overflow-y: auto;\n}\n.acu-textarea[data-v-1ce6c804]:hover:not(:disabled) {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2) !important;\n}\n.acu-textarea[data-v-1ce6c804]:focus {\n  outline: none !important;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow) !important;\n}\n.acu-textarea[data-v-1ce6c804]:disabled {\n  opacity: 0.5; cursor: not-allowed;\n}\n", "src/presentation-v2/components/_lib/AcuTextarea.vue#style-0-1ce6c804");
+    var AcuTextarea_vue_vue_type_style_index_0_scoped_1ce6c804_lang = null;
 
-    const _hoisted_1$S = [
+    const _hoisted_1$R = [
     	"value",
     	"placeholder",
     	"rows",
     	"disabled"
     ];
-    function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock("textarea", {
     		ref: "textareaRef",
     		class: normalizeClass(["acu-textarea", { "acu-textarea--auto-resize": $props.autoResize }]),
@@ -75525,11 +75894,11 @@ Expected function or array of functions, received type ${typeof value}.`
     		onInput: $setup.onInput,
     		onFocus: $setup.onFocus,
     		onBlur: $setup.onBlur
-    	}, null, 42, _hoisted_1$S);
+    	}, null, 42, _hoisted_1$R);
     }
-    var AcuTextarea = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U]]);
+    var AcuTextarea = /* @__PURE__ */ _export_sfc(_sfc_main$T, [["render", _sfc_render$T], ["__scopeId", "data-v-1ce6c804"]]);
 
-    var _sfc_main$T = /*@__PURE__*/ defineComponent({
+    var _sfc_main$S = /*@__PURE__*/ defineComponent({
         __name: 'AcuPresetDropdown',
         props: {
             items: {},
@@ -75587,11 +75956,11 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-preset-dd { position: relative; flex: 1; min-width: 0;\n}\n.acu-preset-dd__trigger {\n  display: flex; align-items: center; gap: 8px; width: 100%;\n  min-height: 32px; padding: 6px 9px;\n  background: var(--acu-bg-2); border: 0;\n  border-radius: var(--acu-radius-sm); color: var(--acu-text-1);\n  font: inherit; font-size: var(--acu-font-size-body, 12px); cursor: pointer;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-preset-dd__trigger:hover {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);\n}\n.acu-preset-dd__trigger:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-preset-dd__trigger:disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-preset-dd--disabled { pointer-events: none; opacity: 0.5;\n}\n.acu-preset-dd__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;\n}\n.acu-preset-dd__caret { font-size: var(--acu-font-size-micro, 10px); --acu-icon-color: var(--acu-text-3); color: var(--acu-text-3); transition: transform 0.15s ease;\n}\n.acu-preset-dd__caret--open { transform: rotate(180deg);\n}\n.acu-preset-dd__menu {\n  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 100;\n  margin: 0; padding: 4px 0; list-style: none;\n  background: var(--acu-bg-1); border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm); box-shadow: var(--acu-shadow);\n  max-height: 240px; overflow-y: auto;\n}\n.acu-preset-dd__item {\n  display: flex; align-items: center; gap: 8px;\n  padding: 8px 12px; cursor: pointer; font-size: var(--acu-font-size-body-lg, 13px);\n  color: var(--acu-text-2); transition: background 0.1s ease;\n}\n.acu-preset-dd__item:hover { background: var(--acu-hover-overlay); color: var(--acu-text-1);\n}\n.acu-preset-dd__item--active { color: var(--acu-on-accent); background: var(--acu-accent);\n}\n.acu-preset-dd__item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500;\n}\n.acu-preset-dd__item-meta { font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3); white-space: nowrap;\n}\n.acu-preset-dd__star {\n  width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;\n  border: 0; background: transparent; color: var(--acu-text-3); cursor: pointer;\n  border-radius: var(--acu-radius-sm); font-size: var(--acu-font-size-body, 12px); transition: color 0.15s ease;\n}\n.acu-preset-dd__star:hover { color: var(--acu-text-1); background: var(--acu-hover-overlay);\n}\n.acu-preset-dd__star--active { color: var(--acu-text-1);\n}\n.acu-preset-dd__item--active .acu-preset-dd__item-meta,\n.acu-preset-dd__item--active .acu-preset-dd__star,\n.acu-preset-dd__item--active .acu-preset-dd__check { --acu-icon-color: var(--acu-on-accent); color: var(--acu-on-accent);\n}\n.acu-preset-dd__check { font-size: var(--acu-font-size-caption, 11px); --acu-icon-color: var(--acu-text-1); color: var(--acu-text-1);\n}\n.acu-preset-dd__empty { padding: 12px; text-align: center; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\n", "src/presentation-v2/components/_lib/AcuPresetDropdown.vue#style-0");
-    var AcuPresetDropdown_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-preset-dd[data-v-64611aa3] { position: relative; flex: 1; min-width: 0;\n}\n.acu-preset-dd__trigger[data-v-64611aa3] {\n  display: flex; align-items: center; gap: 8px; width: 100%;\n  min-height: 32px; padding: 6px 9px;\n  background: var(--acu-bg-2); border: 0;\n  border-radius: var(--acu-radius-sm); color: var(--acu-text-1);\n  font: inherit; font-size: var(--acu-font-size-body, 12px); cursor: pointer;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-preset-dd__trigger[data-v-64611aa3]:hover {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);\n}\n.acu-preset-dd__trigger[data-v-64611aa3]:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-preset-dd__trigger[data-v-64611aa3]:disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-preset-dd--disabled[data-v-64611aa3] { pointer-events: none; opacity: 0.5;\n}\n.acu-preset-dd__label[data-v-64611aa3] { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;\n}\n.acu-preset-dd__caret[data-v-64611aa3] { font-size: var(--acu-font-size-micro, 10px); --acu-icon-color: var(--acu-text-3); color: var(--acu-text-3); transition: transform 0.15s ease;\n}\n.acu-preset-dd__caret--open[data-v-64611aa3] { transform: rotate(180deg);\n}\n.acu-preset-dd__menu[data-v-64611aa3] {\n  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 100;\n  margin: 0; padding: 4px 0; list-style: none;\n  background: var(--acu-bg-1); border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm); box-shadow: var(--acu-shadow);\n  max-height: 240px; overflow-y: auto;\n}\n.acu-preset-dd__item[data-v-64611aa3] {\n  display: flex; align-items: center; gap: 8px;\n  padding: 8px 12px; cursor: pointer; font-size: var(--acu-font-size-body-lg, 13px);\n  color: var(--acu-text-2); transition: background 0.1s ease;\n}\n.acu-preset-dd__item[data-v-64611aa3]:hover { background: var(--acu-hover-overlay); color: var(--acu-text-1);\n}\n.acu-preset-dd__item--active[data-v-64611aa3] { color: var(--acu-on-accent); background: var(--acu-accent);\n}\n.acu-preset-dd__item-name[data-v-64611aa3] { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500;\n}\n.acu-preset-dd__item-meta[data-v-64611aa3] { font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3); white-space: nowrap;\n}\n.acu-preset-dd__star[data-v-64611aa3] {\n  width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;\n  border: 0; background: transparent; color: var(--acu-text-3); cursor: pointer;\n  border-radius: var(--acu-radius-sm); font-size: var(--acu-font-size-body, 12px); transition: color 0.15s ease;\n}\n.acu-preset-dd__star[data-v-64611aa3]:hover { color: var(--acu-text-1); background: var(--acu-hover-overlay);\n}\n.acu-preset-dd__star--active[data-v-64611aa3] { color: var(--acu-text-1);\n}\n.acu-preset-dd__item--active .acu-preset-dd__item-meta[data-v-64611aa3],\n.acu-preset-dd__item--active .acu-preset-dd__star[data-v-64611aa3],\n.acu-preset-dd__item--active .acu-preset-dd__check[data-v-64611aa3] { --acu-icon-color: var(--acu-on-accent); color: var(--acu-on-accent);\n}\n.acu-preset-dd__check[data-v-64611aa3] { font-size: var(--acu-font-size-caption, 11px); --acu-icon-color: var(--acu-text-1); color: var(--acu-text-1);\n}\n.acu-preset-dd__empty[data-v-64611aa3] { padding: 12px; text-align: center; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\n", "src/presentation-v2/components/_lib/AcuPresetDropdown.vue#style-0-64611aa3");
+    var AcuPresetDropdown_vue_vue_type_style_index_0_scoped_64611aa3_lang = null;
 
-    const _hoisted_1$R = ["disabled"];
-    const _hoisted_2$K = { class: "acu-preset-dd__label" };
+    const _hoisted_1$Q = ["disabled"];
+    const _hoisted_2$J = { class: "acu-preset-dd__label" };
     const _hoisted_3$A = {
     	key: 0,
     	class: "acu-preset-dd__menu"
@@ -75611,7 +75980,7 @@ Expected function or array of functions, received type ${typeof value}.`
     	key: 0,
     	class: "acu-preset-dd__empty"
     };
-    function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$S(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock(
     		"div",
     		{
@@ -75625,7 +75994,7 @@ Expected function or array of functions, received type ${typeof value}.`
     			onClick: $setup.toggleOpen
     		}, [createBaseVNode(
     			"span",
-    			_hoisted_2$K,
+    			_hoisted_2$J,
     			toDisplayString($setup.selectedLabel),
     			1
     			/* TEXT */
@@ -75635,7 +76004,7 @@ Expected function or array of functions, received type ${typeof value}.`
     			null,
     			2
     			/* CLASS */
-    		)], 8, _hoisted_1$R), $setup.open ? (openBlock(), createElementBlock("ul", _hoisted_3$A, [(openBlock(true), createElementBlock(
+    		)], 8, _hoisted_1$Q), $setup.open ? (openBlock(), createElementBlock("ul", _hoisted_3$A, [(openBlock(true), createElementBlock(
     			Fragment,
     			null,
     			renderList($props.items, (item) => {
@@ -75687,9 +76056,9 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* CLASS */
     	);
     }
-    var AcuPresetDropdown = /* @__PURE__ */ _export_sfc(_sfc_main$T, [["render", _sfc_render$T]]);
+    var AcuPresetDropdown = /* @__PURE__ */ _export_sfc(_sfc_main$S, [["render", _sfc_render$S], ["__scopeId", "data-v-64611aa3"]]);
 
-    var _sfc_main$S = /*@__PURE__*/ defineComponent({
+    var _sfc_main$R = /*@__PURE__*/ defineComponent({
         __name: 'AcuSegmentedControl',
         props: {
             options: {},
@@ -75734,17 +76103,17 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-segmented {\n  position: relative;\n  display: grid;\n  grid-auto-flow: column;\n  grid-auto-columns: minmax(0, 1fr);\n  min-width: 0;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  padding: 3px;\n  overflow: hidden;\n}\n.acu-segmented--disabled {\n  opacity: 0.55;\n}\n.acu-segmented__thumb {\n  position: absolute;\n  inset: 3px auto 3px 3px;\n  width: calc((100% - 6px) / var(--acu-segment-count));\n  border-radius: calc(var(--acu-radius-sm) - 2px);\n  background: var(--acu-accent);\n  transform: translateX(calc(var(--acu-segment-index) * 100%));\n  transition: transform 0.16s ease, background 0.16s ease;\n  pointer-events: none;\n}\n.acu-segmented__item {\n  position: relative;\n  min-width: 0;\n  margin: 0;\n  border: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font: inherit;\n  font-size: var(--acu-font-size-body-lg, 13px);\n  cursor: pointer;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 6px;\n  transition: background 0.15s ease, color 0.15s ease;\n  z-index: 1;\n}\n.acu-segmented__item:not(.acu-segmented__item--active):hover:not(:disabled) {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-segmented__item:disabled {\n  cursor: not-allowed;\n  color: var(--acu-text-3);\n}\n.acu-segmented__item--active {\n  color: var(--acu-on-accent);\n}\n.acu-segmented__item:focus-visible {\n  outline: none;\n}\n.acu-segmented__item:focus-visible::before {\n  content: '';\n  position: absolute;\n  inset: 2px;\n  border-radius: var(--acu-radius-sm);\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n  pointer-events: none;\n  z-index: 2;\n}\n.acu-segmented--md .acu-segmented__item {\n  min-height: 30px;\n  padding: 0 8px;\n  border-radius: calc(var(--acu-radius-sm) - 2px);\n}\n.acu-segmented--sm .acu-segmented__item {\n  min-height: 24px;\n  padding: 0 7px;\n  font-size: var(--acu-font-size-body, 12px);\n  border-radius: calc(var(--acu-radius-sm) - 2px);\n}\n.acu-segmented__label {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n", "src/presentation-v2/components/_lib/AcuSegmentedControl.vue#style-0");
-    var AcuSegmentedControl_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-segmented[data-v-acf7ee53] {\n  position: relative;\n  display: grid;\n  grid-auto-flow: column;\n  grid-auto-columns: minmax(0, 1fr);\n  min-width: 0;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  padding: 3px;\n  overflow: hidden;\n}\n.acu-segmented--disabled[data-v-acf7ee53] {\n  opacity: 0.55;\n}\n.acu-segmented__thumb[data-v-acf7ee53] {\n  position: absolute;\n  inset: 3px auto 3px 3px;\n  width: calc((100% - 6px) / var(--acu-segment-count));\n  border-radius: calc(var(--acu-radius-sm) - 2px);\n  background: var(--acu-accent);\n  transform: translateX(calc(var(--acu-segment-index) * 100%));\n  transition: transform 0.16s ease, background 0.16s ease;\n  pointer-events: none;\n}\n.acu-segmented__item[data-v-acf7ee53] {\n  position: relative;\n  min-width: 0;\n  margin: 0;\n  border: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font: inherit;\n  font-size: var(--acu-font-size-body-lg, 13px);\n  cursor: pointer;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 6px;\n  transition: background 0.15s ease, color 0.15s ease;\n  z-index: 1;\n}\n.acu-segmented__item[data-v-acf7ee53]:not(.acu-segmented__item--active):hover:not(:disabled) {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-segmented__item[data-v-acf7ee53]:disabled {\n  cursor: not-allowed;\n  color: var(--acu-text-3);\n}\n.acu-segmented__item--active[data-v-acf7ee53] {\n  color: var(--acu-on-accent);\n}\n.acu-segmented__item[data-v-acf7ee53]:focus-visible {\n  outline: none;\n}\n.acu-segmented__item[data-v-acf7ee53]:focus-visible::before {\n  content: '';\n  position: absolute;\n  inset: 2px;\n  border-radius: var(--acu-radius-sm);\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n  pointer-events: none;\n  z-index: 2;\n}\n.acu-segmented--md .acu-segmented__item[data-v-acf7ee53] {\n  min-height: 30px;\n  padding: 0 8px;\n  border-radius: calc(var(--acu-radius-sm) - 2px);\n}\n.acu-segmented--sm .acu-segmented__item[data-v-acf7ee53] {\n  min-height: 24px;\n  padding: 0 7px;\n  font-size: var(--acu-font-size-body, 12px);\n  border-radius: calc(var(--acu-radius-sm) - 2px);\n}\n.acu-segmented__label[data-v-acf7ee53] {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n", "src/presentation-v2/components/_lib/AcuSegmentedControl.vue#style-0-acf7ee53");
+    var AcuSegmentedControl_vue_vue_type_style_index_0_scoped_acf7ee53_lang = null;
 
-    const _hoisted_1$Q = ["aria-label"];
-    const _hoisted_2$J = [
+    const _hoisted_1$P = ["aria-label"];
+    const _hoisted_2$I = [
     	"aria-checked",
     	"disabled",
     	"onClick"
     ];
     const _hoisted_3$z = { class: "acu-segmented__label" };
-    function _sfc_render$S(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$R(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock("div", {
     		class: normalizeClass(["acu-segmented", [`acu-segmented--${$props.size}`, { "acu-segmented--disabled": $props.disabled }]]),
     		role: "radiogroup",
@@ -75783,15 +76152,15 @@ Expected function or array of functions, received type ${typeof value}.`
     				toDisplayString(opt.label),
     				1
     				/* TEXT */
-    			)], 42, _hoisted_2$J);
+    			)], 42, _hoisted_2$I);
     		}),
     		128
     		/* KEYED_FRAGMENT */
-    	))], 14, _hoisted_1$Q);
+    	))], 14, _hoisted_1$P);
     }
-    var AcuSegmentedControl = /* @__PURE__ */ _export_sfc(_sfc_main$S, [["render", _sfc_render$S]]);
+    var AcuSegmentedControl = /* @__PURE__ */ _export_sfc(_sfc_main$R, [["render", _sfc_render$R], ["__scopeId", "data-v-acf7ee53"]]);
 
-    var _sfc_main$R = /*@__PURE__*/ defineComponent({
+    var _sfc_main$Q = /*@__PURE__*/ defineComponent({
         __name: 'AcuSelect',
         props: {
             options: {},
@@ -75839,11 +76208,11 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-select {\n  position: relative;\n  display: block;\n  width: 100%;\n  min-width: 0;\n  margin: 0 !important;\n  padding: 0 !important;\n  border: 0 !important;\n  outline: 0 !important;\n  background: transparent !important;\n  box-shadow: none !important;\n}\n.acu-select__trigger {\n  display: flex; align-items: center; gap: 8px; width: 100%;\n  min-height: 32px; padding: 6px 9px;\n  margin: 0 !important;\n  background: var(--acu-bg-2) !important; border: 0 !important;\n  border-radius: var(--acu-radius-sm); color: var(--acu-text-1);\n  font: inherit; font-size: var(--acu-font-size-body, 12px); cursor: pointer;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n  box-shadow: none;\n}\n.acu-select__trigger:hover {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2) !important;\n}\n.acu-select__trigger:focus { outline: none !important;\n}\n.acu-select__trigger:focus:not(:focus-visible) { box-shadow: none !important;\n}\n.acu-select__trigger:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-select__trigger:disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-select__label {\n  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;\n}\n.acu-select__label--placeholder { color: var(--acu-text-3);\n}\n.acu-select__caret { font-size: var(--acu-font-size-micro, 10px); --acu-icon-color: var(--acu-text-3); color: var(--acu-text-3); transition: transform 0.15s ease; flex-shrink: 0;\n}\n.acu-select__caret--open { transform: rotate(180deg);\n}\n.acu-select__menu {\n  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 100;\n  margin: 0; padding: 4px 0; list-style: none;\n  background: var(--acu-bg-1); border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm); box-shadow: var(--acu-shadow);\n  max-height: 240px; overflow-y: auto;\n}\n.acu-select__item {\n  padding: 8px 12px; cursor: pointer; font-size: var(--acu-font-size-body-lg, 13px);\n  color: var(--acu-text-2); transition: background 0.1s ease;\n  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\n}\n.acu-select__item:hover { background: var(--acu-hover-overlay); color: var(--acu-text-1);\n}\n.acu-select__item--active { color: var(--acu-on-accent); background: var(--acu-accent);\n}\n.acu-select__empty { padding: 12px; text-align: center; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\n\n/* ── sm variant ── */\n.acu-select--sm .acu-select__trigger { min-height: 26px; padding: 3px 7px; font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-select--sm .acu-select__item { padding: 6px 10px; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-select--disabled { pointer-events: none; opacity: 0.5;\n}\n", "src/presentation-v2/components/_lib/AcuSelect.vue#style-0");
-    var AcuSelect_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-select[data-v-a494123e] {\n  position: relative;\n  display: block;\n  width: 100%;\n  min-width: 0;\n  margin: 0 !important;\n  padding: 0 !important;\n  border: 0 !important;\n  outline: 0 !important;\n  background: transparent !important;\n  box-shadow: none !important;\n}\n.acu-select__trigger[data-v-a494123e] {\n  display: flex; align-items: center; gap: 8px; width: 100%;\n  min-height: 32px; padding: 6px 9px;\n  margin: 0 !important;\n  background: var(--acu-bg-2) !important; border: 0 !important;\n  border-radius: var(--acu-radius-sm); color: var(--acu-text-1);\n  font: inherit; font-size: var(--acu-font-size-body, 12px); cursor: pointer;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n  box-shadow: none;\n}\n.acu-select__trigger[data-v-a494123e]:hover {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2) !important;\n}\n.acu-select__trigger[data-v-a494123e]:focus { outline: none !important;\n}\n.acu-select__trigger[data-v-a494123e]:focus:not(:focus-visible) { box-shadow: none !important;\n}\n.acu-select__trigger[data-v-a494123e]:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-select__trigger[data-v-a494123e]:disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-select__label[data-v-a494123e] {\n  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;\n}\n.acu-select__label--placeholder[data-v-a494123e] { color: var(--acu-text-3);\n}\n.acu-select__caret[data-v-a494123e] { font-size: var(--acu-font-size-micro, 10px); --acu-icon-color: var(--acu-text-3); color: var(--acu-text-3); transition: transform 0.15s ease; flex-shrink: 0;\n}\n.acu-select__caret--open[data-v-a494123e] { transform: rotate(180deg);\n}\n.acu-select__menu[data-v-a494123e] {\n  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 100;\n  margin: 0; padding: 4px 0; list-style: none;\n  background: var(--acu-bg-1); border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm); box-shadow: var(--acu-shadow);\n  max-height: 240px; overflow-y: auto;\n}\n.acu-select__item[data-v-a494123e] {\n  padding: 8px 12px; cursor: pointer; font-size: var(--acu-font-size-body-lg, 13px);\n  color: var(--acu-text-2); transition: background 0.1s ease;\n  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\n}\n.acu-select__item[data-v-a494123e]:hover { background: var(--acu-hover-overlay); color: var(--acu-text-1);\n}\n.acu-select__item--active[data-v-a494123e] { color: var(--acu-on-accent); background: var(--acu-accent);\n}\n.acu-select__empty[data-v-a494123e] { padding: 12px; text-align: center; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\n\n/* ── sm variant ── */\n.acu-select--sm .acu-select__trigger[data-v-a494123e] { min-height: 26px; padding: 3px 7px; font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-select--sm .acu-select__item[data-v-a494123e] { padding: 6px 10px; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-select--disabled[data-v-a494123e] { pointer-events: none; opacity: 0.5;\n}\n", "src/presentation-v2/components/_lib/AcuSelect.vue#style-0-a494123e");
+    var AcuSelect_vue_vue_type_style_index_0_scoped_a494123e_lang = null;
 
-    const _hoisted_1$P = ["disabled"];
-    const _hoisted_2$I = {
+    const _hoisted_1$O = ["disabled"];
+    const _hoisted_2$H = {
     	key: 0,
     	class: "acu-select__menu"
     };
@@ -75852,7 +76221,7 @@ Expected function or array of functions, received type ${typeof value}.`
     	key: 0,
     	class: "acu-select__empty"
     };
-    function _sfc_render$R(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock(
     		"div",
     		{
@@ -75876,7 +76245,7 @@ Expected function or array of functions, received type ${typeof value}.`
     			null,
     			2
     			/* CLASS */
-    		)], 8, _hoisted_1$P), $setup.open ? (openBlock(), createElementBlock("ul", _hoisted_2$I, [(openBlock(true), createElementBlock(
+    		)], 8, _hoisted_1$O), $setup.open ? (openBlock(), createElementBlock("ul", _hoisted_2$H, [(openBlock(true), createElementBlock(
     			Fragment,
     			null,
     			renderList($props.options, (opt) => {
@@ -75893,9 +76262,9 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* CLASS */
     	);
     }
-    var AcuSelect = /* @__PURE__ */ _export_sfc(_sfc_main$R, [["render", _sfc_render$R]]);
+    var AcuSelect = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-a494123e"]]);
 
-    var _sfc_main$Q = /*@__PURE__*/ defineComponent({
+    var _sfc_main$P = /*@__PURE__*/ defineComponent({
         __name: 'ApiConfigPanel',
         setup(__props, { expose: __expose }) {
             __expose();
@@ -76045,11 +76414,11 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-api-config-panel__select-row {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\n  gap: 6px;\n  align-items: stretch;\n}\n.acu-api-config-panel__editor {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action {\n  display: flex;\n  align-items: center;\n  flex-wrap: wrap;\n  gap: 10px;\n}\n.acu-api-config-panel__two-col {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-api-config-panel__muted {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger {\n  color: var(--acu-danger);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n}\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0");
-    var ApiConfigPanel_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-a9798c6e] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\n  gap: 6px;\n  align-items: stretch;\n}\n.acu-api-config-panel__editor[data-v-a9798c6e] {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-a9798c6e] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-a9798c6e] {\n  display: flex;\n  align-items: center;\n  flex-wrap: wrap;\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-a9798c6e] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-a9798c6e] {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-a9798c6e] {\n  color: var(--acu-danger);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-a9798c6e] {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n}\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-a9798c6e");
+    var ApiConfigPanel_vue_vue_type_style_index_0_scoped_a9798c6e_lang = null;
 
-    const _hoisted_1$O = { class: "acu-api-config-panel__select-row" };
-    const _hoisted_2$H = { class: "acu-api-config-panel__editor-section" };
+    const _hoisted_1$N = { class: "acu-api-config-panel__select-row" };
+    const _hoisted_2$G = { class: "acu-api-config-panel__editor-section" };
     const _hoisted_3$x = { class: "acu-api-config-panel__inline-action" };
     const _hoisted_4$r = {
     	key: 0,
@@ -76069,7 +76438,7 @@ Expected function or array of functions, received type ${typeof value}.`
     	class: "acu-api-config-panel__editor-section"
     };
     const _hoisted_9$c = { class: "acu-api-config-panel__actions" };
-    function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createBlock($setup["AcuPanel"], {
     		title: $setup.apiCopy.panels.preset.title,
     		description: $setup.apiCopy.panels.preset.description
@@ -76090,7 +76459,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				label: "当前 API 预设",
     				hint: "星标表示新聊天默认使用的预设。"
     			}, {
-    				default: withCtx(() => [createBaseVNode("div", _hoisted_1$O, [
+    				default: withCtx(() => [createBaseVNode("div", _hoisted_1$N, [
     					createVNode($setup["AcuPresetDropdown"], {
     						items: $setup.presetDropdownItems,
     						"model-value": $setup.store.activePresetName,
@@ -76137,7 +76506,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						}, null, 8, ["modelValue"])]),
     						_: 1
     					}),
-    					createBaseVNode("div", _hoisted_2$H, [
+    					createBaseVNode("div", _hoisted_2$G, [
     						createVNode($setup["AcuFormRow"], { label: "连接方式" }, {
     							default: withCtx(() => [createVNode($setup["AcuSegmentedControl"], {
     								options: $setup.connectionModeOptions,
@@ -76339,7 +76708,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	}, 8, ["title", "description"]);
     }
-    var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q]]);
+    var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$P, [["render", _sfc_render$P], ["__scopeId", "data-v-a9798c6e"]]);
 
     /**
      * plot-preset-store — 剧情推进页状态边界（D23）
@@ -76395,6 +76764,24 @@ Expected function or array of functions, received type ${typeof value}.`
         if (!normalized)
             return -1;
         return presets.findIndex(p => p.name === normalized);
+    }
+    const PLOT_RATE_FIELDS = ['rateMain', 'ratePersonal', 'rateErotic', 'rateCuckold', 'recallCount'];
+    function getDefaultPlotRateValueForV2(field) {
+        const n = Number(DEFAULT_PLOT_SETTINGS_ACU[field]);
+        return Number.isFinite(n) ? n : 0;
+    }
+    function coercePlotRateForExport(field, value) {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : getDefaultPlotRateValueForV2(field);
+    }
+    function stripDefaultPlotRatesForV2Export(target) {
+        if (!target || typeof target !== 'object')
+            return;
+        for (const field of PLOT_RATE_FIELDS) {
+            if (coercePlotRateForExport(field, target[field]) === getDefaultPlotRateValueForV2(field)) {
+                delete target[field];
+            }
+        }
     }
     function normalizeImportedPresetPayloads(parsed) {
         if (!Array.isArray(parsed))
@@ -76675,10 +77062,11 @@ Expected function or array of functions, received type ${typeof value}.`
             },
             /** 导出指定预设为 JSON。返回 string 或 null（找不到时）。 */
             exportPresetAsJson(name) {
-                const preset = findPlotPresetByName_ACU(name);
-                if (!preset)
+                const idx = findPresetIndex(this.presets, name);
+                if (idx < 0)
                     return null;
-                const exportable = stripPlotPresetWorldbookEntrySelectionForExport_ACU(preset);
+                const exportable = stripPlotPresetWorldbookEntrySelectionForExport_ACU(this.presets[idx].raw);
+                stripDefaultPlotRatesForV2Export(exportable);
                 return JSON.stringify([exportable], null, 2);
             },
         },
@@ -77395,7 +77783,7 @@ Expected function or array of functions, received type ${typeof value}.`
         },
     };
 
-    var _sfc_main$P = /*@__PURE__*/ defineComponent({
+    var _sfc_main$O = /*@__PURE__*/ defineComponent({
         __name: 'AcuDisclosureGroup',
         props: {
             label: { default: '' },
@@ -77459,16 +77847,16 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-disclosure-group {\n  display: flex;\n  flex-direction: column;\n  gap: 0;\n  overflow: hidden;\n  border-radius: var(--acu-radius-md);\n  background: transparent;\n}\n.acu-disclosure-group__header {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  width: 100%;\n  min-height: 34px;\n  appearance: none;\n  border: 0;\n  border-radius: 0;\n  padding: 7px 10px;\n  background: transparent;\n  color: var(--acu-text-2);\n  font: inherit;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.35;\n  text-align: left;\n  cursor: pointer;\n  user-select: none;\n  transition: background-color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-disclosure-group__header:hover {\n  background: var(--acu-hover-overlay);\n}\n.acu-disclosure-group__header:focus-visible {\n  outline: none;\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-disclosure-group__chevron {\n  flex: 0 0 10px;\n  width: 10px;\n  font-size: var(--acu-font-size-micro, 10px);\n  --acu-icon-color: var(--acu-text-3);\n  color: var(--acu-text-3);\n  transition: transform 0.15s ease;\n}\n.acu-disclosure-group__chevron--open {\n  transform: rotate(90deg);\n}\n.acu-disclosure-group__label {\n  flex: 1;\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-weight: 500;\n  color: var(--acu-text-2);\n}\n.acu-disclosure-group__meta {\n  flex-shrink: 0;\n  font-size: var(--acu-font-size-caption, 11px);\n  color: var(--acu-text-3);\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n}\n.acu-disclosure-group__body {\n  box-sizing: border-box;\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 18%, transparent);\n  padding: 8px;\n  opacity: 1;\n  transform: translateY(0);\n  overflow-x: hidden;\n}\n", "src/presentation-v2/components/_lib/AcuDisclosureGroup.vue#style-0");
-    var AcuDisclosureGroup_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-disclosure-group[data-v-2ba75751] {\n  display: flex;\n  flex-direction: column;\n  gap: 0;\n  overflow: hidden;\n  border-radius: var(--acu-radius-md);\n  background: transparent;\n}\n.acu-disclosure-group__header[data-v-2ba75751] {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  width: 100%;\n  min-height: 34px;\n  appearance: none;\n  border: 0;\n  border-radius: 0;\n  padding: 7px 10px;\n  background: transparent;\n  color: var(--acu-text-2);\n  font: inherit;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.35;\n  text-align: left;\n  cursor: pointer;\n  user-select: none;\n  transition: background-color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-disclosure-group__header[data-v-2ba75751]:hover {\n  background: var(--acu-hover-overlay);\n}\n.acu-disclosure-group__header[data-v-2ba75751]:focus-visible {\n  outline: none;\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-disclosure-group__chevron[data-v-2ba75751] {\n  flex: 0 0 10px;\n  width: 10px;\n  font-size: var(--acu-font-size-micro, 10px);\n  --acu-icon-color: var(--acu-text-3);\n  color: var(--acu-text-3);\n  transition: transform 0.15s ease;\n}\n.acu-disclosure-group__chevron--open[data-v-2ba75751] {\n  transform: rotate(90deg);\n}\n.acu-disclosure-group__label[data-v-2ba75751] {\n  flex: 1;\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-weight: 500;\n  color: var(--acu-text-2);\n}\n.acu-disclosure-group__meta[data-v-2ba75751] {\n  flex-shrink: 0;\n  font-size: var(--acu-font-size-caption, 11px);\n  color: var(--acu-text-3);\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n}\n.acu-disclosure-group__body[data-v-2ba75751] {\n  box-sizing: border-box;\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 18%, transparent);\n  padding: 8px;\n  opacity: 1;\n  transform: translateY(0);\n  overflow-x: hidden;\n}\n", "src/presentation-v2/components/_lib/AcuDisclosureGroup.vue#style-0-2ba75751");
+    var AcuDisclosureGroup_vue_vue_type_style_index_0_scoped_2ba75751_lang = null;
 
-    const _hoisted_1$N = ["aria-expanded", "aria-controls"];
-    const _hoisted_2$G = [
+    const _hoisted_1$M = ["aria-expanded", "aria-controls"];
+    const _hoisted_2$F = [
     	"id",
     	"aria-hidden",
     	"inert"
     ];
-    function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$O(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock(
     		"div",
     		{ class: normalizeClass(["acu-disclosure-group", [$props.rootClass, { "acu-disclosure-group--expanded": $props.expanded }]]) },
@@ -77499,7 +77887,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					toDisplayString($props.label),
     					1
     					/* TEXT */
-    				)])],
+    				)], true)],
     				2
     				/* CLASS */
     			),
@@ -77513,11 +77901,11 @@ Expected function or array of functions, received type ${typeof value}.`
     					toDisplayString($props.meta),
     					1
     					/* TEXT */
-    				)])],
+    				)], true)],
     				2
     				/* CLASS */
     			)) : createCommentVNode("v-if", true)
-    		], 10, _hoisted_1$N), createVNode(Transition, {
+    		], 10, _hoisted_1$M), createVNode(Transition, {
     			css: false,
     			onBeforeEnter: $setup.beforeEnter,
     			onEnter: $setup.enter,
@@ -77535,16 +77923,16 @@ Expected function or array of functions, received type ${typeof value}.`
     				style: normalizeStyle($setup.bodyStyle),
     				"aria-hidden": !$props.expanded ? "true" : undefined,
     				inert: !$props.expanded ? true : undefined
-    			}, [renderSlot(_ctx.$slots, "default")], 14, _hoisted_2$G)), [[vShow, $props.expanded]]) : createCommentVNode("v-if", true)]),
+    			}, [renderSlot(_ctx.$slots, "default", {}, undefined, true)], 14, _hoisted_2$F)), [[vShow, $props.expanded]]) : createCommentVNode("v-if", true)]),
     			_: 3
     		})],
     		2
     		/* CLASS */
     	);
     }
-    var AcuDisclosureGroup = /* @__PURE__ */ _export_sfc(_sfc_main$P, [["render", _sfc_render$P]]);
+    var AcuDisclosureGroup = /* @__PURE__ */ _export_sfc(_sfc_main$O, [["render", _sfc_render$O], ["__scopeId", "data-v-2ba75751"]]);
 
-    var _sfc_main$O = /*@__PURE__*/ defineComponent({
+    var _sfc_main$N = /*@__PURE__*/ defineComponent({
         ...{ inheritAttrs: false },
         __name: 'AcuToggle',
         props: {
@@ -77568,15 +77956,15 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-toggle {\n  display: inline-flex; align-items: center; gap: 8px;\n  flex: 0 0 auto;\n  padding: 0; border: 0; background: transparent;\n  font: inherit; font-size: var(--acu-font-size-body, 12px); color: var(--acu-text-2);\n  cursor: pointer; user-select: none;\n}\n.acu-toggle--disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-toggle__track {\n  position: relative; flex-shrink: 0;\n  width: 36px; height: 20px;\n  background: var(--acu-bg-2);\n  border: 0;\n  border-radius: 10px;\n  transition: background 0.2s ease, box-shadow 0.2s ease;\n}\n.acu-toggle--on .acu-toggle__track {\n  background: var(--acu-accent);\n}\n.acu-toggle__thumb {\n  position: absolute; top: 2px; left: 2px;\n  width: 16px; height: 16px;\n  background: #fff;\n  border-radius: 50%;\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);\n  transition: transform 0.2s ease;\n}\n.acu-toggle--on .acu-toggle__thumb {\n  transform: translateX(16px);\n}\n.acu-toggle__label { white-space: nowrap;\n}\n.acu-toggle:hover:not(.acu-toggle--disabled) .acu-toggle__track {\n  box-shadow: inset 0 0 0 1px var(--acu-border-2);\n}\n.acu-toggle:focus-visible .acu-toggle__track {\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n", "src/presentation-v2/components/_lib/AcuToggle.vue#style-0");
-    var AcuToggle_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-toggle[data-v-c9ee439d] {\n  display: inline-flex; align-items: center; gap: 8px;\n  flex: 0 0 auto;\n  padding: 0; border: 0; background: transparent;\n  font: inherit; font-size: var(--acu-font-size-body, 12px); color: var(--acu-text-2);\n  cursor: pointer; user-select: none;\n}\n.acu-toggle--disabled[data-v-c9ee439d] { opacity: 0.5; cursor: not-allowed;\n}\n.acu-toggle__track[data-v-c9ee439d] {\n  position: relative; flex-shrink: 0;\n  width: 36px; height: 20px;\n  background: var(--acu-bg-2);\n  border: 0;\n  border-radius: 10px;\n  transition: background 0.2s ease, box-shadow 0.2s ease;\n}\n.acu-toggle--on .acu-toggle__track[data-v-c9ee439d] {\n  background: var(--acu-accent);\n}\n.acu-toggle__thumb[data-v-c9ee439d] {\n  position: absolute; top: 2px; left: 2px;\n  width: 16px; height: 16px;\n  background: #fff;\n  border-radius: 50%;\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);\n  transition: transform 0.2s ease;\n}\n.acu-toggle--on .acu-toggle__thumb[data-v-c9ee439d] {\n  transform: translateX(16px);\n}\n.acu-toggle__label[data-v-c9ee439d] { white-space: nowrap;\n}\n.acu-toggle:hover:not(.acu-toggle--disabled) .acu-toggle__track[data-v-c9ee439d] {\n  box-shadow: inset 0 0 0 1px var(--acu-border-2);\n}\n.acu-toggle:focus-visible .acu-toggle__track[data-v-c9ee439d] {\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n", "src/presentation-v2/components/_lib/AcuToggle.vue#style-0-c9ee439d");
+    var AcuToggle_vue_vue_type_style_index_0_scoped_c9ee439d_lang = null;
 
-    const _hoisted_1$M = ["aria-checked", "disabled"];
-    const _hoisted_2$F = {
+    const _hoisted_1$L = ["aria-checked", "disabled"];
+    const _hoisted_2$E = {
     	key: 0,
     	class: "acu-toggle__label"
     };
-    function _sfc_render$O(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$N(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock("button", mergeProps({
     		type: "button",
     		class: ["acu-toggle", {
@@ -77597,15 +77985,15 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* CACHED */
     	)), $props.label ? (openBlock(), createElementBlock(
     		"span",
-    		_hoisted_2$F,
+    		_hoisted_2$E,
     		toDisplayString($props.label),
     		1
     		/* TEXT */
-    	)) : renderSlot(_ctx.$slots, "default", { key: 1 })], 16, _hoisted_1$M);
+    	)) : renderSlot(_ctx.$slots, "default", { key: 1 }, undefined, true)], 16, _hoisted_1$L);
     }
-    var AcuToggle = /* @__PURE__ */ _export_sfc(_sfc_main$O, [["render", _sfc_render$O]]);
+    var AcuToggle = /* @__PURE__ */ _export_sfc(_sfc_main$N, [["render", _sfc_render$N], ["__scopeId", "data-v-c9ee439d"]]);
 
-    var _sfc_main$N = /*@__PURE__*/ defineComponent({
+    var _sfc_main$M = /*@__PURE__*/ defineComponent({
         __name: 'FormFillUpdateSettingsPanel',
         props: {
             showAdvanced: { type: Boolean, default: true }
@@ -77687,18 +78075,18 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-form-fill-update-settings-panel__settings-groups {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-form-fill-update-settings-panel__setting-group {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-form-fill-update-settings-panel__setting-group\n  + .acu-form-fill-update-settings-panel__setting-group {\n  padding-top: 14px;\n  border-top: 1px solid var(--acu-border-2);\n}\n.acu-form-fill-update-settings-panel__advanced {\n  border: 0;\n  background: transparent;\n}\n.acu-form-fill-update-settings-panel__number-grid {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n@media (max-width: 560px) {\n.acu-form-fill-update-settings-panel__number-grid {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/components/FormFillUpdateSettingsPanel.vue#style-0");
-    var FormFillUpdateSettingsPanel_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-form-fill-update-settings-panel__settings-groups[data-v-84171ae0] {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-form-fill-update-settings-panel__setting-group[data-v-84171ae0] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-form-fill-update-settings-panel__setting-group\n  + .acu-form-fill-update-settings-panel__setting-group[data-v-84171ae0] {\n  padding-top: 14px;\n  border-top: 1px solid var(--acu-border-2);\n}\n.acu-form-fill-update-settings-panel__advanced[data-v-84171ae0] {\n  border: 0;\n  background: transparent;\n}\n.acu-form-fill-update-settings-panel__number-grid[data-v-84171ae0] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n@media (max-width: 560px) {\n.acu-form-fill-update-settings-panel__number-grid[data-v-84171ae0] {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/components/FormFillUpdateSettingsPanel.vue#style-0-84171ae0");
+    var FormFillUpdateSettingsPanel_vue_vue_type_style_index_0_scoped_84171ae0_lang = null;
 
-    const _hoisted_1$L = { class: "acu-form-fill-update-settings-panel__settings-groups" };
-    const _hoisted_2$E = { class: "acu-form-fill-update-settings-panel__setting-group" };
+    const _hoisted_1$K = { class: "acu-form-fill-update-settings-panel__settings-groups" };
+    const _hoisted_2$D = { class: "acu-form-fill-update-settings-panel__setting-group" };
     const _hoisted_3$w = { class: "acu-form-fill-update-settings-panel__number-grid" };
-    function _sfc_render$N(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$M(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createBlock($setup["AcuPanel"], {
     		title: $setup.formFillCopy.panels.update.title,
     		description: $setup.formFillCopy.panels.update.description
     	}, {
-    		default: withCtx(() => [createBaseVNode("div", _hoisted_1$L, [createBaseVNode("section", _hoisted_2$E, [
+    		default: withCtx(() => [createBaseVNode("div", _hoisted_1$K, [createBaseVNode("section", _hoisted_2$D, [
     			createVNode($setup["AcuFormRow"], {
     				label: "填表 API 预设",
     				hint: "默认使用当前 API，选择后仅影响填表功能。"
@@ -77779,7 +78167,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	}, 8, ["title", "description"]);
     }
-    var FormFillUpdateSettingsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$N, [["render", _sfc_render$N]]);
+    var FormFillUpdateSettingsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$M, [["render", _sfc_render$M], ["__scopeId", "data-v-84171ae0"]]);
 
     /**
      * persistence — 新 UI 自己的 localStorage 持久化层（D14 / P0-4）
@@ -78200,6 +78588,24 @@ Expected function or array of functions, received type ${typeof value}.`
     function emptyContextRules() {
         return { extractRules: [], excludeRules: [] };
     }
+    function coercePlotRate(field, value) {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : getDefaultPlotRateValueForV2(field);
+    }
+    function readDraftRates(raw) {
+        return PLOT_RATE_FIELDS.reduce((acc, field) => {
+            acc[field] = coercePlotRate(field, raw?.[field]);
+            return acc;
+        }, {});
+    }
+    function writeDraftRates(raw, rates) {
+        for (const field of PLOT_RATE_FIELDS) {
+            raw[field] = coercePlotRate(field, rates[field]);
+        }
+    }
+    function emptyDraftRates() {
+        return readDraftRates(null);
+    }
     function defaultRawPreset() {
         return getDefaultPlotPresetRawForV2();
     }
@@ -78246,6 +78652,7 @@ Expected function or array of functions, received type ${typeof value}.`
         const originalName = ref('');
         const draftMeta = reactive(emptyDraftMeta());
         const contextRules = reactive(emptyContextRules());
+        const draftRates = reactive(emptyDraftRates());
         const draftRaw = ref(defaultRawPreset());
         const error = ref('');
         const initialSnapshot = ref('');
@@ -78275,6 +78682,7 @@ Expected function or array of functions, received type ${typeof value}.`
             return JSON.stringify({
                 meta: draftMeta,
                 contextRules,
+                rates: draftRates,
                 tasks: taskEditing.tasks.value,
                 directive: taskEditing.finalDirective.value,
             });
@@ -78295,6 +78703,7 @@ Expected function or array of functions, received type ${typeof value}.`
         function resetDraft() {
             Object.assign(draftMeta, emptyDraftMeta());
             Object.assign(contextRules, emptyContextRules());
+            Object.assign(draftRates, emptyDraftRates());
             draftRaw.value = defaultRawPreset();
             originalName.value = '';
             error.value = '';
@@ -78314,6 +78723,7 @@ Expected function or array of functions, received type ${typeof value}.`
             draftRaw.value = raw;
             contextRules.extractRules = normalizeRulePairs(raw.contextExtractRules, raw.contextExtractTags || '', 'extract');
             contextRules.excludeRules = normalizeRulePairs(raw.contextExcludeRules, raw.contextExcludeTags || '', 'exclude');
+            Object.assign(draftRates, readDraftRates(raw));
             taskEditing.loadFromRaw(raw.plotTasks || [], raw.finalSystemDirective || '');
             error.value = '';
             drawerView.value = 'create';
@@ -78330,6 +78740,7 @@ Expected function or array of functions, received type ${typeof value}.`
             draftRaw.value = JSON.parse(JSON.stringify(target.raw || {}));
             contextRules.extractRules = normalizeRulePairs(target.raw?.contextExtractRules, target.raw?.contextExtractTags || '', 'extract');
             contextRules.excludeRules = normalizeRulePairs(target.raw?.contextExcludeRules, target.raw?.contextExcludeTags || '', 'exclude');
+            Object.assign(draftRates, readDraftRates(target.raw || null));
             taskEditing.loadFromRaw(target.raw?.plotTasks || [], target.raw?.finalSystemDirective || '');
             error.value = '';
             drawerView.value = 'edit';
@@ -78372,6 +78783,9 @@ Expected function or array of functions, received type ${typeof value}.`
         function setContextExcludeRules(rules) {
             contextRules.excludeRules = coerceRulePairs$1(rules);
         }
+        function setDraftRate(field, value) {
+            draftRates[field] = coercePlotRate(field, value);
+        }
         function saveDraft() {
             if (!validate())
                 return false;
@@ -78379,6 +78793,7 @@ Expected function or array of functions, received type ${typeof value}.`
             merged.name = String(draftMeta.name || '').trim();
             merged.contextExtractRules = rulesForSave(contextRules.extractRules, 'extract');
             merged.contextExcludeRules = rulesForSave(contextRules.excludeRules, 'exclude');
+            writeDraftRates(merged, draftRates);
             delete merged.contextExtractTags;
             delete merged.contextExcludeTags;
             const ok = store.savePreset({ name: merged.name, raw: merged }, originalName.value);
@@ -78420,10 +78835,12 @@ Expected function or array of functions, received type ${typeof value}.`
             draftMeta,
             draftRaw,
             contextRules,
+            draftRates,
             presetMeta,
             taskEditing,
             setContextExtractRules,
             setContextExcludeRules,
+            setDraftRate,
             openManage,
             openCreate,
             openEdit,
@@ -78435,54 +78852,6 @@ Expected function or array of functions, received type ${typeof value}.`
             deletePreset,
             importFromJsonText,
             exportPresetAsText,
-        };
-    }
-
-    /**
-     * usePlotRates — 匹配替换字段（D23.5）的字段读写
-     *
-     * 这些字段是 settings_ACU.plotSettings 顶层（rateMain / ratePersonal / rateErotic /
-     * rateCuckold / recallCount），不是 preset-scoped。开发者选项关闭时不渲染。
-     */
-    function usePlotRates() {
-        const rateMain = ref(1);
-        const ratePersonal = ref(1);
-        const rateErotic = ref(0);
-        const rateCuckold = ref(1);
-        const recallCount = ref(20);
-        function refresh() {
-            const plot = (settings_ACU.plotSettings || {});
-            rateMain.value = Number(plot.rateMain ?? 1);
-            ratePersonal.value = Number(plot.ratePersonal ?? 1);
-            rateErotic.value = Number(plot.rateErotic ?? 0);
-            rateCuckold.value = Number(plot.rateCuckold ?? 1);
-            recallCount.value = Number(plot.recallCount ?? 20);
-        }
-        function setRate(field, value) {
-            if (!Number.isFinite(value))
-                return;
-            const plot = (settings_ACU.plotSettings || {});
-            plot[field] = value;
-            if (field === 'rateMain')
-                rateMain.value = value;
-            else if (field === 'ratePersonal')
-                ratePersonal.value = value;
-            else if (field === 'rateErotic')
-                rateErotic.value = value;
-            else if (field === 'rateCuckold')
-                rateCuckold.value = value;
-            else
-                recallCount.value = value;
-            saveSettings_ACU();
-        }
-        return {
-            rateMain,
-            ratePersonal,
-            rateErotic,
-            rateCuckold,
-            recallCount,
-            refresh,
-            setRate,
         };
     }
 
@@ -78504,7 +78873,7 @@ Expected function or array of functions, received type ${typeof value}.`
         },
     };
 
-    var _sfc_main$M = /*@__PURE__*/ defineComponent({
+    var _sfc_main$L = /*@__PURE__*/ defineComponent({
         __name: 'AcuText',
         props: {
             as: { default: 'p' },
@@ -78520,19 +78889,19 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-text {\n  margin: 0;\n  min-width: 0;\n}\n.acu-text--caption {\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: var(--acu-line-height-caption, 1.5);\n  color: var(--acu-text-3);\n}\n.acu-text--meta {\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n  color: var(--acu-text-3);\n}\n.acu-text--hint {\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-readable, 1.55);\n  color: var(--acu-text-3);\n}\n.acu-text--status-line {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-wrap: wrap;\n  min-height: 22px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n  color: var(--acu-text-3);\n}\n.acu-text--empty {\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: var(--acu-line-height-readable, 1.55);\n  color: var(--acu-text-3);\n  text-align: center;\n}\n.acu-text--error {\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n  color: var(--acu-danger);\n}\n.acu-text--section-label {\n  font-size: var(--acu-font-size-section-title, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 600;\n  color: var(--acu-text-2);\n}\n.acu-text--list-title {\n  font-size: var(--acu-font-size-list-title, 13px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 500;\n  color: var(--acu-text-1);\n}\n:deep(.acu-text__value) {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n", "src/presentation-v2/components/_lib/AcuText.vue#style-0");
-    var AcuText_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-text[data-v-4af3125d] {\n  margin: 0;\n  min-width: 0;\n}\n.acu-text--caption[data-v-4af3125d] {\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: var(--acu-line-height-caption, 1.5);\n  color: var(--acu-text-3);\n}\n.acu-text--meta[data-v-4af3125d] {\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n  color: var(--acu-text-3);\n}\n.acu-text--hint[data-v-4af3125d] {\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-readable, 1.55);\n  color: var(--acu-text-3);\n}\n.acu-text--status-line[data-v-4af3125d] {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-wrap: wrap;\n  min-height: 22px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n  color: var(--acu-text-3);\n}\n.acu-text--empty[data-v-4af3125d] {\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: var(--acu-line-height-readable, 1.55);\n  color: var(--acu-text-3);\n  text-align: center;\n}\n.acu-text--error[data-v-4af3125d] {\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n  color: var(--acu-danger);\n}\n.acu-text--section-label[data-v-4af3125d] {\n  font-size: var(--acu-font-size-section-title, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 600;\n  color: var(--acu-text-2);\n}\n.acu-text--list-title[data-v-4af3125d] {\n  font-size: var(--acu-font-size-list-title, 13px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 500;\n  color: var(--acu-text-1);\n}\n[data-v-4af3125d] .acu-text__value {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n", "src/presentation-v2/components/_lib/AcuText.vue#style-0-4af3125d");
+    var AcuText_vue_vue_type_style_index_0_scoped_4af3125d_lang = null;
 
-    function _sfc_render$M(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$L(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createBlock(resolveDynamicComponent($props.as), { class: normalizeClass(["acu-text", $setup.variantClass]) }, {
-    		default: withCtx(() => [renderSlot(_ctx.$slots, "default")]),
+    		default: withCtx(() => [renderSlot(_ctx.$slots, "default", {}, undefined, true)]),
     		_: 3
     	}, 8, ["class"]);
     }
-    var AcuText = /* @__PURE__ */ _export_sfc(_sfc_main$M, [["render", _sfc_render$M]]);
+    var AcuText = /* @__PURE__ */ _export_sfc(_sfc_main$L, [["render", _sfc_render$L], ["__scopeId", "data-v-4af3125d"]]);
 
     const DRAWER_LEAVE_MS = 150;
-    var _sfc_main$L = /*@__PURE__*/ defineComponent({
+    var _sfc_main$K = /*@__PURE__*/ defineComponent({
         __name: 'AcuDrawer',
         props: {
             isOpen: { type: Boolean },
@@ -78616,13 +78985,13 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-drawer-layer {\n  position: fixed; top: 0; right: 0; bottom: 0; left: 0; inset: 0; z-index: 9200;\n  width: 100%; width: 100vw; width: 100dvw;\n  height: 100%; height: 100vh; height: 100dvh;\n  display: flex; justify-content: flex-end;\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\n  background: rgba(0, 0, 0, 0.38);\n  overflow: hidden;\n  animation: acu-drawer-layer-in 0.18s ease-out both;\n}\n.acu-v2-drawer-layer.is-closing {\n  pointer-events: none;\n  animation: acu-drawer-layer-out 0.15s ease-in both;\n}\n.acu-v2-drawer {\n  max-width: 100%;\n  height: 100%; max-height: 100%;\n  display: flex; flex-direction: column;\n  background: var(--acu-bg-1);\n  border-left: 0;\n  box-shadow: var(--acu-shadow);\n  min-width: 0; min-height: 0;\n  overflow: hidden;\n  animation: acu-drawer-panel-in 0.18s ease-out both;\n}\n.acu-v2-drawer-layer.is-closing .acu-v2-drawer {\n  animation: acu-drawer-panel-out 0.15s ease-in both;\n}\n@supports (max-height: 100dvh) {\n.acu-v2-drawer { max-height: 100%;\n}\n}\n.acu-v2-drawer__header {\n  flex: 0 0 auto;\n  display: flex; align-items: center; justify-content: space-between;\n  gap: 12px; padding: 14px 16px;\n  border-bottom: 0;\n}\n.acu-v2-drawer__header-left { display: flex; align-items: center; gap: 10px;\n}\n.acu-v2-drawer__header h3 { margin: 0; font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-v2-drawer__body {\n  flex: 1; min-height: 0;\n  overflow-y: auto; padding: 16px;\n  display: flex; flex-direction: column; gap: 14px;\n}\n@keyframes acu-drawer-layer-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-drawer-panel-in {\nfrom { transform: translateX(100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes acu-drawer-layer-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-drawer-panel-out {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(100%);\n}\n}\n@media (max-width: 860px) {\n.acu-v2-drawer { width: 100% !important; border-left: 0;\n}\n}\n", "src/presentation-v2/components/_lib/AcuDrawer.vue#style-0");
-    var AcuDrawer_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-drawer-layer[data-v-3bbb1e17] {\n  position: fixed; top: 0; right: 0; bottom: 0; left: 0; inset: 0; z-index: 9200;\n  width: 100%; width: 100vw; width: 100dvw;\n  height: 100%; height: 100vh; height: 100dvh;\n  display: flex; justify-content: flex-end;\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\n  background: rgba(0, 0, 0, 0.38);\n  overflow: hidden;\n  animation: acu-drawer-layer-in-3bbb1e17 0.18s ease-out both;\n}\n.acu-v2-drawer-layer.is-closing[data-v-3bbb1e17] {\n  pointer-events: none;\n  animation: acu-drawer-layer-out-3bbb1e17 0.15s ease-in both;\n}\n.acu-v2-drawer[data-v-3bbb1e17] {\n  max-width: 100%;\n  height: 100%; max-height: 100%;\n  display: flex; flex-direction: column;\n  background: var(--acu-bg-1);\n  border-left: 0;\n  box-shadow: var(--acu-shadow);\n  min-width: 0; min-height: 0;\n  overflow: hidden;\n  animation: acu-drawer-panel-in-3bbb1e17 0.18s ease-out both;\n}\n.acu-v2-drawer-layer.is-closing .acu-v2-drawer[data-v-3bbb1e17] {\n  animation: acu-drawer-panel-out-3bbb1e17 0.15s ease-in both;\n}\n@supports (max-height: 100dvh) {\n.acu-v2-drawer[data-v-3bbb1e17] { max-height: 100%;\n}\n}\n.acu-v2-drawer__header[data-v-3bbb1e17] {\n  flex: 0 0 auto;\n  display: flex; align-items: center; justify-content: space-between;\n  gap: 12px; padding: 14px 16px;\n  border-bottom: 0;\n}\n.acu-v2-drawer__header-left[data-v-3bbb1e17] { display: flex; align-items: center; gap: 10px;\n}\n.acu-v2-drawer__header h3[data-v-3bbb1e17] { margin: 0; font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-v2-drawer__body[data-v-3bbb1e17] {\n  flex: 1; min-height: 0;\n  overflow-y: auto; padding: 16px;\n  display: flex; flex-direction: column; gap: 14px;\n}\n@keyframes acu-drawer-layer-in-3bbb1e17 {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-drawer-panel-in-3bbb1e17 {\nfrom { transform: translateX(100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes acu-drawer-layer-out-3bbb1e17 {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-drawer-panel-out-3bbb1e17 {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(100%);\n}\n}\n@media (max-width: 860px) {\n.acu-v2-drawer[data-v-3bbb1e17] { width: 100% !important; border-left: 0;\n}\n}\n", "src/presentation-v2/components/_lib/AcuDrawer.vue#style-0-3bbb1e17");
+    var AcuDrawer_vue_vue_type_style_index_0_scoped_3bbb1e17_lang = null;
 
-    const _hoisted_1$K = { class: "acu-v2-drawer__header" };
-    const _hoisted_2$D = { class: "acu-v2-drawer__header-left" };
+    const _hoisted_1$J = { class: "acu-v2-drawer__header" };
+    const _hoisted_2$C = { class: "acu-v2-drawer__header-left" };
     const _hoisted_3$v = { class: "acu-v2-drawer__body" };
-    function _sfc_render$L(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$K(_ctx, _cache, $props, $setup, $data, $options) {
     	return $setup.isRendered ? (openBlock(), createElementBlock(
     		"div",
     		{
@@ -78641,7 +79010,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				role: "dialog",
     				onClick: _cache[0] || (_cache[0] = withModifiers(() => {}, ["stop"]))
     			},
-    			[createBaseVNode("header", _hoisted_1$K, [createBaseVNode("div", _hoisted_2$D, [$props.showBack ? (openBlock(), createBlock($setup["AcuIconButton"], {
+    			[createBaseVNode("header", _hoisted_1$J, [createBaseVNode("div", _hoisted_2$C, [$props.showBack ? (openBlock(), createBlock($setup["AcuIconButton"], {
     				key: 0,
     				icon: "fa-solid fa-arrow-left",
     				title: "返回",
@@ -78657,7 +79026,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				"aria-label": "关闭",
     				title: "关闭",
     				onClick: $setup.requestClose
-    			})]), createBaseVNode("div", _hoisted_3$v, [renderSlot(_ctx.$slots, "default")])],
+    			})]), createBaseVNode("div", _hoisted_3$v, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])],
     			4
     			/* STYLE */
     		)],
@@ -78665,9 +79034,9 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* CLASS, NEED_HYDRATION */
     	)) : createCommentVNode("v-if", true);
     }
-    var AcuDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$L, [["render", _sfc_render$L]]);
+    var AcuDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$K, [["render", _sfc_render$K], ["__scopeId", "data-v-3bbb1e17"]]);
 
-    var _sfc_main$K = /*@__PURE__*/ defineComponent({
+    var _sfc_main$J = /*@__PURE__*/ defineComponent({
         __name: 'AcuRulePairList',
         props: {
             modelValue: {},
@@ -78715,14 +79084,14 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-rule-pair-list--standalone {\n  display: flex; flex-direction: column; gap: 6px;\n}\n.acu-rule-pair-list__body {\n  display: flex; flex-direction: column; gap: 6px;\n}\n.acu-rule-pair-list--standalone .acu-rule-pair-list__body {\n  /* 老接口：未提供 label 时直接展示，无外层 padding */\n  border-top: 0;\n  padding: 0;\n}\n.acu-rule-pair-list__row {\n  display: flex; align-items: center; gap: 6px;\n}\n.acu-rule-pair-list__field { flex: 1; min-width: 0;\n}\n.acu-rule-pair-list__sep {\n  flex-shrink: 0; font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n}\n.acu-rule-pair-list__empty {\n  padding: 8px; text-align: center;\n  color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-rule-pair-list__add {\n  align-self: flex-start;\n}\n", "src/presentation-v2/components/_lib/AcuRulePairList.vue#style-0");
-    var AcuRulePairList_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-rule-pair-list--standalone[data-v-5184ff4b] {\n  display: flex; flex-direction: column; gap: 6px;\n}\n.acu-rule-pair-list__body[data-v-5184ff4b] {\n  display: flex; flex-direction: column; gap: 6px;\n}\n.acu-rule-pair-list--standalone .acu-rule-pair-list__body[data-v-5184ff4b] {\n  /* 老接口：未提供 label 时直接展示，无外层 padding */\n  border-top: 0;\n  padding: 0;\n}\n.acu-rule-pair-list__row[data-v-5184ff4b] {\n  display: flex; align-items: center; gap: 6px;\n}\n.acu-rule-pair-list__field[data-v-5184ff4b] { flex: 1; min-width: 0;\n}\n.acu-rule-pair-list__sep[data-v-5184ff4b] {\n  flex-shrink: 0; font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n}\n.acu-rule-pair-list__empty[data-v-5184ff4b] {\n  padding: 8px; text-align: center;\n  color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-rule-pair-list__add[data-v-5184ff4b] {\n  align-self: flex-start;\n}\n", "src/presentation-v2/components/_lib/AcuRulePairList.vue#style-0-5184ff4b");
+    var AcuRulePairList_vue_vue_type_style_index_0_scoped_5184ff4b_lang = null;
 
-    const _hoisted_1$J = {
+    const _hoisted_1$I = {
     	key: 0,
     	class: "acu-rule-pair-list__empty"
     };
-    const _hoisted_2$C = {
+    const _hoisted_2$B = {
     	key: 1,
     	class: "acu-rule-pair-list acu-rule-pair-list--standalone"
     };
@@ -78731,7 +79100,7 @@ Expected function or array of functions, received type ${typeof value}.`
     	key: 0,
     	class: "acu-rule-pair-list__empty"
     };
-    function _sfc_render$K(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$J(_ctx, _cache, $props, $setup, $data, $options) {
     	return $props.label ? (openBlock(), createBlock($setup["AcuDisclosureGroup"], {
     		key: 0,
     		"root-class": "acu-rule-pair-list",
@@ -78797,7 +79166,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				128
     				/* KEYED_FRAGMENT */
     			)),
-    			!$props.modelValue.length ? (openBlock(), createElementBlock("div", _hoisted_1$J, " 暂无规则，点击下方按钮添加。 ")) : createCommentVNode("v-if", true),
+    			!$props.modelValue.length ? (openBlock(), createElementBlock("div", _hoisted_1$I, " 暂无规则，点击下方按钮添加。 ")) : createCommentVNode("v-if", true),
     			createVNode($setup["AcuButton"], {
     				size: "sm",
     				class: "acu-rule-pair-list__add",
@@ -78822,7 +79191,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		"label",
     		"meta",
     		"expanded"
-    	])) : (openBlock(), createElementBlock("div", _hoisted_2$C, [createBaseVNode("div", _hoisted_3$u, [
+    	])) : (openBlock(), createElementBlock("div", _hoisted_2$B, [createBaseVNode("div", _hoisted_3$u, [
     		(openBlock(true), createElementBlock(
     			Fragment,
     			null,
@@ -78893,9 +79262,9 @@ Expected function or array of functions, received type ${typeof value}.`
     		})
     	])]));
     }
-    var AcuRulePairList = /* @__PURE__ */ _export_sfc(_sfc_main$K, [["render", _sfc_render$K]]);
+    var AcuRulePairList = /* @__PURE__ */ _export_sfc(_sfc_main$J, [["render", _sfc_render$J], ["__scopeId", "data-v-5184ff4b"]]);
 
-    var _sfc_main$J = /*@__PURE__*/ defineComponent({
+    var _sfc_main$I = /*@__PURE__*/ defineComponent({
         __name: 'PlotMatchReplaceFields',
         props: {
             rateMain: {},
@@ -78917,13 +79286,13 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-plot-match-fields {\n  margin: 0;\n  padding: 0 0 14px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  min-width: 0;\n}\n.acu-v2-plot-match-fields legend {\n  padding: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-section-title, 12px);\n  font-weight: 600;\n}\n.acu-v2-plot-match-fields__grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));\n  gap: 10px;\n}\n", "src/presentation-v2/components/PlotMatchReplaceFields.vue#style-0");
-    var PlotMatchReplaceFields_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-plot-match-fields[data-v-eb37f94e] {\n  margin: 0;\n  padding: 0 0 14px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  min-width: 0;\n}\n.acu-v2-plot-match-fields legend[data-v-eb37f94e] {\n  padding: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-section-title, 12px);\n  font-weight: 600;\n}\n.acu-v2-plot-match-fields__grid[data-v-eb37f94e] {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));\n  gap: 10px;\n}\n", "src/presentation-v2/components/PlotMatchReplaceFields.vue#style-0-eb37f94e");
+    var PlotMatchReplaceFields_vue_vue_type_style_index_0_scoped_eb37f94e_lang = null;
 
-    const _hoisted_1$I = { class: "acu-v2-plot-match-fields" };
-    const _hoisted_2$B = { class: "acu-v2-plot-match-fields__grid" };
-    function _sfc_render$J(_ctx, _cache, $props, $setup, $data, $options) {
-    	return openBlock(), createElementBlock("fieldset", _hoisted_1$I, [
+    const _hoisted_1$H = { class: "acu-v2-plot-match-fields" };
+    const _hoisted_2$A = { class: "acu-v2-plot-match-fields__grid" };
+    function _sfc_render$I(_ctx, _cache, $props, $setup, $data, $options) {
+    	return openBlock(), createElementBlock("fieldset", _hoisted_1$H, [
     		_cache[6] || (_cache[6] = createBaseVNode(
     			"legend",
     			null,
@@ -78936,13 +79305,13 @@ Expected function or array of functions, received type ${typeof value}.`
     			class: "acu-v2-plot-match-fields__hint"
     		}, {
     			default: withCtx(() => [..._cache[5] || (_cache[5] = [createTextVNode(
-    				" 替换提示词占位符（sulv1~4、zhaohui）为全局参数，修改后即时生效并独立保存，不随预设导入导出。 ",
+    				" 替换提示词占位符（sulv1~4、zhaohui），随当前剧情推进预设保存；导出 JSON 时默认值会自动省略。 ",
     				-1
     				/* CACHED */
     			)])]),
     			_: 1
     		}),
-    		createBaseVNode("div", _hoisted_2$B, [
+    		createBaseVNode("div", _hoisted_2$A, [
     			createVNode($setup["AcuFormRow"], { label: "sulv1" }, {
     				default: withCtx(() => [createVNode($setup["AcuInput"], {
     					type: "number",
@@ -78992,7 +79361,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		])
     	]);
     }
-    var PlotMatchReplaceFields = /* @__PURE__ */ _export_sfc(_sfc_main$J, [["render", _sfc_render$J]]);
+    var PlotMatchReplaceFields = /* @__PURE__ */ _export_sfc(_sfc_main$I, [["render", _sfc_render$I], ["__scopeId", "data-v-eb37f94e"]]);
 
     const DEFAULT_ROLE_OPTIONS = [
         { value: 'SYSTEM', label: 'SYSTEM' },
@@ -79004,7 +79373,7 @@ Expected function or array of functions, received type ${typeof value}.`
         { value: 'A', label: '主插槽 A' },
         { value: 'B', label: '主插槽 B' },
     ];
-    var _sfc_main$I = /*@__PURE__*/ defineComponent({
+    var _sfc_main$H = /*@__PURE__*/ defineComponent({
         __name: 'AcuPromptSegments',
         props: {
             segments: {},
@@ -79029,11 +79398,11 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-prompt-segs { display: flex; flex-direction: column; gap: 10px;\n}\n.acu-prompt-segs__add { display: flex; justify-content: center;\n}\n.acu-prompt-segs__list {\n  list-style: none; margin: 0; padding: 0;\n  display: flex; flex-direction: column; gap: 10px;\n}\n.acu-prompt-segs__item {\n  border: 0; border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent; padding: 0 0 12px;\n  display: flex; flex-direction: column; gap: 8px;\n}\n.acu-prompt-segs__item:last-child {\n  padding-bottom: 0;\n  border-bottom: 0;\n}\n.acu-prompt-segs__item-head {\n  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;\n}\n.acu-prompt-segs__index {\n  font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n  min-width: 26px;\n  font-family: var(--acu-font-mono);\n}\n.acu-prompt-segs__role { min-width: 110px;\n}\n.acu-prompt-segs__slot { min-width: 120px;\n}\n.acu-prompt-segs__actions {\n  margin-left: auto;\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  flex-wrap: wrap;\n}\n.acu-prompt-segs__empty {\n  padding: 10px 0; text-align: center;\n  color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n", "src/presentation-v2/components/_lib/AcuPromptSegments.vue#style-0");
-    var AcuPromptSegments_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-prompt-segs[data-v-4cdfa515] { display: flex; flex-direction: column; gap: 10px;\n}\n.acu-prompt-segs__add[data-v-4cdfa515] { display: flex; justify-content: center;\n}\n.acu-prompt-segs__list[data-v-4cdfa515] {\n  list-style: none; margin: 0; padding: 0;\n  display: flex; flex-direction: column; gap: 10px;\n}\n.acu-prompt-segs__item[data-v-4cdfa515] {\n  border: 0; border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent; padding: 0 0 12px;\n  display: flex; flex-direction: column; gap: 8px;\n}\n.acu-prompt-segs__item[data-v-4cdfa515]:last-child {\n  padding-bottom: 0;\n  border-bottom: 0;\n}\n.acu-prompt-segs__item-head[data-v-4cdfa515] {\n  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;\n}\n.acu-prompt-segs__index[data-v-4cdfa515] {\n  font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n  min-width: 26px;\n  font-family: var(--acu-font-mono);\n}\n.acu-prompt-segs__role[data-v-4cdfa515] { min-width: 110px;\n}\n.acu-prompt-segs__slot[data-v-4cdfa515] { min-width: 120px;\n}\n.acu-prompt-segs__actions[data-v-4cdfa515] {\n  margin-left: auto;\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  flex-wrap: wrap;\n}\n.acu-prompt-segs__empty[data-v-4cdfa515] {\n  padding: 10px 0; text-align: center;\n  color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n", "src/presentation-v2/components/_lib/AcuPromptSegments.vue#style-0-4cdfa515");
+    var AcuPromptSegments_vue_vue_type_style_index_0_scoped_4cdfa515_lang = null;
 
-    const _hoisted_1$H = { class: "acu-prompt-segs" };
-    const _hoisted_2$A = { class: "acu-prompt-segs__add" };
+    const _hoisted_1$G = { class: "acu-prompt-segs" };
+    const _hoisted_2$z = { class: "acu-prompt-segs__add" };
     const _hoisted_3$t = { class: "acu-prompt-segs__list" };
     const _hoisted_4$p = { class: "acu-prompt-segs__item-head" };
     const _hoisted_5$k = { class: "acu-prompt-segs__index" };
@@ -79043,9 +79412,9 @@ Expected function or array of functions, received type ${typeof value}.`
     	class: "acu-prompt-segs__empty"
     };
     const _hoisted_8$e = { class: "acu-prompt-segs__add" };
-    function _sfc_render$I(_ctx, _cache, $props, $setup, $data, $options) {
-    	return openBlock(), createElementBlock("div", _hoisted_1$H, [
-    		createBaseVNode("div", _hoisted_2$A, [createVNode($setup["AcuButton"], {
+    function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
+    	return openBlock(), createElementBlock("div", _hoisted_1$G, [
+    		createBaseVNode("div", _hoisted_2$z, [createVNode($setup["AcuButton"], {
     			size: "sm",
     			class: "acu-prompt-segs__add-btn",
     			onClick: _cache[0] || (_cache[0] = ($event) => _ctx.$emit("add", "top"))
@@ -79180,9 +79549,9 @@ Expected function or array of functions, received type ${typeof value}.`
     		})])
     	]);
     }
-    var AcuPromptSegments = /* @__PURE__ */ _export_sfc(_sfc_main$I, [["render", _sfc_render$I]]);
+    var AcuPromptSegments = /* @__PURE__ */ _export_sfc(_sfc_main$H, [["render", _sfc_render$H], ["__scopeId", "data-v-4cdfa515"]]);
 
-    var _sfc_main$H = /*@__PURE__*/ defineComponent({
+    var _sfc_main$G = /*@__PURE__*/ defineComponent({
         __name: 'PlotPromptSegments',
         props: {
             segments: {}
@@ -79196,7 +79565,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createBlock($setup["AcuPromptSegments"], {
     		segments: $props.segments,
     		"show-slot": true,
@@ -79209,18 +79578,16 @@ Expected function or array of functions, received type ${typeof value}.`
     		onUpdate: _cache[3] || (_cache[3] = (i, p) => _ctx.$emit("update", i, p))
     	}, null, 8, ["segments"]);
     }
-    var PlotPromptSegments = /* @__PURE__ */ _export_sfc(_sfc_main$H, [["render", _sfc_render$H]]);
+    var PlotPromptSegments = /* @__PURE__ */ _export_sfc(_sfc_main$G, [["render", _sfc_render$G]]);
 
-    var _sfc_main$G = /*@__PURE__*/ defineComponent({
+    var _sfc_main$F = /*@__PURE__*/ defineComponent({
         __name: 'PlotTaskEditor',
         props: {
             task: {},
             apiPresetOptions: {},
-            taskApiOverride: {},
-            showAdvancedRates: { type: Boolean },
-            rates: {}
+            taskApiOverride: {}
         },
-        emits: ["patch", "task-api-override", "update-rate", "segment-add", "segment-delete", "segment-move", "segment-update"],
+        emits: ["patch", "task-api-override", "segment-add", "segment-delete", "segment-move", "segment-update"],
         setup(__props, { expose: __expose, emit: __emit }) {
             __expose();
             const props = __props;
@@ -79232,20 +79599,20 @@ Expected function or array of functions, received type ${typeof value}.`
             function patch(value) {
                 emit("patch", value);
             }
-            const __returned__ = { props, emit, taskApiSelectOptions, patch, AcuFormRow, AcuInput, AcuSelect, AcuToggle, PlotMatchReplaceFields, PlotPromptSegments };
+            const __returned__ = { props, emit, taskApiSelectOptions, patch, AcuFormRow, AcuInput, AcuSelect, AcuToggle, PlotPromptSegments };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-v2-plot-task-editor {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  min-width: 0;\n}\n.acu-v2-plot-task-editor__section {\n  margin: 0;\n  padding: 0 0 14px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  min-width: 0;\n}\n.acu-v2-plot-task-editor__section:last-of-type {\n  padding-bottom: 0;\n  border-bottom: 0;\n}\n.acu-v2-plot-task-editor__section legend {\n  padding: 0;\n  font-size: var(--acu-font-size-section-title, 12px);\n  font-weight: 600;\n  color: var(--acu-text-2);\n}\n.acu-v2-plot-task-editor__grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));\n  gap: 10px;\n}\n.acu-v2-plot-task-editor__hint {\n  margin: 0;\n  font-size: var(--acu-font-size-caption, 11px);\n  color: var(--acu-text-3);\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-v2-plot-task-editor__empty {\n  padding: 18px 0;\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n  text-align: center;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n", "src/presentation-v2/components/PlotTaskEditor.vue#style-0");
-    var PlotTaskEditor_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-plot-task-editor[data-v-789662c1] {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  min-width: 0;\n}\n.acu-v2-plot-task-editor__section[data-v-789662c1] {\n  margin: 0;\n  padding: 0 0 14px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  min-width: 0;\n}\n.acu-v2-plot-task-editor__section[data-v-789662c1]:last-of-type {\n  padding-bottom: 0;\n  border-bottom: 0;\n}\n.acu-v2-plot-task-editor__section legend[data-v-789662c1] {\n  padding: 0;\n  font-size: var(--acu-font-size-section-title, 12px);\n  font-weight: 600;\n  color: var(--acu-text-2);\n}\n.acu-v2-plot-task-editor__grid[data-v-789662c1] {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));\n  gap: 10px;\n}\n.acu-v2-plot-task-editor__hint[data-v-789662c1] {\n  margin: 0;\n  font-size: var(--acu-font-size-caption, 11px);\n  color: var(--acu-text-3);\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-v2-plot-task-editor__empty[data-v-789662c1] {\n  padding: 18px 0;\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n  text-align: center;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n", "src/presentation-v2/components/PlotTaskEditor.vue#style-0-789662c1");
+    var PlotTaskEditor_vue_vue_type_style_index_0_scoped_789662c1_lang = null;
 
-    const _hoisted_1$G = {
+    const _hoisted_1$F = {
     	key: 0,
     	class: "acu-v2-plot-task-editor"
     };
-    const _hoisted_2$z = { class: "acu-v2-plot-task-editor__section" };
+    const _hoisted_2$y = { class: "acu-v2-plot-task-editor__section" };
     const _hoisted_3$s = { class: "acu-v2-plot-task-editor__grid" };
     const _hoisted_4$o = { class: "acu-v2-plot-task-editor__grid" };
     const _hoisted_5$j = { class: "acu-v2-plot-task-editor__section" };
@@ -79254,10 +79621,10 @@ Expected function or array of functions, received type ${typeof value}.`
     	key: 1,
     	class: "acu-v2-plot-task-editor__empty"
     };
-    function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
-    	return $props.task ? (openBlock(), createElementBlock("div", _hoisted_1$G, [
-    		createBaseVNode("fieldset", _hoisted_2$z, [
-    			_cache[13] || (_cache[13] = createBaseVNode(
+    function _sfc_render$F(_ctx, _cache, $props, $setup, $data, $options) {
+    	return $props.task ? (openBlock(), createElementBlock("div", _hoisted_1$F, [
+    		createBaseVNode("fieldset", _hoisted_2$y, [
+    			_cache[12] || (_cache[12] = createBaseVNode(
     				"legend",
     				null,
     				"基本字段",
@@ -79344,7 +79711,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				})
     			])
     		]),
-    		createBaseVNode("fieldset", _hoisted_5$j, [_cache[14] || (_cache[14] = createBaseVNode(
+    		createBaseVNode("fieldset", _hoisted_5$j, [_cache[13] || (_cache[13] = createBaseVNode(
     			"legend",
     			null,
     			"当前任务使用的 API",
@@ -79362,22 +79729,7 @@ Expected function or array of functions, received type ${typeof value}.`
     			}, null, 8, ["options", "model-value"])]),
     			_: 1
     		})]),
-    		$props.showAdvancedRates ? (openBlock(), createBlock($setup["PlotMatchReplaceFields"], {
-    			key: 0,
-    			"rate-main": $props.rates.rateMain,
-    			"rate-personal": $props.rates.ratePersonal,
-    			"rate-erotic": $props.rates.rateErotic,
-    			"rate-cuckold": $props.rates.rateCuckold,
-    			"recall-count": $props.rates.recallCount,
-    			onUpdateRate: _cache[8] || (_cache[8] = (field, value) => _ctx.$emit("update-rate", field, value))
-    		}, null, 8, [
-    			"rate-main",
-    			"rate-personal",
-    			"rate-erotic",
-    			"rate-cuckold",
-    			"recall-count"
-    		])) : createCommentVNode("v-if", true),
-    		createBaseVNode("fieldset", _hoisted_6$h, [_cache[15] || (_cache[15] = createBaseVNode(
+    		createBaseVNode("fieldset", _hoisted_6$h, [_cache[14] || (_cache[14] = createBaseVNode(
     			"legend",
     			null,
     			"提示词段（promptGroup）",
@@ -79385,16 +79737,16 @@ Expected function or array of functions, received type ${typeof value}.`
     			/* CACHED */
     		)), createVNode($setup["PlotPromptSegments"], {
     			segments: $props.task.promptGroup,
-    			onAdd: _cache[9] || (_cache[9] = ($event) => _ctx.$emit("segment-add", $event)),
-    			onDelete: _cache[10] || (_cache[10] = ($event) => _ctx.$emit("segment-delete", $event)),
-    			onMove: _cache[11] || (_cache[11] = (index, delta) => _ctx.$emit("segment-move", index, delta)),
-    			onUpdate: _cache[12] || (_cache[12] = (index, patch) => _ctx.$emit("segment-update", index, patch))
+    			onAdd: _cache[8] || (_cache[8] = ($event) => _ctx.$emit("segment-add", $event)),
+    			onDelete: _cache[9] || (_cache[9] = ($event) => _ctx.$emit("segment-delete", $event)),
+    			onMove: _cache[10] || (_cache[10] = (index, delta) => _ctx.$emit("segment-move", index, delta)),
+    			onUpdate: _cache[11] || (_cache[11] = (index, patch) => _ctx.$emit("segment-update", index, patch))
     		}, null, 8, ["segments"])])
     	])) : (openBlock(), createElementBlock("div", _hoisted_7$f, " 请在上方选择一个任务进行编辑。 "));
     }
-    var PlotTaskEditor = /* @__PURE__ */ _export_sfc(_sfc_main$G, [["render", _sfc_render$G]]);
+    var PlotTaskEditor = /* @__PURE__ */ _export_sfc(_sfc_main$F, [["render", _sfc_render$F], ["__scopeId", "data-v-789662c1"]]);
 
-    var _sfc_main$F = /*@__PURE__*/ defineComponent({
+    var _sfc_main$E = /*@__PURE__*/ defineComponent({
         __name: 'PlotTaskList',
         props: {
             tasks: {},
@@ -79417,11 +79769,11 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-plot-tasks {\n  margin: 0; padding: 0 0 14px;\n  border: 0; border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n  display: flex; flex-direction: column; gap: 10px;\n  min-width: 0;\n}\n.acu-v2-plot-tasks > legend {\n  padding: 0;\n  font-size: var(--acu-font-size-section-title, 12px); font-weight: 600; color: var(--acu-text-2);\n  display: flex; align-items: center; gap: 10px;\n}\n.acu-v2-plot-tasks__toolbar { display: inline-flex; gap: 4px;\n}\n.acu-v2-plot-tasks__cards {\n  display: flex; gap: 8px;\n  min-width: 0;\n  overflow-x: auto;\n}\n.acu-v2-plot-tasks__card {\n  flex: 0 0 140px;\n  min-height: 100px;\n  display: flex; flex-direction: column; gap: 6px;\n  padding: 10px 12px;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  border: 0;\n  color: inherit;\n  cursor: pointer;\n  font: inherit;\n  text-align: left;\n  transition: box-shadow 0.15s ease, color 0.15s ease, opacity 0.15s ease;\n}\n.acu-v2-plot-tasks__card:hover,\n.acu-v2-plot-tasks__card:focus-visible {\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n  outline: none;\n}\n.acu-v2-plot-tasks__card--active {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-v2-plot-tasks__card--disabled {\n  opacity: 0.5;\n}\n.acu-v2-plot-tasks__card--disabled.acu-v2-plot-tasks__card--active {\n  opacity: 0.7;\n}\n.acu-v2-plot-tasks__card--disabled .acu-v2-plot-tasks__name {\n  text-decoration: line-through;\n}\n.acu-v2-plot-tasks__name {\n  font-size: var(--acu-font-size-list-title, 13px); color: var(--acu-text-1); font-weight: 500;\n  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\n}\n.acu-v2-plot-tasks__card--active .acu-v2-plot-tasks__name,\n.acu-v2-plot-tasks__card--active .acu-v2-plot-tasks__stage,\n.acu-v2-plot-tasks__card--active .acu-v2-plot-tasks__seg-count,\n.acu-v2-plot-tasks__card--active .acu-v2-plot-tasks__disabled-label {\n  color: var(--acu-on-accent);\n}\n.acu-v2-plot-tasks__stage {\n  font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-plot-tasks__seg-count {\n  font-size: var(--acu-font-size-micro, 10px); color: var(--acu-text-3);\n  margin-top: auto;\n}\n.acu-v2-plot-tasks__disabled-label {\n  font-size: var(--acu-font-size-micro, 10px); color: var(--acu-warning);\n  font-weight: 500;\n}\n.acu-v2-plot-tasks__empty {\n  padding: 16px 12px; text-align: center;\n  color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n  flex: 1;\n}\n", "src/presentation-v2/components/PlotTaskList.vue#style-0");
-    var PlotTaskList_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-plot-tasks[data-v-7a4b4a71] {\n  margin: 0; padding: 0 0 14px;\n  border: 0; border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n  display: flex; flex-direction: column; gap: 10px;\n  min-width: 0;\n}\n.acu-v2-plot-tasks > legend[data-v-7a4b4a71] {\n  padding: 0;\n  font-size: var(--acu-font-size-section-title, 12px); font-weight: 600; color: var(--acu-text-2);\n  display: flex; align-items: center; gap: 10px;\n}\n.acu-v2-plot-tasks__toolbar[data-v-7a4b4a71] { display: inline-flex; gap: 4px;\n}\n.acu-v2-plot-tasks__cards[data-v-7a4b4a71] {\n  display: flex; gap: 8px;\n  min-width: 0;\n  overflow-x: auto;\n}\n.acu-v2-plot-tasks__card[data-v-7a4b4a71] {\n  flex: 0 0 140px;\n  min-height: 100px;\n  display: flex; flex-direction: column; gap: 6px;\n  padding: 10px 12px;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  border: 0;\n  color: inherit;\n  cursor: pointer;\n  font: inherit;\n  text-align: left;\n  transition: box-shadow 0.15s ease, color 0.15s ease, opacity 0.15s ease;\n}\n.acu-v2-plot-tasks__card[data-v-7a4b4a71]:hover,\n.acu-v2-plot-tasks__card[data-v-7a4b4a71]:focus-visible {\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n  outline: none;\n}\n.acu-v2-plot-tasks__card--active[data-v-7a4b4a71] {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-v2-plot-tasks__card--disabled[data-v-7a4b4a71] {\n  opacity: 0.5;\n}\n.acu-v2-plot-tasks__card--disabled.acu-v2-plot-tasks__card--active[data-v-7a4b4a71] {\n  opacity: 0.7;\n}\n.acu-v2-plot-tasks__card--disabled .acu-v2-plot-tasks__name[data-v-7a4b4a71] {\n  text-decoration: line-through;\n}\n.acu-v2-plot-tasks__name[data-v-7a4b4a71] {\n  font-size: var(--acu-font-size-list-title, 13px); color: var(--acu-text-1); font-weight: 500;\n  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\n}\n.acu-v2-plot-tasks__card--active .acu-v2-plot-tasks__name[data-v-7a4b4a71],\n.acu-v2-plot-tasks__card--active .acu-v2-plot-tasks__stage[data-v-7a4b4a71],\n.acu-v2-plot-tasks__card--active .acu-v2-plot-tasks__seg-count[data-v-7a4b4a71],\n.acu-v2-plot-tasks__card--active .acu-v2-plot-tasks__disabled-label[data-v-7a4b4a71] {\n  color: var(--acu-on-accent);\n}\n.acu-v2-plot-tasks__stage[data-v-7a4b4a71] {\n  font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-plot-tasks__seg-count[data-v-7a4b4a71] {\n  font-size: var(--acu-font-size-micro, 10px); color: var(--acu-text-3);\n  margin-top: auto;\n}\n.acu-v2-plot-tasks__disabled-label[data-v-7a4b4a71] {\n  font-size: var(--acu-font-size-micro, 10px); color: var(--acu-warning);\n  font-weight: 500;\n}\n.acu-v2-plot-tasks__empty[data-v-7a4b4a71] {\n  padding: 16px 12px; text-align: center;\n  color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n  flex: 1;\n}\n", "src/presentation-v2/components/PlotTaskList.vue#style-0-7a4b4a71");
+    var PlotTaskList_vue_vue_type_style_index_0_scoped_7a4b4a71_lang = null;
 
-    const _hoisted_1$F = { class: "acu-v2-plot-tasks" };
-    const _hoisted_2$y = { class: "acu-v2-plot-tasks__toolbar" };
+    const _hoisted_1$E = { class: "acu-v2-plot-tasks" };
+    const _hoisted_2$x = { class: "acu-v2-plot-tasks__toolbar" };
     const _hoisted_3$r = { class: "acu-v2-plot-tasks__cards" };
     const _hoisted_4$n = ["onClick"];
     const _hoisted_5$i = { class: "acu-v2-plot-tasks__name" };
@@ -79438,14 +79790,14 @@ Expected function or array of functions, received type ${typeof value}.`
     	key: 0,
     	class: "acu-v2-plot-tasks__empty"
     };
-    function _sfc_render$F(_ctx, _cache, $props, $setup, $data, $options) {
-    	return openBlock(), createElementBlock("fieldset", _hoisted_1$F, [createBaseVNode("legend", null, [_cache[4] || (_cache[4] = createBaseVNode(
+    function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
+    	return openBlock(), createElementBlock("fieldset", _hoisted_1$E, [createBaseVNode("legend", null, [_cache[4] || (_cache[4] = createBaseVNode(
     		"span",
     		null,
     		"剧情任务列表",
     		-1
     		/* CACHED */
-    	)), createBaseVNode("span", _hoisted_2$y, [
+    	)), createBaseVNode("span", _hoisted_2$x, [
     		createVNode($setup["AcuIconButton"], {
     			icon: "fa-solid fa-arrow-left",
     			size: "sm",
@@ -79516,9 +79868,9 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* KEYED_FRAGMENT */
     	)), !$props.tasks.length ? (openBlock(), createElementBlock("div", _hoisted_9$b, "暂无任务，点击右上 + 新增。")) : createCommentVNode("v-if", true)])]);
     }
-    var PlotTaskList = /* @__PURE__ */ _export_sfc(_sfc_main$F, [["render", _sfc_render$F]]);
+    var PlotTaskList = /* @__PURE__ */ _export_sfc(_sfc_main$E, [["render", _sfc_render$E], ["__scopeId", "data-v-7a4b4a71"]]);
 
-    var _sfc_main$E = /*@__PURE__*/ defineComponent({
+    var _sfc_main$D = /*@__PURE__*/ defineComponent({
         __name: 'PlotPresetDrawer',
         props: {
             isOpen: { type: Boolean },
@@ -79544,27 +79896,27 @@ Expected function or array of functions, received type ${typeof value}.`
             function onTaskApiOverride(value) {
                 emit("update-task-api-override", value);
             }
-            const __returned__ = { props, emit, onTaskApiOverride, AcuButton, AcuDrawer, AcuFormRow, AcuIconButton, AcuInput, AcuRulePairList, AcuText, AcuTextarea, PlotTaskEditor, PlotTaskList };
+            const __returned__ = { props, emit, onTaskApiOverride, AcuButton, AcuDrawer, AcuFormRow, AcuIconButton, AcuInput, AcuRulePairList, AcuText, AcuTextarea, PlotMatchReplaceFields, PlotTaskEditor, PlotTaskList };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-v2-plot-drawer__create-btn {\n  width: 100%;\n}\n.acu-v2-plot-drawer__empty {\n  margin-top: 20px;\n}\n.acu-v2-plot-drawer__actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  flex-wrap: wrap;\n  padding-top: 12px;\n  margin-top: 12px;\n}\n\n/* manage list */\n.acu-v2-manage-list {\n  list-style: none;\n  margin: 0;\n  padding: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-v2-manage-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 10px 12px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-manage-item:last-child {\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info {\n  flex: 1;\n  min-width: 0;\n}\n.acu-v2-manage-item__name {\n  display: block;\n  font-size: var(--acu-font-size-list-title, 13px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 500;\n  color: var(--acu-text-1);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta {\n  display: block;\n  margin-top: 2px;\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: var(--acu-line-height-caption, 1.5);\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions {\n  display: flex;\n  gap: 4px;\n}\n\n/* form */\n.acu-v2-form {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-v2-form__section {\n  min-width: 0;\n  margin: 0;\n  padding: 0 0 14px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-v2-form__section:last-of-type {\n  padding-bottom: 0;\n  border-bottom: 0;\n}\n.acu-v2-form__section legend {\n  padding: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-section-title, 12px);\n  font-weight: 600;\n}\n.acu-v2-plot-drawer__rules {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  min-width: 0;\n}\n.acu-v2-error {\n  padding: 8px 10px;\n  background: color-mix(in srgb, var(--acu-danger) 10%, transparent);\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n}\n", "src/presentation-v2/components/PlotPresetDrawer.vue#style-0");
-    var PlotPresetDrawer_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-plot-drawer__create-btn[data-v-ca0deda5] {\n  width: 100%;\n}\n.acu-v2-plot-drawer__empty[data-v-ca0deda5] {\n  margin-top: 20px;\n}\n.acu-v2-plot-drawer__actions[data-v-ca0deda5] {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  flex-wrap: wrap;\n  padding-top: 12px;\n  margin-top: 12px;\n}\n\n/* manage list */\n.acu-v2-manage-list[data-v-ca0deda5] {\n  list-style: none;\n  margin: 0;\n  padding: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-v2-manage-item[data-v-ca0deda5] {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 10px 12px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-manage-item[data-v-ca0deda5]:last-child {\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info[data-v-ca0deda5] {\n  flex: 1;\n  min-width: 0;\n}\n.acu-v2-manage-item__name[data-v-ca0deda5] {\n  display: block;\n  font-size: var(--acu-font-size-list-title, 13px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 500;\n  color: var(--acu-text-1);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta[data-v-ca0deda5] {\n  display: block;\n  margin-top: 2px;\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: var(--acu-line-height-caption, 1.5);\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions[data-v-ca0deda5] {\n  display: flex;\n  gap: 4px;\n}\n\n/* form */\n.acu-v2-form[data-v-ca0deda5] {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-v2-form__section[data-v-ca0deda5] {\n  min-width: 0;\n  margin: 0;\n  padding: 0 0 14px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-v2-form__section[data-v-ca0deda5]:last-of-type {\n  padding-bottom: 0;\n  border-bottom: 0;\n}\n.acu-v2-form__section legend[data-v-ca0deda5] {\n  padding: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-section-title, 12px);\n  font-weight: 600;\n}\n.acu-v2-plot-drawer__rules[data-v-ca0deda5] {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  min-width: 0;\n}\n.acu-v2-error[data-v-ca0deda5] {\n  padding: 8px 10px;\n  background: color-mix(in srgb, var(--acu-danger) 10%, transparent);\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n}\n", "src/presentation-v2/components/PlotPresetDrawer.vue#style-0-ca0deda5");
+    var PlotPresetDrawer_vue_vue_type_style_index_0_scoped_ca0deda5_lang = null;
 
-    const _hoisted_1$E = {
+    const _hoisted_1$D = {
     	key: 0,
     	class: "acu-v2-manage-list"
     };
-    const _hoisted_2$x = { class: "acu-v2-manage-item__info" };
+    const _hoisted_2$w = { class: "acu-v2-manage-item__info" };
     const _hoisted_3$q = { class: "acu-v2-manage-item__actions" };
     const _hoisted_4$m = { class: "acu-v2-form__section" };
     const _hoisted_5$h = { class: "acu-v2-form__section" };
     const _hoisted_6$f = { class: "acu-v2-plot-drawer__rules" };
     const _hoisted_7$d = { class: "acu-v2-form__section" };
     const _hoisted_8$c = { class: "acu-v2-plot-drawer__actions" };
-    function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createBlock($setup["AcuDrawer"], {
     		"is-open": $props.isOpen,
     		title: $props.title,
@@ -79594,14 +79946,14 @@ Expected function or array of functions, received type ${typeof value}.`
     					/* CACHED */
     				)])]),
     				_: 1
-    			}), $props.presetMeta.length ? (openBlock(), createElementBlock("ul", _hoisted_1$E, [(openBlock(true), createElementBlock(
+    			}), $props.presetMeta.length ? (openBlock(), createElementBlock("ul", _hoisted_1$D, [(openBlock(true), createElementBlock(
     				Fragment,
     				null,
     				renderList($props.presetMeta, (meta) => {
     					return openBlock(), createElementBlock("li", {
     						key: meta.name,
     						class: "acu-v2-manage-item"
-    					}, [createBaseVNode("div", _hoisted_2$x, [createVNode(
+    					}, [createBaseVNode("div", _hoisted_2$w, [createVNode(
     						$setup["AcuText"],
     						{
     							as: "span",
@@ -79746,12 +80098,27 @@ Expected function or array of functions, received type ${typeof value}.`
     							"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => _ctx.$emit("update-context-exclude-rules", $event))
     						}, null, 8, ["model-value"])])
     					]),
+    					$props.showAdvancedRates ? (openBlock(), createBlock($setup["PlotMatchReplaceFields"], {
+    						key: 0,
+    						"rate-main": $props.rates.rateMain,
+    						"rate-personal": $props.rates.ratePersonal,
+    						"rate-erotic": $props.rates.rateErotic,
+    						"rate-cuckold": $props.rates.rateCuckold,
+    						"recall-count": $props.rates.recallCount,
+    						onUpdateRate: _cache[4] || (_cache[4] = (field, value) => _ctx.$emit("update-rate", field, value))
+    					}, null, 8, [
+    						"rate-main",
+    						"rate-personal",
+    						"rate-erotic",
+    						"rate-cuckold",
+    						"recall-count"
+    					])) : createCommentVNode("v-if", true),
     					createVNode($setup["PlotTaskList"], {
     						tasks: $props.taskEditing.tasks.value,
     						"current-task-id": $props.taskEditing.currentTaskId.value,
     						onAdd: $props.taskEditing.addTask,
-    						onSelect: _cache[4] || (_cache[4] = ($event) => $props.taskEditing.selectTask($event)),
-    						onMove: _cache[5] || (_cache[5] = ($event) => $props.taskEditing.moveCurrent($event)),
+    						onSelect: _cache[5] || (_cache[5] = ($event) => $props.taskEditing.selectTask($event)),
+    						onMove: _cache[6] || (_cache[6] = ($event) => $props.taskEditing.moveCurrent($event)),
     						onDelete: $props.taskEditing.deleteCurrentTask
     					}, null, 8, [
     						"tasks",
@@ -79763,11 +80130,8 @@ Expected function or array of functions, received type ${typeof value}.`
     						task: $props.taskEditing.currentTask.value,
     						"api-preset-options": $props.apiPresetOptions,
     						"task-api-override": $props.currentTaskApiOverride,
-    						"show-advanced-rates": $props.showAdvancedRates,
-    						rates: $props.rates,
-    						onPatch: _cache[6] || (_cache[6] = ($event) => $props.taskEditing.patchCurrent($event)),
+    						onPatch: _cache[7] || (_cache[7] = ($event) => $props.taskEditing.patchCurrent($event)),
     						onTaskApiOverride: $setup.onTaskApiOverride,
-    						onUpdateRate: _cache[7] || (_cache[7] = (field, value) => _ctx.$emit("update-rate", field, value)),
     						onSegmentAdd: _cache[8] || (_cache[8] = ($event) => $props.taskEditing.addSegment($event)),
     						onSegmentDelete: _cache[9] || (_cache[9] = ($event) => $props.taskEditing.deleteSegment($event)),
     						onSegmentMove: _cache[10] || (_cache[10] = (index, delta) => $props.taskEditing.moveSegment(index, delta)),
@@ -79775,9 +80139,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					}, null, 8, [
     						"task",
     						"api-preset-options",
-    						"task-api-override",
-    						"show-advanced-rates",
-    						"rates"
+    						"task-api-override"
     					]),
     					createBaseVNode("fieldset", _hoisted_7$d, [_cache[22] || (_cache[22] = createBaseVNode(
     						"legend",
@@ -79792,7 +80154,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $props.taskEditing.finalDirective.value = $event)
     					}, null, 8, ["model-value"])]),
     					$props.error ? (openBlock(), createBlock($setup["AcuText"], {
-    						key: 0,
+    						key: 1,
     						variant: "error",
     						class: "acu-v2-error",
     						role: "alert"
@@ -79837,9 +80199,9 @@ Expected function or array of functions, received type ${typeof value}.`
     		"before-close"
     	]);
     }
-    var PlotPresetDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$E, [["render", _sfc_render$E]]);
+    var PlotPresetDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$D, [["render", _sfc_render$D], ["__scopeId", "data-v-ca0deda5"]]);
 
-    var _sfc_main$D = /*@__PURE__*/ defineComponent({
+    var _sfc_main$C = /*@__PURE__*/ defineComponent({
         __name: 'PlotPresetPanel',
         props: {
             showEdit: { type: Boolean, default: true },
@@ -79853,7 +80215,6 @@ Expected function or array of functions, received type ${typeof value}.`
             const { apiStore, followActiveApiLabel, apiPresetSelectOptions: pageApiSelectOptions, } = useApiPresetSelectOptions();
             const management = usePlotPresetManagement();
             const devOptions = useDevOptions();
-            const rates = usePlotRates();
             const presetDropdownItems = computed(() => [
                 {
                     value: "",
@@ -79867,13 +80228,6 @@ Expected function or array of functions, received type ${typeof value}.`
                 })),
             ]);
             const apiPresetOptions = computed(() => apiStore.presets.map((p) => ({ name: p.name })));
-            const rateValues = computed(() => ({
-                rateMain: rates.rateMain.value,
-                ratePersonal: rates.ratePersonal.value,
-                rateErotic: rates.rateErotic.value,
-                rateCuckold: rates.rateCuckold.value,
-                recallCount: rates.recallCount.value,
-            }));
             const currentTaskApiOverride = computed(() => {
                 const taskId = management.taskEditing.currentTaskId.value;
                 if (!taskId)
@@ -79934,24 +80288,22 @@ Expected function or array of functions, received type ${typeof value}.`
             function refreshAll() {
                 store.refreshFromSettings();
                 apiStore.refreshFromSettings();
-                rates.refresh();
             }
             onMounted(refreshAll);
-            watch(() => store.activePresetName, () => rates.refresh());
             watch(useChatChangedTick(), refreshAll);
-            const __returned__ = { store, dialogStore, toast, apiStore, followActiveApiLabel, pageApiSelectOptions, management, devOptions, rates, presetDropdownItems, apiPresetOptions, rateValues, currentTaskApiOverride, onTaskApiOverride, onDelete, onExport, onImportFile, refreshAll, get plotCopy() { return plotCopy; }, AcuBadge, AcuFileButton, AcuFormRow, AcuIconButton, AcuPanel, AcuPresetDropdown, AcuSelect, AcuText, PlotPresetDrawer };
+            const __returned__ = { store, dialogStore, toast, apiStore, followActiveApiLabel, pageApiSelectOptions, management, devOptions, presetDropdownItems, apiPresetOptions, currentTaskApiOverride, onTaskApiOverride, onDelete, onExport, onImportFile, refreshAll, get plotCopy() { return plotCopy; }, AcuBadge, AcuFileButton, AcuFormRow, AcuIconButton, AcuPanel, AcuPresetDropdown, AcuSelect, AcuText, PlotPresetDrawer };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-plot-preset-panel__status-line {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-plot-preset-panel__select-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\n  gap: 6px;\n  align-items: stretch;\n  margin-bottom: 12px;\n  min-width: 0;\n}\n", "src/presentation-v2/components/PlotPresetPanel.vue#style-0");
-    var PlotPresetPanel_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-plot-preset-panel__status-line[data-v-7579363d] {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-plot-preset-panel__select-row[data-v-7579363d] {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\n  gap: 6px;\n  align-items: stretch;\n  margin-bottom: 12px;\n  min-width: 0;\n}\n", "src/presentation-v2/components/PlotPresetPanel.vue#style-0-7579363d");
+    var PlotPresetPanel_vue_vue_type_style_index_0_scoped_7579363d_lang = null;
 
-    const _hoisted_1$D = { class: "acu-text__value" };
-    const _hoisted_2$w = { class: "acu-text__value" };
+    const _hoisted_1$C = { class: "acu-text__value" };
+    const _hoisted_2$v = { class: "acu-text__value" };
     const _hoisted_3$p = { class: "acu-plot-preset-panel__select-row" };
-    function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$C(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createBlock($setup["AcuPanel"], {
     		title: $setup.plotCopy.panels.preset.title,
     		description: $setup.plotCopy.panels.preset.description
@@ -79980,7 +80332,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					)),
     					createBaseVNode(
     						"strong",
-    						_hoisted_1$D,
+    						_hoisted_1$C,
     						toDisplayString($setup.store.activePresetName || "默认预设"),
     						1
     						/* TEXT */
@@ -79994,7 +80346,7 @@ Expected function or array of functions, received type ${typeof value}.`
     							/* CACHED */
     						)), createBaseVNode(
     							"strong",
-    							_hoisted_2$w,
+    							_hoisted_2$v,
     							toDisplayString($setup.store.defaultPresetName),
     							1
     							/* TEXT */
@@ -80098,7 +80450,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				"task-editing": $setup.management.taskEditing,
     				"current-task-api-override": $setup.currentTaskApiOverride,
     				"show-advanced-rates": $setup.devOptions.plotAdvanced.value,
-    				rates: $setup.rateValues,
+    				rates: $setup.management.draftRates,
     				"before-close": () => $setup.management.confirmIfDirty(),
     				onClose: $setup.management.closeDrawer,
     				onBack: $setup.management.backToManage,
@@ -80112,7 +80464,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				onUpdateContextExtractRules: $setup.management.setContextExtractRules,
     				onUpdateContextExcludeRules: $setup.management.setContextExcludeRules,
     				onUpdateTaskApiOverride: $setup.onTaskApiOverride,
-    				onUpdateRate: $setup.rates.setRate
+    				onUpdateRate: $setup.management.setDraftRate
     			}, null, 8, [
     				"is-open",
     				"view",
@@ -80140,9 +80492,9 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	}, 8, ["title", "description"]);
     }
-    var PlotPresetPanel = /* @__PURE__ */ _export_sfc(_sfc_main$D, [["render", _sfc_render$D]]);
+    var PlotPresetPanel = /* @__PURE__ */ _export_sfc(_sfc_main$C, [["render", _sfc_render$C], ["__scopeId", "data-v-7579363d"]]);
 
-    var _sfc_main$C = /*@__PURE__*/ defineComponent({
+    var _sfc_main$B = /*@__PURE__*/ defineComponent({
         __name: 'TablePresetDrawer',
         props: {
             isOpen: { type: Boolean },
@@ -80161,17 +80513,17 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-table-drawer__top-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-v2-manage-list {\n  list-style: none;\n  margin: 0;\n  padding: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-v2-manage-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 10px 12px;\n  border: 0;\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-manage-item:last-child {\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info {\n  flex: 1;\n  min-width: 0;\n}\n.acu-v2-manage-item__name {\n  display: block;\n  font-size: var(--acu-font-size-list-title, 13px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 500;\n  color: var(--acu-text-1);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta {\n  display: block;\n  margin-top: 2px;\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: var(--acu-line-height-caption, 1.5);\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions {\n  display: flex;\n  gap: 4px;\n}\n.acu-v2-table-drawer__empty {\n  margin: 12px 0;\n}\n\n", "src/presentation-v2/components/TablePresetDrawer.vue#style-0");
-    var TablePresetDrawer_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-table-drawer__top-actions[data-v-c62ecd3b] {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-v2-manage-list[data-v-c62ecd3b] {\n  list-style: none;\n  margin: 0;\n  padding: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-v2-manage-item[data-v-c62ecd3b] {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 10px 12px;\n  border: 0;\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-manage-item[data-v-c62ecd3b]:last-child {\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info[data-v-c62ecd3b] {\n  flex: 1;\n  min-width: 0;\n}\n.acu-v2-manage-item__name[data-v-c62ecd3b] {\n  display: block;\n  font-size: var(--acu-font-size-list-title, 13px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 500;\n  color: var(--acu-text-1);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta[data-v-c62ecd3b] {\n  display: block;\n  margin-top: 2px;\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: var(--acu-line-height-caption, 1.5);\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions[data-v-c62ecd3b] {\n  display: flex;\n  gap: 4px;\n}\n.acu-v2-table-drawer__empty[data-v-c62ecd3b] {\n  margin: 12px 0;\n}\n\n", "src/presentation-v2/components/TablePresetDrawer.vue#style-0-c62ecd3b");
+    var TablePresetDrawer_vue_vue_type_style_index_0_scoped_c62ecd3b_lang = null;
 
-    const _hoisted_1$C = { class: "acu-v2-table-drawer__top-actions" };
-    const _hoisted_2$v = {
+    const _hoisted_1$B = { class: "acu-v2-table-drawer__top-actions" };
+    const _hoisted_2$u = {
     	key: 1,
     	class: "acu-v2-manage-list"
     };
     const _hoisted_3$o = { class: "acu-v2-manage-item__info" };
     const _hoisted_4$l = { class: "acu-v2-manage-item__actions" };
-    function _sfc_render$C(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createBlock($setup["AcuDrawer"], {
     		"is-open": $props.isOpen,
     		title: $props.title,
@@ -80190,7 +80542,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				)]),
     				_: 1
     			}, 8, ["kind"])) : createCommentVNode("v-if", true),
-    			createBaseVNode("div", _hoisted_1$C, [createVNode($setup["AcuButton"], {
+    			createBaseVNode("div", _hoisted_1$B, [createVNode($setup["AcuButton"], {
     				variant: "primary",
     				disabled: $props.busy,
     				onClick: _cache[0] || (_cache[0] = ($event) => _ctx.$emit("create-blank"))
@@ -80208,7 +80560,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				)])]),
     				_: 1
     			}, 8, ["disabled"])]),
-    			$props.presetMeta.length ? (openBlock(), createElementBlock("ul", _hoisted_2$v, [(openBlock(true), createElementBlock(
+    			$props.presetMeta.length ? (openBlock(), createElementBlock("ul", _hoisted_2$u, [(openBlock(true), createElementBlock(
     				Fragment,
     				null,
     				renderList($props.presetMeta, (meta) => {
@@ -80326,7 +80678,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	}, 8, ["is-open", "title"]);
     }
-    var TablePresetDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$C, [["render", _sfc_render$C]]);
+    var TablePresetDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$B, [["render", _sfc_render$B], ["__scopeId", "data-v-c62ecd3b"]]);
 
     /**
      * root-shell-store — 顶层外壳状态（开关、挂载次数）
@@ -81395,7 +81747,7 @@ Expected function or array of functions, received type ${typeof value}.`
         },
     };
 
-    var _sfc_main$B = /*@__PURE__*/ defineComponent({
+    var _sfc_main$A = /*@__PURE__*/ defineComponent({
         __name: 'TableTemplatePresetPanel',
         setup(__props, { expose: __expose }) {
             __expose();
@@ -81413,14 +81765,14 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-table-template-panel__status-line {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-table-template-panel__preset-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) repeat(2, max-content);\n  gap: 6px;\n  align-items: stretch;\n  min-width: 0;\n}\n.acu-table-template-panel__action-area {\n  margin-top: 10px;\n}\n.acu-table-template-panel__visualizer-button {\n  width: 100%;\n}\n\n", "src/presentation-v2/components/TableTemplatePresetPanel.vue#style-0");
-    var TableTemplatePresetPanel_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-table-template-panel__status-line[data-v-f19bcd27] {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-table-template-panel__preset-row[data-v-f19bcd27] {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) repeat(2, max-content);\n  gap: 6px;\n  align-items: stretch;\n  min-width: 0;\n}\n.acu-table-template-panel__action-area[data-v-f19bcd27] {\n  margin-top: 10px;\n}\n.acu-table-template-panel__visualizer-button[data-v-f19bcd27] {\n  width: 100%;\n}\n\n", "src/presentation-v2/components/TableTemplatePresetPanel.vue#style-0-f19bcd27");
+    var TableTemplatePresetPanel_vue_vue_type_style_index_0_scoped_f19bcd27_lang = null;
 
-    const _hoisted_1$B = { class: "acu-text__value" };
-    const _hoisted_2$u = { class: "acu-text__value" };
+    const _hoisted_1$A = { class: "acu-text__value" };
+    const _hoisted_2$t = { class: "acu-text__value" };
     const _hoisted_3$n = { class: "acu-table-template-panel__preset-row" };
     const _hoisted_4$k = { class: "acu-table-template-panel__action-area" };
-    function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$A(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createBlock($setup["AcuPanel"], {
     		title: $setup.tableCopy.panels.templatePreset.title,
     		description: $setup.tableCopy.panels.templatePreset.description
@@ -81460,7 +81812,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					)),
     					createBaseVNode(
     						"strong",
-    						_hoisted_1$B,
+    						_hoisted_1$A,
     						toDisplayString($setup.templates.selectedChatPreset.value || "默认预设"),
     						1
     						/* TEXT */
@@ -81474,7 +81826,7 @@ Expected function or array of functions, received type ${typeof value}.`
     							/* CACHED */
     						)), createBaseVNode(
     							"strong",
-    							_hoisted_2$u,
+    							_hoisted_2$t,
     							toDisplayString($setup.templates.selectedGlobalPreset.value),
     							1
     							/* TEXT */
@@ -81595,7 +81947,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	}, 8, ["title", "description"]);
     }
-    var TableTemplatePresetPanel = /* @__PURE__ */ _export_sfc(_sfc_main$B, [["render", _sfc_render$B]]);
+    var TableTemplatePresetPanel = /* @__PURE__ */ _export_sfc(_sfc_main$A, [["render", _sfc_render$A], ["__scopeId", "data-v-f19bcd27"]]);
 
     const basicConfigCopy = {
         nav: {
@@ -81606,7 +81958,7 @@ Expected function or array of functions, received type ${typeof value}.`
         },
     };
 
-    var _sfc_main$A = /*@__PURE__*/ defineComponent({
+    var _sfc_main$z = /*@__PURE__*/ defineComponent({
         __name: 'BasicConfigPage',
         setup(__props, { expose: __expose }) {
             __expose();
@@ -81622,12 +81974,12 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-basic-config-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-basic-config-page__grid {\n  grid-template-areas:\n    \"api update\"\n    \"api table\"\n    \"api plot\";\n}\n.acu-v2-basic-config-page__api {\n  grid-area: api;\n}\n.acu-v2-basic-config-page__update {\n  grid-area: update;\n}\n.acu-v2-basic-config-page__table {\n  grid-area: table;\n}\n.acu-v2-basic-config-page__plot {\n  grid-area: plot;\n}\n@media (max-width: 860px) {\n.acu-v2-basic-config-page {\n    padding: 14px;\n}\n.acu-v2-basic-config-page__grid {\n    grid-template-areas:\n      \"api\"\n      \"update\"\n      \"table\"\n      \"plot\";\n}\n}\n", "src/presentation-v2/pages/BasicConfigPage.vue#style-0");
-    var BasicConfigPage_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-basic-config-page[data-v-fa7634d8] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-basic-config-page__grid[data-v-fa7634d8] {\n  grid-template-areas:\n    \"api update\"\n    \"api table\"\n    \"api plot\";\n}\n.acu-v2-basic-config-page__api[data-v-fa7634d8] {\n  grid-area: api;\n}\n.acu-v2-basic-config-page__update[data-v-fa7634d8] {\n  grid-area: update;\n}\n.acu-v2-basic-config-page__table[data-v-fa7634d8] {\n  grid-area: table;\n}\n.acu-v2-basic-config-page__plot[data-v-fa7634d8] {\n  grid-area: plot;\n}\n@media (max-width: 860px) {\n.acu-v2-basic-config-page[data-v-fa7634d8] {\n    padding: 14px;\n}\n.acu-v2-basic-config-page__grid[data-v-fa7634d8] {\n    grid-template-areas:\n      \"api\"\n      \"update\"\n      \"table\"\n      \"plot\";\n}\n}\n", "src/presentation-v2/pages/BasicConfigPage.vue#style-0-fa7634d8");
+    var BasicConfigPage_vue_vue_type_style_index_0_scoped_fa7634d8_lang = null;
 
-    const _hoisted_1$A = { class: "acu-v2-basic-config-page" };
-    function _sfc_render$A(_ctx, _cache, $props, $setup, $data, $options) {
-    	return openBlock(), createElementBlock("section", _hoisted_1$A, [createVNode($setup["AcuMobilePanelNav"], { items: $setup.panelNavItems }), createVNode($setup["AcuPanelGrid"], { class: "acu-v2-basic-config-page__grid" }, {
+    const _hoisted_1$z = { class: "acu-v2-basic-config-page" };
+    function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
+    	return openBlock(), createElementBlock("section", _hoisted_1$z, [createVNode($setup["AcuMobilePanelNav"], { items: $setup.panelNavItems }), createVNode($setup["AcuPanelGrid"], { class: "acu-v2-basic-config-page__grid" }, {
     		default: withCtx(() => [
     			createVNode($setup["ApiConfigPanel"], {
     				id: "basic-config-api-panel",
@@ -81650,7 +82002,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	})]);
     }
-    var BasicConfigPage = /* @__PURE__ */ _export_sfc(_sfc_main$A, [["render", _sfc_render$A]]);
+    var BasicConfigPage = /* @__PURE__ */ _export_sfc(_sfc_main$z, [["render", _sfc_render$z], ["__scopeId", "data-v-fa7634d8"]]);
 
     const dashboardCopy = {
         pageTitle: "仪表盘",
@@ -81895,7 +82247,7 @@ Expected function or array of functions, received type ${typeof value}.`
         },
     };
 
-    var _sfc_main$z = /*@__PURE__*/ defineComponent({
+    var _sfc_main$y = /*@__PURE__*/ defineComponent({
         __name: 'DashboardStorageModeSection',
         props: {
             options: {},
@@ -81928,11 +82280,11 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-dashboard-storage-mode {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-dashboard-storage-mode__head {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n}\n.acu-dashboard-storage-mode__label {\n  min-width: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n}\n.acu-dashboard-storage-mode__desc-main {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-dashboard-storage-mode__switch {\n  flex: 0 0 auto;\n  width: 92px;\n}\n.acu-dashboard-storage-mode__cards {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  margin-top: 4px;\n}\n.acu-dashboard-storage-mode__card {\n  position: relative;\n  min-width: 0;\n  padding: 5px 0 5px 8px;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  display: grid;\n  grid-template-columns: 26px minmax(0, 1fr);\n  gap: 8px;\n  align-items: center;\n  transition:\n    background 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-dashboard-storage-mode__card--active {\n  background: color-mix(in srgb, var(--acu-accent) 8%, transparent);\n  box-shadow:\n    inset 0 0 0 1px\n    color-mix(in srgb, var(--acu-accent) 30%, transparent);\n}\n.acu-dashboard-storage-mode__icon {\n  width: 26px;\n  height: 26px;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: var(--acu-text-3);\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  font-size: 15px;\n}\n.acu-dashboard-storage-mode__card--active .acu-dashboard-storage-mode__icon {\n  color: var(--acu-accent);\n  background: transparent;\n}\n.acu-dashboard-storage-mode__body {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-dashboard-storage-mode__card-head {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex-wrap: wrap;\n  gap: 6px;\n}\n.acu-dashboard-storage-mode__name {\n  min-width: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  font-weight: 600;\n  line-height: 1.25;\n}\n.acu-dashboard-storage-mode__badge {\n  display: inline-flex;\n  align-items: center;\n  min-height: 18px;\n  padding: 1px 6px;\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-micro, 10px);\n  line-height: 1.2;\n  white-space: nowrap;\n}\n.acu-dashboard-storage-mode__card--active .acu-dashboard-storage-mode__badge {\n  background: color-mix(in srgb, var(--acu-accent) 16%, transparent);\n  color: var(--acu-accent);\n}\n.acu-dashboard-storage-mode__desc {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n@media (max-width: 640px) {\n.acu-dashboard-storage-mode__head {\n    align-items: center;\n}\n.acu-dashboard-storage-mode__switch {\n    width: 88px;\n}\n.acu-dashboard-storage-mode__card {\n    grid-template-columns: minmax(0, 1fr);\n}\n.acu-dashboard-storage-mode__icon {\n    display: none;\n}\n}\n", "src/presentation-v2/components/DashboardStorageModeSection.vue#style-0");
-    var DashboardStorageModeSection_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-dashboard-storage-mode[data-v-1bd9ac99] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-dashboard-storage-mode__head[data-v-1bd9ac99] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n}\n.acu-dashboard-storage-mode__label[data-v-1bd9ac99] {\n  min-width: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n}\n.acu-dashboard-storage-mode__desc-main[data-v-1bd9ac99] {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-dashboard-storage-mode__switch[data-v-1bd9ac99] {\n  flex: 0 0 auto;\n  width: 92px;\n}\n.acu-dashboard-storage-mode__cards[data-v-1bd9ac99] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  margin-top: 4px;\n}\n.acu-dashboard-storage-mode__card[data-v-1bd9ac99] {\n  position: relative;\n  min-width: 0;\n  padding: 5px 0 5px 8px;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  display: grid;\n  grid-template-columns: 26px minmax(0, 1fr);\n  gap: 8px;\n  align-items: center;\n  transition:\n    background 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-dashboard-storage-mode__card--active[data-v-1bd9ac99] {\n  background: color-mix(in srgb, var(--acu-accent) 8%, transparent);\n  box-shadow:\n    inset 0 0 0 1px\n    color-mix(in srgb, var(--acu-accent) 30%, transparent);\n}\n.acu-dashboard-storage-mode__icon[data-v-1bd9ac99] {\n  width: 26px;\n  height: 26px;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: var(--acu-text-3);\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  font-size: 15px;\n}\n.acu-dashboard-storage-mode__card--active .acu-dashboard-storage-mode__icon[data-v-1bd9ac99] {\n  color: var(--acu-accent);\n  background: transparent;\n}\n.acu-dashboard-storage-mode__body[data-v-1bd9ac99] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-dashboard-storage-mode__card-head[data-v-1bd9ac99] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex-wrap: wrap;\n  gap: 6px;\n}\n.acu-dashboard-storage-mode__name[data-v-1bd9ac99] {\n  min-width: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  font-weight: 600;\n  line-height: 1.25;\n}\n.acu-dashboard-storage-mode__badge[data-v-1bd9ac99] {\n  display: inline-flex;\n  align-items: center;\n  min-height: 18px;\n  padding: 1px 6px;\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-micro, 10px);\n  line-height: 1.2;\n  white-space: nowrap;\n}\n.acu-dashboard-storage-mode__card--active .acu-dashboard-storage-mode__badge[data-v-1bd9ac99] {\n  background: color-mix(in srgb, var(--acu-accent) 16%, transparent);\n  color: var(--acu-accent);\n}\n.acu-dashboard-storage-mode__desc[data-v-1bd9ac99] {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n@media (max-width: 640px) {\n.acu-dashboard-storage-mode__head[data-v-1bd9ac99] {\n    align-items: center;\n}\n.acu-dashboard-storage-mode__switch[data-v-1bd9ac99] {\n    width: 88px;\n}\n.acu-dashboard-storage-mode__card[data-v-1bd9ac99] {\n    grid-template-columns: minmax(0, 1fr);\n}\n.acu-dashboard-storage-mode__icon[data-v-1bd9ac99] {\n    display: none;\n}\n}\n", "src/presentation-v2/components/DashboardStorageModeSection.vue#style-0-1bd9ac99");
+    var DashboardStorageModeSection_vue_vue_type_style_index_0_scoped_1bd9ac99_lang = null;
 
-    const _hoisted_1$z = ["aria-label"];
-    const _hoisted_2$t = { class: "acu-dashboard-storage-mode__head" };
+    const _hoisted_1$y = ["aria-label"];
+    const _hoisted_2$s = { class: "acu-dashboard-storage-mode__head" };
     const _hoisted_3$m = { class: "acu-dashboard-storage-mode__label" };
     const _hoisted_4$j = { class: "acu-dashboard-storage-mode__desc-main" };
     const _hoisted_5$g = { class: "acu-dashboard-storage-mode__cards" };
@@ -81945,12 +82297,12 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_9$a = { class: "acu-dashboard-storage-mode__name" };
     const _hoisted_10$a = { class: "acu-dashboard-storage-mode__badge" };
     const _hoisted_11$9 = { class: "acu-dashboard-storage-mode__desc" };
-    function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
+    function _sfc_render$y(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock("section", {
     		class: "acu-dashboard-storage-mode",
     		"aria-label": $setup.dashboardCopy.storage.sectionLabel
     	}, [
-    		createBaseVNode("div", _hoisted_2$t, [createBaseVNode(
+    		createBaseVNode("div", _hoisted_2$s, [createBaseVNode(
     			"span",
     			_hoisted_3$m,
     			toDisplayString($setup.dashboardCopy.storage.sectionLabel),
@@ -82017,11 +82369,11 @@ Expected function or array of functions, received type ${typeof value}.`
     			128
     			/* KEYED_FRAGMENT */
     		))])
-    	], 8, _hoisted_1$z);
+    	], 8, _hoisted_1$y);
     }
-    var DashboardStorageModeSection = /* @__PURE__ */ _export_sfc(_sfc_main$z, [["render", _sfc_render$z]]);
+    var DashboardStorageModeSection = /* @__PURE__ */ _export_sfc(_sfc_main$y, [["render", _sfc_render$y], ["__scopeId", "data-v-1bd9ac99"]]);
 
-    var _sfc_main$y = /*@__PURE__*/ defineComponent({
+    var _sfc_main$x = /*@__PURE__*/ defineComponent({
         __name: 'DashboardToggleRow',
         props: {
             item: {}
@@ -82042,18 +82394,18 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-dashboard-toggle-row {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-dashboard-toggle-row__head {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n}\n.acu-dashboard-toggle-row__label {\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n  color: var(--acu-text-1);\n  min-width: 0;\n}\n.acu-dashboard-toggle-row__desc {\n  margin: 0;\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n  color: var(--acu-text-3);\n}\n", "src/presentation-v2/components/DashboardToggleRow.vue#style-0");
-    var DashboardToggleRow_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-dashboard-toggle-row[data-v-f6b0b7a6] {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-dashboard-toggle-row__head[data-v-f6b0b7a6] {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n}\n.acu-dashboard-toggle-row__label[data-v-f6b0b7a6] {\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n  color: var(--acu-text-1);\n  min-width: 0;\n}\n.acu-dashboard-toggle-row__desc[data-v-f6b0b7a6] {\n  margin: 0;\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n  color: var(--acu-text-3);\n}\n", "src/presentation-v2/components/DashboardToggleRow.vue#style-0-f6b0b7a6");
+    var DashboardToggleRow_vue_vue_type_style_index_0_scoped_f6b0b7a6_lang = null;
 
-    const _hoisted_1$y = { class: "acu-dashboard-toggle-row" };
-    const _hoisted_2$s = { class: "acu-dashboard-toggle-row__head" };
+    const _hoisted_1$x = { class: "acu-dashboard-toggle-row" };
+    const _hoisted_2$r = { class: "acu-dashboard-toggle-row__head" };
     const _hoisted_3$l = { class: "acu-dashboard-toggle-row__label" };
     const _hoisted_4$i = {
     	key: 0,
     	class: "acu-dashboard-toggle-row__desc"
     };
-    function _sfc_render$y(_ctx, _cache, $props, $setup, $data, $options) {
-    	return openBlock(), createElementBlock("div", _hoisted_1$y, [createBaseVNode("div", _hoisted_2$s, [createBaseVNode(
+    function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
+    	return openBlock(), createElementBlock("div", _hoisted_1$x, [createBaseVNode("div", _hoisted_2$r, [createBaseVNode(
     		"span",
     		_hoisted_3$l,
     		toDisplayString($props.item.label),
@@ -82076,7 +82428,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* TEXT */
     	)) : createCommentVNode("v-if", true)]);
     }
-    var ToggleRow = /* @__PURE__ */ _export_sfc(_sfc_main$y, [["render", _sfc_render$y]]);
+    var ToggleRow = /* @__PURE__ */ _export_sfc(_sfc_main$x, [["render", _sfc_render$x], ["__scopeId", "data-v-f6b0b7a6"]]);
 
     function isContentReplaceUnlockedBySettings() {
         return Number(settings_ACU?.plotSettings?.loopSettings?.maxRetries) === CONTENT_REPLACE_UNLOCK_MAX_RETRIES;
@@ -82935,7 +83287,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     }
 
-    var _sfc_main$x = /*@__PURE__*/ defineComponent({
+    var _sfc_main$w = /*@__PURE__*/ defineComponent({
         __name: 'DashboardPage',
         setup(__props, { expose: __expose }) {
             __expose();
@@ -82985,11 +83337,11 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-dashboard-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-dashboard-page__toggle-list {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n  margin-top: 14px;\n}\n.acu-v2-dashboard-page__health-list {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-item {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: 30px minmax(0, 1fr) max-content;\n  column-gap: 10px;\n  row-gap: 8px;\n  align-items: center;\n  padding: 10px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-bg-1);\n  transition:\n    border-color 0.15s ease,\n    background 0.15s ease;\n}\n.acu-v2-dashboard-page__health-item--error {\n  border-color: color-mix(in srgb, var(--acu-danger) 38%, var(--acu-border));\n}\n.acu-v2-dashboard-page__health-icon {\n  width: 30px;\n  height: 30px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  color: var(--acu-text-2);\n}\n.acu-v2-dashboard-page__health-item--ok .acu-v2-dashboard-page__health-icon {\n  color: var(--acu-success);\n  background: color-mix(in srgb, var(--acu-success) 10%, transparent);\n}\n.acu-v2-dashboard-page__health-item--warning\n  .acu-v2-dashboard-page__health-icon {\n  color: var(--acu-warning);\n  background: color-mix(in srgb, var(--acu-warning) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-item--error .acu-v2-dashboard-page__health-icon {\n  color: var(--acu-danger);\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-body {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-v2-dashboard-page__health-heading {\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-heading strong {\n  min-width: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 650;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-dashboard-page__health-body p {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-v2-dashboard-page__health-side {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  align-items: flex-end;\n  gap: 8px;\n  justify-self: end;\n}\n.acu-v2-dashboard-page__health-action {\n  white-space: nowrap;\n}\n@media (max-width: 860px) {\n.acu-v2-dashboard-page {\n    padding: 14px;\n}\n.acu-v2-dashboard-page__health-item {\n    grid-template-columns: 30px minmax(0, 1fr);\n    align-items: center;\n}\n.acu-v2-dashboard-page__health-side {\n    grid-column: 2;\n    align-items: flex-start;\n    justify-self: start;\n    flex-direction: row;\n    flex-wrap: wrap;\n}\n.acu-v2-dashboard-page__health-action {\n    justify-self: start;\n}\n}\n", "src/presentation-v2/pages/DashboardPage.vue#style-0");
-    var DashboardPage_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-dashboard-page[data-v-35bbca43] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-dashboard-page__toggle-list[data-v-35bbca43] {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n  margin-top: 14px;\n}\n.acu-v2-dashboard-page__health-list[data-v-35bbca43] {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-item[data-v-35bbca43] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: 30px minmax(0, 1fr) max-content;\n  column-gap: 10px;\n  row-gap: 8px;\n  align-items: center;\n  padding: 10px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-bg-1);\n  transition:\n    border-color 0.15s ease,\n    background 0.15s ease;\n}\n.acu-v2-dashboard-page__health-item--error[data-v-35bbca43] {\n  border-color: color-mix(in srgb, var(--acu-danger) 38%, var(--acu-border));\n}\n.acu-v2-dashboard-page__health-icon[data-v-35bbca43] {\n  width: 30px;\n  height: 30px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  color: var(--acu-text-2);\n}\n.acu-v2-dashboard-page__health-item--ok .acu-v2-dashboard-page__health-icon[data-v-35bbca43] {\n  color: var(--acu-success);\n  background: color-mix(in srgb, var(--acu-success) 10%, transparent);\n}\n.acu-v2-dashboard-page__health-item--warning\n  .acu-v2-dashboard-page__health-icon[data-v-35bbca43] {\n  color: var(--acu-warning);\n  background: color-mix(in srgb, var(--acu-warning) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-item--error .acu-v2-dashboard-page__health-icon[data-v-35bbca43] {\n  color: var(--acu-danger);\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-body[data-v-35bbca43] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-v2-dashboard-page__health-heading[data-v-35bbca43] {\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-heading strong[data-v-35bbca43] {\n  min-width: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 650;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-dashboard-page__health-body p[data-v-35bbca43] {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-v2-dashboard-page__health-side[data-v-35bbca43] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  align-items: flex-end;\n  gap: 8px;\n  justify-self: end;\n}\n.acu-v2-dashboard-page__health-action[data-v-35bbca43] {\n  white-space: nowrap;\n}\n@media (max-width: 860px) {\n.acu-v2-dashboard-page[data-v-35bbca43] {\n    padding: 14px;\n}\n.acu-v2-dashboard-page__health-item[data-v-35bbca43] {\n    grid-template-columns: 30px minmax(0, 1fr);\n    align-items: center;\n}\n.acu-v2-dashboard-page__health-side[data-v-35bbca43] {\n    grid-column: 2;\n    align-items: flex-start;\n    justify-self: start;\n    flex-direction: row;\n    flex-wrap: wrap;\n}\n.acu-v2-dashboard-page__health-action[data-v-35bbca43] {\n    justify-self: start;\n}\n}\n", "src/presentation-v2/pages/DashboardPage.vue#style-0-35bbca43");
+    var DashboardPage_vue_vue_type_style_index_0_scoped_35bbca43_lang = null;
 
-    const _hoisted_1$x = { class: "acu-v2-dashboard-page" };
-    const _hoisted_2$r = { class: "acu-v2-dashboard-page__health-list" };
+    const _hoisted_1$w = { class: "acu-v2-dashboard-page" };
+    const _hoisted_2$q = { class: "acu-v2-dashboard-page__health-list" };
     const _hoisted_3$k = {
     	class: "acu-v2-dashboard-page__health-icon",
     	"aria-hidden": "true"
@@ -82998,13 +83350,13 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_5$f = { class: "acu-v2-dashboard-page__health-heading" };
     const _hoisted_6$d = { class: "acu-v2-dashboard-page__health-side" };
     const _hoisted_7$b = ["data-acu-toggle-group"];
-    function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
-    	return openBlock(), createElementBlock("section", _hoisted_1$x, [createVNode($setup["AcuPanelGrid"], { class: "acu-v2-dashboard-page__grid" }, {
+    function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
+    	return openBlock(), createElementBlock("section", _hoisted_1$w, [createVNode($setup["AcuPanelGrid"], { class: "acu-v2-dashboard-page__grid" }, {
     		default: withCtx(() => [createVNode($setup["AcuPanel"], {
     			title: $setup.dashboardCopy.panels.healthTitle,
     			description: $setup.dashboardCopy.panels.healthDescription
     		}, {
-    			default: withCtx(() => [createBaseVNode("div", _hoisted_2$r, [(openBlock(true), createElementBlock(
+    			default: withCtx(() => [createBaseVNode("div", _hoisted_2$q, [(openBlock(true), createElementBlock(
     				Fragment,
     				null,
     				renderList($setup.dashboard.healthItems.value, (item) => {
@@ -83137,72 +83489,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	})]);
     }
-    var DashboardPage = /* @__PURE__ */ _export_sfc(_sfc_main$x, [["render", _sfc_render$x]]);
-
-    var _sfc_main$w = /*@__PURE__*/ defineComponent({
-        ...{ inheritAttrs: false },
-        __name: 'AcuCheckbox',
-        props: {
-            modelValue: { type: Boolean },
-            label: { default: undefined },
-            disabled: { type: Boolean, default: false }
-        },
-        emits: ["update:modelValue"],
-        setup(__props, { expose: __expose, emit: __emit }) {
-            __expose();
-            const props = __props;
-            const emit = __emit;
-            function onClick() {
-                if (props.disabled)
-                    return;
-                emit('update:modelValue', !props.modelValue);
-            }
-            const __returned__ = { props, emit, onClick };
-            Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
-            return __returned__;
-        }
-    });
-
-    injectSfcStyle("\n.acu-checkbox {\n  display: inline-flex; align-items: flex-start; gap: 7px;\n  padding: 0; border: 0; background: transparent;\n  font: inherit; font-size: var(--acu-font-size-body, 12px); color: var(--acu-text-2);\n  cursor: pointer; user-select: none;\n  line-height: 1.5; text-align: left;\n}\n.acu-checkbox--disabled { opacity: 0.5; cursor: not-allowed;\n}\n.acu-checkbox__box {\n  flex-shrink: 0;\n  width: 16px; height: 16px; margin-top: 1px;\n  display: flex; align-items: center; justify-content: center;\n  border: 0;\n  border-radius: 3px;\n  background: var(--acu-bg-2);\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-checkbox--checked .acu-checkbox__box {\n  background: var(--acu-accent);\n}\n.acu-checkbox__icon {\n  display: block;\n  width: 12px; height: 12px;\n  color: #fff;\n  fill: none;\n  stroke: currentColor;\n  stroke-width: 2.15;\n  stroke-linecap: round;\n  stroke-linejoin: round;\n  opacity: 0;\n  transform: scale(0.82);\n  transition: opacity 0.15s ease, transform 0.15s ease;\n}\n.acu-checkbox--checked .acu-checkbox__icon {\n  opacity: 1;\n  transform: scale(1);\n}\n.acu-checkbox__label { min-width: 0;\n}\n.acu-checkbox:hover:not(:disabled) .acu-checkbox__box {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);\n}\n.acu-checkbox--checked:hover:not(:disabled) .acu-checkbox__box {\n  background: var(--acu-accent-2);\n}\n.acu-checkbox:focus-visible {\n  outline: none;\n}\n.acu-checkbox:focus-visible .acu-checkbox__box {\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n", "src/presentation-v2/components/_lib/AcuCheckbox.vue#style-0");
-    var AcuCheckbox_vue_vue_type_style_index_0_lang = null;
-
-    const _hoisted_1$w = ["aria-checked", "disabled"];
-    const _hoisted_2$q = {
-    	key: 0,
-    	class: "acu-checkbox__label"
-    };
-    function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
-    	return openBlock(), createElementBlock("button", mergeProps({
-    		type: "button",
-    		class: ["acu-checkbox", {
-    			"acu-checkbox--disabled": $props.disabled,
-    			"acu-checkbox--checked": $props.modelValue
-    		}],
-    		role: "checkbox",
-    		"aria-checked": $props.modelValue ? "true" : "false",
-    		disabled: $props.disabled
-    	}, _ctx.$attrs, { onClick: $setup.onClick }), [_cache[0] || (_cache[0] = createBaseVNode(
-    		"span",
-    		{
-    			class: "acu-checkbox__box",
-    			"aria-hidden": "true"
-    		},
-    		[createBaseVNode("svg", {
-    			class: "acu-checkbox__icon",
-    			viewBox: "0 0 16 16",
-    			focusable: "false"
-    		}, [createBaseVNode("path", { d: "M3.75 8.25 6.75 11.25 12.25 5.45" })])],
-    		-1
-    		/* CACHED */
-    	)), $props.label ? (openBlock(), createElementBlock(
-    		"span",
-    		_hoisted_2$q,
-    		toDisplayString($props.label),
-    		1
-    		/* TEXT */
-    	)) : renderSlot(_ctx.$slots, "default", { key: 1 })], 16, _hoisted_1$w);
-    }
-    var AcuCheckbox = /* @__PURE__ */ _export_sfc(_sfc_main$w, [["render", _sfc_render$w]]);
+    var DashboardPage = /* @__PURE__ */ _export_sfc(_sfc_main$w, [["render", _sfc_render$w], ["__scopeId", "data-v-35bbca43"]]);
 
     var _sfc_main$v = /*@__PURE__*/ defineComponent({
         __name: 'TableSelector',
@@ -83238,8 +83525,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-table-selector { display: flex; flex-direction: column; gap: 8px; min-width: 0;\n}\n.acu-v2-table-selector__empty {\n  padding: 10px 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-table-selector__actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;\n}\n.acu-v2-table-selector__count { color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-table-selector__grid {\n  display: grid; gap: 6px;\n  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));\n  max-height: 240px; overflow: auto;\n  padding: 0;\n  border: 0; border-radius: 0;\n  background: transparent;\n}\n.acu-v2-table-selector__item {\n  padding: 8px 10px;\n  border: 0; border-radius: var(--acu-radius-sm);\n  background: transparent; min-width: 0;\n}\n", "src/presentation-v2/components/TableSelector.vue#style-0");
-    var TableSelector_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-table-selector[data-v-76a2771b] { display: flex; flex-direction: column; gap: 8px; min-width: 0;\n}\n.acu-v2-table-selector__empty[data-v-76a2771b] {\n  padding: 10px 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-table-selector__actions[data-v-76a2771b] { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;\n}\n.acu-v2-table-selector__count[data-v-76a2771b] { color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-table-selector__grid[data-v-76a2771b] {\n  display: grid; gap: 6px;\n  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));\n  max-height: 240px; overflow: auto;\n  padding: 0;\n  border: 0; border-radius: 0;\n  background: transparent;\n}\n.acu-v2-table-selector__item[data-v-76a2771b] {\n  padding: 8px 10px;\n  border: 0; border-radius: var(--acu-radius-sm);\n  background: transparent; min-width: 0;\n}\n", "src/presentation-v2/components/TableSelector.vue#style-0-76a2771b");
+    var TableSelector_vue_vue_type_style_index_0_scoped_76a2771b_lang = null;
 
     const _hoisted_1$v = { class: "acu-v2-table-selector" };
     const _hoisted_2$p = {
@@ -83313,7 +83600,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* STABLE_FRAGMENT */
     	))]);
     }
-    var TableSelector = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$v]]);
+    var TableSelector = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$v], ["__scopeId", "data-v-76a2771b"]]);
 
     function currentSheetKeys() {
         try {
@@ -83616,8 +83903,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-form-fill-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-form-fill-page__grid {\n  grid-template-areas:\n    \"status update\"\n    \"manual template\"\n    \"manual template\";\n}\n.acu-v2-form-fill-page__panel--status {\n  grid-area: status;\n}\n.acu-v2-form-fill-page__panel--update {\n  grid-area: update;\n}\n.acu-v2-form-fill-page__panel--template {\n  grid-area: template;\n}\n.acu-v2-form-fill-page__panel--manual {\n  grid-area: manual;\n}\n.acu-v2-form-fill-page__manual-number-grid {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-v2-form-fill-page__status-line {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-v2-form-fill-page__status-chat {\n  max-width: min(42ch, 100%);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-form-fill-page__manual-extra {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.acu-v2-form-fill-page__table-wrap {\n  min-width: 0;\n  overflow: auto;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-v2-form-fill-page__status-table {\n  width: 100%;\n  border-collapse: collapse;\n  min-width: 560px;\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-form-fill-page__status-table th,\n.acu-v2-form-fill-page__status-table td {\n  padding: 8px 10px;\n  border-bottom: 1px solid var(--acu-border-2);\n  text-align: left;\n}\n.acu-v2-form-fill-page__status-table th {\n  color: var(--acu-text-3);\n  font-weight: 600;\n  background: var(--acu-bg-1);\n}\n.acu-v2-form-fill-page__status-table td {\n  color: var(--acu-text-2);\n}\n.acu-v2-form-fill-page__status-table tr:last-child td {\n  border-bottom: 0;\n}\n.acu-v2-form-fill-page__status-row--ready td {\n  color: var(--acu-text-1);\n}\n.acu-v2-form-fill-page__empty {\n  text-align: center !important;\n  color: var(--acu-text-3) !important;\n}\n.acu-v2-form-fill-page__actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-form-fill-page {\n    padding: 14px;\n}\n.acu-v2-form-fill-page__grid {\n    grid-template-areas:\n      \"status\"\n      \"update\"\n      \"manual\"\n      \"template\";\n}\n.acu-v2-form-fill-page__manual-number-grid {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/FormFillPage.vue#style-0");
-    var FormFillPage_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-form-fill-page[data-v-43b86c56] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-form-fill-page__grid[data-v-43b86c56] {\n  grid-template-areas:\n    \"status update\"\n    \"manual template\"\n    \"manual template\";\n}\n.acu-v2-form-fill-page__panel--status[data-v-43b86c56] {\n  grid-area: status;\n}\n.acu-v2-form-fill-page__panel--update[data-v-43b86c56] {\n  grid-area: update;\n}\n.acu-v2-form-fill-page__panel--template[data-v-43b86c56] {\n  grid-area: template;\n}\n.acu-v2-form-fill-page__panel--manual[data-v-43b86c56] {\n  grid-area: manual;\n}\n.acu-v2-form-fill-page__manual-number-grid[data-v-43b86c56] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-v2-form-fill-page__status-line[data-v-43b86c56] {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-v2-form-fill-page__status-chat[data-v-43b86c56] {\n  max-width: min(42ch, 100%);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-form-fill-page__manual-extra[data-v-43b86c56] {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.acu-v2-form-fill-page__table-wrap[data-v-43b86c56] {\n  min-width: 0;\n  overflow: auto;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-v2-form-fill-page__status-table[data-v-43b86c56] {\n  width: 100%;\n  border-collapse: collapse;\n  min-width: 560px;\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-form-fill-page__status-table th[data-v-43b86c56],\n.acu-v2-form-fill-page__status-table td[data-v-43b86c56] {\n  padding: 8px 10px;\n  border-bottom: 1px solid var(--acu-border-2);\n  text-align: left;\n}\n.acu-v2-form-fill-page__status-table th[data-v-43b86c56] {\n  color: var(--acu-text-3);\n  font-weight: 600;\n  background: var(--acu-bg-1);\n}\n.acu-v2-form-fill-page__status-table td[data-v-43b86c56] {\n  color: var(--acu-text-2);\n}\n.acu-v2-form-fill-page__status-table tr:last-child td[data-v-43b86c56] {\n  border-bottom: 0;\n}\n.acu-v2-form-fill-page__status-row--ready td[data-v-43b86c56] {\n  color: var(--acu-text-1);\n}\n.acu-v2-form-fill-page__empty[data-v-43b86c56] {\n  text-align: center !important;\n  color: var(--acu-text-3) !important;\n}\n.acu-v2-form-fill-page__actions[data-v-43b86c56] {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-form-fill-page[data-v-43b86c56] {\n    padding: 14px;\n}\n.acu-v2-form-fill-page__grid[data-v-43b86c56] {\n    grid-template-areas:\n      \"status\"\n      \"update\"\n      \"manual\"\n      \"template\";\n}\n.acu-v2-form-fill-page__manual-number-grid[data-v-43b86c56] {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/FormFillPage.vue#style-0-43b86c56");
+    var FormFillPage_vue_vue_type_style_index_0_scoped_43b86c56_lang = null;
 
     const _hoisted_1$u = { class: "acu-v2-form-fill-page" };
     const _hoisted_2$o = ["title"];
@@ -83865,7 +84152,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	})]);
     }
-    var FormFillPage = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$u]]);
+    var FormFillPage = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$u], ["__scopeId", "data-v-43b86c56"]]);
 
     var _sfc_main$t = /*@__PURE__*/ defineComponent({
         __name: 'FormFillPromptDrawer',
@@ -83901,8 +84188,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-form-fill-prompt-drawer__toolbar {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-form-fill-prompt-drawer__actions {\n  position: sticky;\n  bottom: -16px;\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding: 12px 0 0;\n  background: var(--acu-bg-1);\n}\n", "src/presentation-v2/components/FormFillPromptDrawer.vue#style-0");
-    var FormFillPromptDrawer_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-form-fill-prompt-drawer__toolbar[data-v-3d0ebca8] {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-form-fill-prompt-drawer__actions[data-v-3d0ebca8] {\n  position: sticky;\n  bottom: -16px;\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding: 12px 0 0;\n  background: var(--acu-bg-1);\n}\n", "src/presentation-v2/components/FormFillPromptDrawer.vue#style-0-3d0ebca8");
+    var FormFillPromptDrawer_vue_vue_type_style_index_0_scoped_3d0ebca8_lang = null;
 
     const _hoisted_1$t = { class: "acu-form-fill-prompt-drawer__toolbar" };
     const _hoisted_2$n = { class: "acu-form-fill-prompt-drawer__actions" };
@@ -84004,7 +84291,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	}, 8, ["is-open"]);
     }
-    var FormFillPromptDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$t, [["render", _sfc_render$t]]);
+    var FormFillPromptDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$t, [["render", _sfc_render$t], ["__scopeId", "data-v-3d0ebca8"]]);
 
     var _sfc_main$s = /*@__PURE__*/ defineComponent({
         __name: 'WorldbookSelector',
@@ -84049,8 +84336,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-wb-selector { display: flex; flex-direction: column; gap: 10px; min-width: 0;\n}\n", "src/presentation-v2/components/WorldbookSelector.vue#style-0");
-    var WorldbookSelector_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-wb-selector[data-v-03347336] { display: flex; flex-direction: column; gap: 10px; min-width: 0;\n}\n", "src/presentation-v2/components/WorldbookSelector.vue#style-0-03347336");
+    var WorldbookSelector_vue_vue_type_style_index_0_scoped_03347336_lang = null;
 
     const _hoisted_1$s = { class: "acu-v2-wb-selector" };
     function _sfc_render$s(_ctx, _cache, $props, $setup, $data, $options) {
@@ -84095,7 +84382,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		})) : createCommentVNode("v-if", true)
     	]);
     }
-    var WorldbookSelector = /* @__PURE__ */ _export_sfc(_sfc_main$s, [["render", _sfc_render$s]]);
+    var WorldbookSelector = /* @__PURE__ */ _export_sfc(_sfc_main$s, [["render", _sfc_render$s], ["__scopeId", "data-v-03347336"]]);
 
     var _sfc_main$r = /*@__PURE__*/ defineComponent({
         __name: 'WorldbookSourcePicker',
@@ -84133,8 +84420,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-wb-source-picker {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  min-width: 0;\n}\n.acu-v2-wb-source-picker__list {\n  min-width: 0;\n  max-height: 180px;\n  overflow-y: auto;\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  padding: 8px;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n}\n.acu-v2-wb-source-picker__list--disabled {\n  opacity: 0.65;\n}\n.acu-v2-wb-source-picker__item {\n  width: 100%;\n  min-width: 0;\n  min-height: 32px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 10px;\n  margin: 0;\n  padding: 7px 9px;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: var(--acu-text-2);\n  font: inherit;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.4;\n  text-align: left;\n  cursor: pointer;\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-wb-source-picker__item:hover:not(:disabled) {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-wb-source-picker__item:disabled {\n  cursor: not-allowed;\n}\n.acu-v2-wb-source-picker__item:focus-visible {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-wb-source-picker__item--selected {\n  background: color-mix(in srgb, var(--acu-accent) 14%, transparent);\n  color: var(--acu-text-1);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 42%, transparent);\n}\n.acu-v2-wb-source-picker__item--selected:hover:not(:disabled) {\n  background: color-mix(in srgb, var(--acu-accent) 20%, transparent);\n  color: var(--acu-text-1);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 54%, transparent);\n}\n.acu-v2-wb-source-picker__item-label {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-wb-source-picker__item-check {\n  flex-shrink: 0;\n  font-size: var(--acu-font-size-caption, 11px);\n  color: var(--acu-accent);\n  opacity: 0;\n  transform: scale(0.86);\n  transition: opacity 0.15s ease, transform 0.15s ease;\n}\n.acu-v2-wb-source-picker__item--selected .acu-v2-wb-source-picker__item-check {\n  opacity: 1;\n  transform: scale(1);\n}\n.acu-v2-wb-source-picker__empty {\n  padding: 8px 2px;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: center;\n}\n.acu-v2-wb-source-picker__error {\n  margin: 0;\n}\n", "src/presentation-v2/components/WorldbookSourcePicker.vue#style-0");
-    var WorldbookSourcePicker_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-wb-source-picker[data-v-7052eac6] {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  min-width: 0;\n}\n.acu-v2-wb-source-picker__list[data-v-7052eac6] {\n  min-width: 0;\n  max-height: 180px;\n  overflow-y: auto;\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  padding: 8px;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n}\n.acu-v2-wb-source-picker__list--disabled[data-v-7052eac6] {\n  opacity: 0.65;\n}\n.acu-v2-wb-source-picker__item[data-v-7052eac6] {\n  width: 100%;\n  min-width: 0;\n  min-height: 32px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 10px;\n  margin: 0;\n  padding: 7px 9px;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: var(--acu-text-2);\n  font: inherit;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.4;\n  text-align: left;\n  cursor: pointer;\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-wb-source-picker__item[data-v-7052eac6]:hover:not(:disabled) {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-wb-source-picker__item[data-v-7052eac6]:disabled {\n  cursor: not-allowed;\n}\n.acu-v2-wb-source-picker__item[data-v-7052eac6]:focus-visible {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-wb-source-picker__item--selected[data-v-7052eac6] {\n  background: color-mix(in srgb, var(--acu-accent) 14%, transparent);\n  color: var(--acu-text-1);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 42%, transparent);\n}\n.acu-v2-wb-source-picker__item--selected[data-v-7052eac6]:hover:not(:disabled) {\n  background: color-mix(in srgb, var(--acu-accent) 20%, transparent);\n  color: var(--acu-text-1);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 54%, transparent);\n}\n.acu-v2-wb-source-picker__item-label[data-v-7052eac6] {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-wb-source-picker__item-check[data-v-7052eac6] {\n  flex-shrink: 0;\n  font-size: var(--acu-font-size-caption, 11px);\n  color: var(--acu-accent);\n  opacity: 0;\n  transform: scale(0.86);\n  transition: opacity 0.15s ease, transform 0.15s ease;\n}\n.acu-v2-wb-source-picker__item--selected .acu-v2-wb-source-picker__item-check[data-v-7052eac6] {\n  opacity: 1;\n  transform: scale(1);\n}\n.acu-v2-wb-source-picker__empty[data-v-7052eac6] {\n  padding: 8px 2px;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: center;\n}\n.acu-v2-wb-source-picker__error[data-v-7052eac6] {\n  margin: 0;\n}\n", "src/presentation-v2/components/WorldbookSourcePicker.vue#style-0-7052eac6");
+    var WorldbookSourcePicker_vue_vue_type_style_index_0_scoped_7052eac6_lang = null;
 
     const _hoisted_1$r = { class: "acu-v2-wb-source-picker" };
     const _hoisted_2$m = [
@@ -84233,7 +84520,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		})) : createCommentVNode("v-if", true)
     	]);
     }
-    var WorldbookSourcePicker = /* @__PURE__ */ _export_sfc(_sfc_main$r, [["render", _sfc_render$r]]);
+    var WorldbookSourcePicker = /* @__PURE__ */ _export_sfc(_sfc_main$r, [["render", _sfc_render$r], ["__scopeId", "data-v-7052eac6"]]);
 
     var _sfc_main$q = /*@__PURE__*/ defineComponent({
         __name: 'WorldbookEntryList',
@@ -84277,8 +84564,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-wb-entries {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-v2-wb-entries__status {\n  padding: 8px 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-wb-entry-item {\n  padding: 3px 10px;\n  transition: background 0.08s ease;\n}\n.acu-v2-wb-entry-item:hover { background: var(--acu-hover-overlay);\n}\n.acu-v2-wb-entry-item--disabled {\n  opacity: 0.5;\n}\n", "src/presentation-v2/components/WorldbookEntryList.vue#style-0");
-    var WorldbookEntryList_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-wb-entries[data-v-071a4cf0] {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-v2-wb-entries__status[data-v-071a4cf0] {\n  padding: 8px 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-wb-entry-item[data-v-071a4cf0] {\n  padding: 3px 10px;\n  transition: background 0.08s ease;\n}\n.acu-v2-wb-entry-item[data-v-071a4cf0]:hover { background: var(--acu-hover-overlay);\n}\n.acu-v2-wb-entry-item--disabled[data-v-071a4cf0] {\n  opacity: 0.5;\n}\n", "src/presentation-v2/components/WorldbookEntryList.vue#style-0-071a4cf0");
+    var WorldbookEntryList_vue_vue_type_style_index_0_scoped_071a4cf0_lang = null;
 
     const _hoisted_1$q = { class: "acu-v2-wb-entries" };
     const _hoisted_2$l = {
@@ -84357,7 +84644,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* KEYED_FRAGMENT */
     	))]);
     }
-    var WorldbookEntryList = /* @__PURE__ */ _export_sfc(_sfc_main$q, [["render", _sfc_render$q]]);
+    var WorldbookEntryList = /* @__PURE__ */ _export_sfc(_sfc_main$q, [["render", _sfc_render$q], ["__scopeId", "data-v-071a4cf0"]]);
 
     var _sfc_main$p = /*@__PURE__*/ defineComponent({
         __name: 'WorldbookEntryToolbar',
@@ -84373,8 +84660,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-wb-entry-toolbar {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  margin-top: 10px;\n  padding-top: 10px;\n  flex-wrap: wrap;\n}\n.acu-v2-wb-entry-toolbar__filter {\n  flex: 1;\n  min-width: 160px;\n}\n", "src/presentation-v2/components/WorldbookEntryToolbar.vue#style-0");
-    var WorldbookEntryToolbar_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-wb-entry-toolbar[data-v-ca526564] {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  margin-top: 10px;\n  padding-top: 10px;\n  flex-wrap: wrap;\n}\n.acu-v2-wb-entry-toolbar__filter[data-v-ca526564] {\n  flex: 1;\n  min-width: 160px;\n}\n", "src/presentation-v2/components/WorldbookEntryToolbar.vue#style-0-ca526564");
+    var WorldbookEntryToolbar_vue_vue_type_style_index_0_scoped_ca526564_lang = null;
 
     const _hoisted_1$p = { class: "acu-v2-wb-entry-toolbar" };
     function _sfc_render$p(_ctx, _cache, $props, $setup, $data, $options) {
@@ -84406,7 +84693,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		})
     	]);
     }
-    var WorldbookEntryToolbar = /* @__PURE__ */ _export_sfc(_sfc_main$p, [["render", _sfc_render$p]]);
+    var WorldbookEntryToolbar = /* @__PURE__ */ _export_sfc(_sfc_main$p, [["render", _sfc_render$p], ["__scopeId", "data-v-ca526564"]]);
 
     var _sfc_main$o = /*@__PURE__*/ defineComponent({
         __name: 'WorldbookEntryPickerBody',
@@ -84432,8 +84719,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-wb-entry-picker {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  min-width: 0;\n}\n.acu-v2-wb-entry-picker__hint {\n  margin: 0;\n  font-size: var(--acu-font-size-caption, 11px);\n  color: var(--acu-text-3);\n}\n.acu-v2-wb-entry-picker__hint strong {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n", "src/presentation-v2/components/WorldbookEntryPickerBody.vue#style-0");
-    var WorldbookEntryPickerBody_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-wb-entry-picker[data-v-be0b2b0b] {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  min-width: 0;\n}\n.acu-v2-wb-entry-picker__hint[data-v-be0b2b0b] {\n  margin: 0;\n  font-size: var(--acu-font-size-caption, 11px);\n  color: var(--acu-text-3);\n}\n.acu-v2-wb-entry-picker__hint strong[data-v-be0b2b0b] {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n", "src/presentation-v2/components/WorldbookEntryPickerBody.vue#style-0-be0b2b0b");
+    var WorldbookEntryPickerBody_vue_vue_type_style_index_0_scoped_be0b2b0b_lang = null;
 
     const _hoisted_1$o = { class: "acu-v2-wb-entry-picker" };
     const _hoisted_2$k = { class: "acu-v2-wb-entry-picker__hint" };
@@ -84488,7 +84775,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		])
     	]);
     }
-    var WorldbookEntryPickerBody = /* @__PURE__ */ _export_sfc(_sfc_main$o, [["render", _sfc_render$o]]);
+    var WorldbookEntryPickerBody = /* @__PURE__ */ _export_sfc(_sfc_main$o, [["render", _sfc_render$o], ["__scopeId", "data-v-be0b2b0b"]]);
 
     /**
      * useFormFillInjectionTarget — 填表"注入目标世界书"（Component A，§4.2）
@@ -84988,8 +85275,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-table-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-table-page__col {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n  min-width: 0;\n}\n.acu-v2-table-page__filter {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-v2-table-page__toggle-row {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-v2-table-page__toggle-head {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n}\n.acu-v2-table-page__toggle-label {\n  min-width: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n  line-height: 1.35;\n}\n.acu-v2-table-page__toggle-desc {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-v2-table-page__actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-table-page__status-line {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  color: var(--acu-text-3);\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-wrap: wrap;\n}\n.acu-v2-table-page__status-line strong {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n.acu-v2-table-page__preset-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\n  gap: 6px;\n  align-items: stretch;\n  min-width: 0;\n}\n.acu-v2-table-page__badge {\n  display: inline-flex;\n  align-items: center;\n  padding: 2px 8px;\n  border-radius: var(--acu-radius-sm);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 500;\n}\n.acu-v2-table-page__badge--inherit {\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  color: var(--acu-text-2);\n}\n.acu-v2-table-page__badge--override {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-v2-table-page__hint {\n  margin: 0;\n  font-size: var(--acu-font-size-body, 12px);\n  color: var(--acu-text-3);\n}\n.acu-v2-table-page__hint strong {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n@media (max-width: 860px) {\n.acu-v2-table-page {\n    padding: 14px;\n}\n}\n", "src/presentation-v2/pages/TablePage.vue#style-0");
-    var TablePage_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-table-page[data-v-d3b7d177] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-table-page__col[data-v-d3b7d177] {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n  min-width: 0;\n}\n.acu-v2-table-page__filter[data-v-d3b7d177] {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-v2-table-page__toggle-row[data-v-d3b7d177] {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-v2-table-page__toggle-head[data-v-d3b7d177] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n}\n.acu-v2-table-page__toggle-label[data-v-d3b7d177] {\n  min-width: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n  line-height: 1.35;\n}\n.acu-v2-table-page__toggle-desc[data-v-d3b7d177] {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-v2-table-page__actions[data-v-d3b7d177] {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-table-page__status-line[data-v-d3b7d177] {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  color: var(--acu-text-3);\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-wrap: wrap;\n}\n.acu-v2-table-page__status-line strong[data-v-d3b7d177] {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n.acu-v2-table-page__preset-row[data-v-d3b7d177] {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\n  gap: 6px;\n  align-items: stretch;\n  min-width: 0;\n}\n.acu-v2-table-page__badge[data-v-d3b7d177] {\n  display: inline-flex;\n  align-items: center;\n  padding: 2px 8px;\n  border-radius: var(--acu-radius-sm);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 500;\n}\n.acu-v2-table-page__badge--inherit[data-v-d3b7d177] {\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  color: var(--acu-text-2);\n}\n.acu-v2-table-page__badge--override[data-v-d3b7d177] {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-v2-table-page__hint[data-v-d3b7d177] {\n  margin: 0;\n  font-size: var(--acu-font-size-body, 12px);\n  color: var(--acu-text-3);\n}\n.acu-v2-table-page__hint strong[data-v-d3b7d177] {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n@media (max-width: 860px) {\n.acu-v2-table-page[data-v-d3b7d177] {\n    padding: 14px;\n}\n}\n", "src/presentation-v2/pages/TablePage.vue#style-0-d3b7d177");
+    var TablePage_vue_vue_type_style_index_0_scoped_d3b7d177_lang = null;
 
     const _hoisted_1$n = { class: "acu-v2-table-page" };
     const _hoisted_2$j = { class: "acu-v2-table-page__col" };
@@ -85176,7 +85463,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		])
     	]);
     }
-    var TablePage = /* @__PURE__ */ _export_sfc(_sfc_main$n, [["render", _sfc_render$n]]);
+    var TablePage = /* @__PURE__ */ _export_sfc(_sfc_main$n, [["render", _sfc_render$n], ["__scopeId", "data-v-d3b7d177"]]);
 
     var _sfc_main$m = /*@__PURE__*/ defineComponent({
         __name: 'ApiPage',
@@ -85188,8 +85475,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-api-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-api-page__spacer {\n  min-width: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-api-page {\n    padding: 14px;\n}\n.acu-v2-api-page__spacer {\n    display: none;\n}\n}\n", "src/presentation-v2/pages/ApiPage.vue#style-0");
-    var ApiPage_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-api-page[data-v-9bcad6c4] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-api-page__spacer[data-v-9bcad6c4] {\n  min-width: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-api-page[data-v-9bcad6c4] {\n    padding: 14px;\n}\n.acu-v2-api-page__spacer[data-v-9bcad6c4] {\n    display: none;\n}\n}\n", "src/presentation-v2/pages/ApiPage.vue#style-0-9bcad6c4");
+    var ApiPage_vue_vue_type_style_index_0_scoped_9bcad6c4_lang = null;
 
     const _hoisted_1$m = { class: "acu-v2-api-page" };
     function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
@@ -85207,7 +85494,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	})]);
     }
-    var ApiPage = /* @__PURE__ */ _export_sfc(_sfc_main$m, [["render", _sfc_render$m]]);
+    var ApiPage = /* @__PURE__ */ _export_sfc(_sfc_main$m, [["render", _sfc_render$m], ["__scopeId", "data-v-9bcad6c4"]]);
 
     /**
      * usePlotWorldbookConfig — 剧情推进世界书配置（D23.1）
@@ -85535,8 +85822,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-plot-page { min-height: 100%; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 18px;\n}\n@media (max-width: 860px) {\n.acu-v2-plot-page { padding: 14px;\n}\n}\n", "src/presentation-v2/pages/PlotPage.vue#style-0");
-    var PlotPage_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-plot-page[data-v-2356bb2f] { min-height: 100%; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 18px;\n}\n@media (max-width: 860px) {\n.acu-v2-plot-page[data-v-2356bb2f] { padding: 14px;\n}\n}\n", "src/presentation-v2/pages/PlotPage.vue#style-0-2356bb2f");
+    var PlotPage_vue_vue_type_style_index_0_scoped_2356bb2f_lang = null;
 
     const _hoisted_1$l = { class: "acu-v2-plot-page" };
     function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
@@ -85584,7 +85871,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	})]);
     }
-    var PlotPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l]]);
+    var PlotPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-2356bb2f"]]);
 
     function setSendTextareaValue(text) {
         const input = getAcuHostDocument().querySelector('#send_textarea');
@@ -85904,8 +86191,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-continuation-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-continuation-page__side-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n  min-width: 0;\n}\n.acu-v2-continuation-page__prompt-toolbar,\n.acu-v2-continuation-page__prompt-head,\n.acu-v2-continuation-page__actions,\n.acu-v2-continuation-page__status {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.acu-v2-continuation-page__prompt-toolbar {\n  justify-content: space-between;\n}\n.acu-v2-continuation-page__meta,\n.acu-v2-continuation-page__empty,\n.acu-v2-continuation-page__timer {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-continuation-page__empty {\n  margin: 0;\n  padding: 10px 0;\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-continuation-page__prompt-list {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-v2-continuation-page__prompt-item {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n  padding: 0 0 12px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-continuation-page__prompt-item:last-child {\n  padding-bottom: 0;\n  border-bottom: 0;\n}\n.acu-v2-continuation-page__prompt-head {\n  justify-content: space-between;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  font-weight: 500;\n}\n.acu-v2-continuation-page__number-grid {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 12px;\n}\n.acu-v2-continuation-page__status {\n  min-height: 38px;\n  padding: 8px 0 8px 10px;\n  border: 0;\n  border-left: 2px solid color-mix(in srgb, var(--acu-text-3) 28%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-continuation-page__status-label {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-continuation-page__status strong {\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-v2-continuation-page__status strong.is-running {\n  color: var(--acu-success);\n}\n.acu-v2-continuation-page__actions {\n  justify-content: flex-end;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-continuation-page {\n    padding: 14px;\n}\n.acu-v2-continuation-page__number-grid {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/ContinuationPage.vue#style-0");
-    var ContinuationPage_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-continuation-page[data-v-34cdcffb] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-continuation-page__side-stack[data-v-34cdcffb] {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n  min-width: 0;\n}\n.acu-v2-continuation-page__prompt-toolbar[data-v-34cdcffb],\n.acu-v2-continuation-page__prompt-head[data-v-34cdcffb],\n.acu-v2-continuation-page__actions[data-v-34cdcffb],\n.acu-v2-continuation-page__status[data-v-34cdcffb] {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.acu-v2-continuation-page__prompt-toolbar[data-v-34cdcffb] {\n  justify-content: space-between;\n}\n.acu-v2-continuation-page__meta[data-v-34cdcffb],\n.acu-v2-continuation-page__empty[data-v-34cdcffb],\n.acu-v2-continuation-page__timer[data-v-34cdcffb] {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-continuation-page__empty[data-v-34cdcffb] {\n  margin: 0;\n  padding: 10px 0;\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-continuation-page__prompt-list[data-v-34cdcffb] {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-v2-continuation-page__prompt-item[data-v-34cdcffb] {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n  padding: 0 0 12px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-continuation-page__prompt-item[data-v-34cdcffb]:last-child {\n  padding-bottom: 0;\n  border-bottom: 0;\n}\n.acu-v2-continuation-page__prompt-head[data-v-34cdcffb] {\n  justify-content: space-between;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  font-weight: 500;\n}\n.acu-v2-continuation-page__number-grid[data-v-34cdcffb] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 12px;\n}\n.acu-v2-continuation-page__status[data-v-34cdcffb] {\n  min-height: 38px;\n  padding: 8px 0 8px 10px;\n  border: 0;\n  border-left: 2px solid color-mix(in srgb, var(--acu-text-3) 28%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-continuation-page__status-label[data-v-34cdcffb] {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-continuation-page__status strong[data-v-34cdcffb] {\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-v2-continuation-page__status strong.is-running[data-v-34cdcffb] {\n  color: var(--acu-success);\n}\n.acu-v2-continuation-page__actions[data-v-34cdcffb] {\n  justify-content: flex-end;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-continuation-page[data-v-34cdcffb] {\n    padding: 14px;\n}\n.acu-v2-continuation-page__number-grid[data-v-34cdcffb] {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/ContinuationPage.vue#style-0-34cdcffb");
+    var ContinuationPage_vue_vue_type_style_index_0_scoped_34cdcffb_lang = null;
 
     const _hoisted_1$k = { class: "acu-v2-continuation-page" };
     const _hoisted_2$i = { class: "acu-v2-continuation-page__number-grid" };
@@ -86123,7 +86410,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	})]);
     }
-    var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$k, [["render", _sfc_render$k]]);
+    var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$k, [["render", _sfc_render$k], ["__scopeId", "data-v-34cdcffb"]]);
 
     /**
      * useImportFlow — 外部导入页业务流编排（阶段 2 / D21.4）
@@ -86576,8 +86863,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-import-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-import-page__action-grid {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-import-page__action-grid :deep(.acu-file-button),\n.acu-v2-import-page__action-grid :deep(.acu-btn) {\n  width: 100%;\n  min-width: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-import-page {\n    padding: 14px;\n}\n}\n@media (max-width: 560px) {\n.acu-v2-import-page__action-grid {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/ImportPage.vue#style-0");
-    var ImportPage_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-import-page[data-v-a97e581f] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-import-page__action-grid[data-v-a97e581f] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-import-page__action-grid[data-v-a97e581f] .acu-file-button,\n.acu-v2-import-page__action-grid[data-v-a97e581f] .acu-btn {\n  width: 100%;\n  min-width: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-import-page[data-v-a97e581f] {\n    padding: 14px;\n}\n}\n@media (max-width: 560px) {\n.acu-v2-import-page__action-grid[data-v-a97e581f] {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/ImportPage.vue#style-0-a97e581f");
+    var ImportPage_vue_vue_type_style_index_0_scoped_a97e581f_lang = null;
 
     const _hoisted_1$j = { class: "acu-v2-import-page" };
     const _hoisted_2$h = { class: "acu-v2-import-page__action-grid" };
@@ -86725,7 +87012,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	})]);
     }
-    var ImportPage = /* @__PURE__ */ _export_sfc(_sfc_main$j, [["render", _sfc_render$j]]);
+    var ImportPage = /* @__PURE__ */ _export_sfc(_sfc_main$j, [["render", _sfc_render$j], ["__scopeId", "data-v-a97e581f"]]);
 
     var _sfc_main$i = /*@__PURE__*/ defineComponent({
         __name: 'AcuStatsList',
@@ -86741,8 +87028,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-stats {\n  margin: 0;\n  padding: 2px 0 0;\n  background: transparent;\n  border-radius: 0;\n  display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 16px;\n}\n.acu-stats__item {\n  min-width: 0;\n  padding: 8px 0;\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-stats dt {\n  margin: 0 0 2px; font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n}\n.acu-stats dd {\n  margin: 0; font-size: var(--acu-font-size-body, 12px); color: var(--acu-text-1); word-break: break-all;\n}\n.acu-stats--mono code {\n  display: inline-block; max-width: 100%;\n  font-family: var(--acu-font-mono); font-size: var(--acu-font-size-body, 12px);\n  background: transparent; color: var(--acu-text-1);\n  padding: 0; border-radius: 0;\n}\n@media (max-width: 720px) {\n.acu-stats { grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/components/_lib/AcuStatsList.vue#style-0");
-    var AcuStatsList_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-stats[data-v-6a95c4bd] {\n  margin: 0;\n  padding: 2px 0 0;\n  background: transparent;\n  border-radius: 0;\n  display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 16px;\n}\n.acu-stats__item[data-v-6a95c4bd] {\n  min-width: 0;\n  padding: 8px 0;\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-stats dt[data-v-6a95c4bd] {\n  margin: 0 0 2px; font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n}\n.acu-stats dd[data-v-6a95c4bd] {\n  margin: 0; font-size: var(--acu-font-size-body, 12px); color: var(--acu-text-1); word-break: break-all;\n}\n.acu-stats--mono code[data-v-6a95c4bd] {\n  display: inline-block; max-width: 100%;\n  font-family: var(--acu-font-mono); font-size: var(--acu-font-size-body, 12px);\n  background: transparent; color: var(--acu-text-1);\n  padding: 0; border-radius: 0;\n}\n@media (max-width: 720px) {\n.acu-stats[data-v-6a95c4bd] { grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/components/_lib/AcuStatsList.vue#style-0-6a95c4bd");
+    var AcuStatsList_vue_vue_type_style_index_0_scoped_6a95c4bd_lang = null;
 
     const _hoisted_1$i = { key: 0 };
     function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
@@ -86778,7 +87065,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					)],
     					64
     					/* STABLE_FRAGMENT */
-    				))])])]);
+    				))], true)])]);
     			}),
     			128
     			/* KEYED_FRAGMENT */
@@ -86787,7 +87074,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* CLASS */
     	);
     }
-    var AcuStatsList = /* @__PURE__ */ _export_sfc(_sfc_main$i, [["render", _sfc_render$i]]);
+    var AcuStatsList = /* @__PURE__ */ _export_sfc(_sfc_main$i, [["render", _sfc_render$i], ["__scopeId", "data-v-6a95c4bd"]]);
 
     var _sfc_main$h = /*@__PURE__*/ defineComponent({
         __name: 'VectorIndexPromptDrawer',
@@ -86824,8 +87111,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-vector-prompt-drawer__toolbar {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-vector-prompt-drawer__actions {\n  position: sticky;\n  bottom: -16px;\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding: 12px 0 0;\n  background: var(--acu-bg-1);\n}\n", "src/presentation-v2/components/VectorIndexPromptDrawer.vue#style-0");
-    var VectorIndexPromptDrawer_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-vector-prompt-drawer__toolbar[data-v-71eeef0c] {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-vector-prompt-drawer__actions[data-v-71eeef0c] {\n  position: sticky;\n  bottom: -16px;\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding: 12px 0 0;\n  background: var(--acu-bg-1);\n}\n", "src/presentation-v2/components/VectorIndexPromptDrawer.vue#style-0-71eeef0c");
+    var VectorIndexPromptDrawer_vue_vue_type_style_index_0_scoped_71eeef0c_lang = null;
 
     const _hoisted_1$h = { class: "acu-vector-prompt-drawer__toolbar" };
     const _hoisted_2$g = { class: "acu-vector-prompt-drawer__actions" };
@@ -86893,7 +87180,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	}, 8, ["is-open"]);
     }
-    var VectorIndexPromptDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$h, [["render", _sfc_render$h]]);
+    var VectorIndexPromptDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$h, [["render", _sfc_render$h], ["__scopeId", "data-v-71eeef0c"]]);
 
     function createEmptyForm$1() {
         return {
@@ -86966,6 +87253,56 @@ Expected function or array of functions, received type ${typeof value}.`
         });
     }
 
+    function getCurrentSummaryVectorIndexSourceTableKey_ACU() {
+        const tables = currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object'
+            ? currentJsonTableData_ACU
+            : null;
+        if (!tables)
+            return 'summary';
+        return Object.keys(tables).find((key) => {
+            const table = tables[key];
+            return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
+        }) || 'summary';
+    }
+    async function deleteCurrentSummaryVectorIndexFromChat_ACU() {
+        const snapshot = getAggregatedSummaryVectorIndexSnapshot_ACU();
+        const chat = getChatArray_ACU();
+        const scopeHints = new Map();
+        let changed = false;
+        if (snapshot?.layers?.length) {
+            for (const layer of snapshot.layers) {
+                const message = chat[layer.messageIndex];
+                if (!message || message.is_user)
+                    continue;
+                const tagData = readIsolatedTagData_ACU(message, layer.isolationKey);
+                if (!tagData)
+                    continue;
+                const manifest = tagData.summaryVectorIndexManifest || tagData.summaryVectorIndexState?.manifest || null;
+                if (manifest) {
+                    const hint = {
+                        chatKey: manifest.chatKey || currentChatFileIdentifier_ACU,
+                        isolationKey: manifest.isolationKey || layer.isolationKey,
+                        sourceTableKey: manifest.sourceTableKey || getCurrentSummaryVectorIndexSourceTableKey_ACU(),
+                    };
+                    scopeHints.set(`${hint.chatKey || ''}\n${hint.isolationKey}\n${hint.sourceTableKey}`, hint);
+                }
+                assignSummaryVectorIndexStateToTagData_ACU(tagData, null);
+                writeIsolatedTagData_ACU(message, layer.isolationKey, tagData);
+                changed = true;
+            }
+        }
+        if (changed) {
+            await saveChatToHost_ACU();
+        }
+        const scopeHintList = Array.from(scopeHints.values());
+        for (const hint of scopeHintList) {
+            await deleteSummaryVectorHotCacheByScope_ACU(hint);
+            await clearSummaryVectorFlushTasksByScope_ACU(hint);
+        }
+        const gcResult = await cleanupUnreachableSummaryVectorIndexFiles_ACU({ scopeHints: scopeHintList });
+        return changed || gcResult.deletedPaths.length > 0 || gcResult.failedDeletes.length > 0;
+    }
+
     /**
      * useVectorIndexConfig — 交火模式（向量混合增强）页配置 + buildNow 编排。
      *
@@ -86975,31 +87312,17 @@ Expected function or array of functions, received type ${typeof value}.`
      * - 立即构建（buildNow）：编排 loadOrCreate + saveIndependent + archiveSummaryVectorIndexNow。
      * - Vue 组件只读写本 composable 暴露的 ref / form / 方法。
      */
-    const DEFAULT_RECENT_FIXED_INJECT_COUNT = 50;
+    function getDefaultVectorMemoryConfigForV2() {
+        return defaultVectorMemoryConfig_ACU;
+    }
+    function getDefaultRecentFixedInjectCount() {
+        const value = Number(getDefaultVectorMemoryConfigForV2().recentFixedInjectCount);
+        return Number.isFinite(value) && value > 0 ? Math.floor(value) : 50;
+    }
     function updateGlobalVectorMemoryConfigFields_ACU(patch) {
         const config = getCurrentVectorMemoryConfig_ACU();
         Object.assign(config, patch);
         return config;
-    }
-    async function deleteCurrentSummaryVectorIndexFromChat_ACU() {
-        const snapshot = getLatestSummaryVectorIndexSnapshotState_ACU();
-        const latestLayer = snapshot?.layers?.[0] || null;
-        const tagData = latestLayer?.tagData;
-        const manifest = tagData?.summaryVectorIndexManifest
-            || tagData?.summaryVectorIndexState?.manifest
-            || snapshot?.summaryVectorIndexState?.manifest
-            || null;
-        const hadState = !!tagData?.summaryVectorIndexState || !!tagData?.summaryVectorIndexManifest || !!manifest;
-        if (!hadState)
-            return false;
-        if (manifest) {
-            await deleteSummaryVectorIndexExternal_ACU(manifest);
-        }
-        if (tagData) {
-            assignSummaryVectorIndexStateToTagData_ACU(tagData, null);
-        }
-        await saveChatToHost_ACU();
-        return true;
     }
     const STATUS_LABELS = {
         none: '未加载',
@@ -87030,24 +87353,25 @@ Expected function or array of functions, received type ${typeof value}.`
         superseded: 'neutral',
     };
     function createEmptyForm() {
+        const defaults = getDefaultVectorMemoryConfigForV2();
         return {
-            embeddingEndpoint: '',
-            embeddingModel: '',
-            embeddingApiKey: '',
-            rerankEndpoint: '',
-            rerankModel: '',
-            rerankApiKey: '',
-            summaryIndexKeywordMinRows: 100,
-            topK: 10,
-            minScore: 0.4,
-            recallCandidateLimit: 1000,
-            recentFixedInjectCount: 50,
-            vectorNamespace: 'chat',
-            summaryChunkSentenceCount: 2,
-            summaryIndexArchiveMaxConcurrency: 30,
-            keywordApiPreset: '',
-            keywordContextPairCount: 1,
-            keywordGenerationMaxAttempts: 3,
+            embeddingEndpoint: defaults.embeddingEndpoint || '',
+            embeddingModel: defaults.embeddingModel || '',
+            embeddingApiKey: defaults.embeddingApiKey || '',
+            rerankEndpoint: defaults.rerankEndpoint || '',
+            rerankModel: defaults.rerankModel || '',
+            rerankApiKey: defaults.rerankApiKey || '',
+            summaryIndexKeywordMinRows: defaults.summaryIndexKeywordMinRows,
+            topK: defaults.topK,
+            minScore: defaults.minScore,
+            recallCandidateLimit: defaults.recallCandidateLimit,
+            recentFixedInjectCount: defaults.recentFixedInjectCount,
+            vectorNamespace: defaults.vectorNamespace || 'chat',
+            summaryChunkSentenceCount: defaults.summaryChunkSentenceCount,
+            summaryIndexArchiveMaxConcurrency: defaults.summaryIndexArchiveMaxConcurrency ?? 30,
+            keywordApiPreset: defaults.keywordApiPreset || '',
+            keywordContextPairCount: defaults.keywordContextPairCount,
+            keywordGenerationMaxAttempts: defaults.keywordGenerationMaxAttempts,
         };
     }
     function cloneSegments(segments) {
@@ -87155,11 +87479,12 @@ Expected function or array of functions, received type ${typeof value}.`
             if (key === 'recentFixedInjectCount') {
                 const value = Number(raw);
                 if (!Number.isFinite(value) || value <= 0) {
+                    const fallback = getDefaultRecentFixedInjectCount();
                     form.recentFixedInjectCount = Number.isFinite(value) ? Math.floor(value) : 0;
-                    toast.warning('固定写入必须是正整数，已重置为默认值 50。');
-                    form.recentFixedInjectCount = DEFAULT_RECENT_FIXED_INJECT_COUNT;
+                    toast.warning(`固定写入必须是正整数，已重置为默认值 ${fallback}。`);
+                    form.recentFixedInjectCount = fallback;
                     updateGlobalVectorMemoryConfigFields_ACU({
-                        recentFixedInjectCount: DEFAULT_RECENT_FIXED_INJECT_COUNT,
+                        recentFixedInjectCount: fallback,
                     });
                     saveSettings_ACU();
                     runValidation();
@@ -87600,8 +87925,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-vector-index-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-vector-index-page__panel-stack {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n.acu-v2-vector-index-page__number-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\n  gap: 10px;\n}\n.acu-v2-vector-api-form {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-v2-vector-api-form__section {\n  min-width: 0;\n  margin: 0;\n  padding: 0 0 18px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n}\n.acu-v2-vector-api-form__section:last-of-type {\n  padding-bottom: 0;\n  border-bottom: 0;\n}\n.acu-v2-vector-api-form__section + .acu-v2-vector-api-form__section {\n  padding-top: 2px;\n}\n.acu-v2-vector-api-form__section legend {\n  width: 100%;\n  margin: 0 0 2px;\n  padding: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  font-weight: 700;\n  line-height: 1.35;\n}\n.acu-v2-vector-api-form__actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__hint {\n  margin: 0;\n  font-size: var(--acu-font-size-body, 12px);\n  color: var(--acu-text-3);\n  line-height: 1.55;\n}\n.acu-v2-vector-index-page__maintenance-spacer {\n  flex: 1 1 auto;\n  min-height: 0;\n}\n.acu-v2-vector-index-page__actions {\n  display: flex;\n  justify-content: flex-end;\n  flex-wrap: wrap;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__prompt-actions {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-vector-index-page {\n    padding: 14px;\n}\n}\n.acu-v2-vector-api-form__instruction-textarea {\n  width: 100%;\n  min-height: 60px;\n  padding: 6px 8px;\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\n  border-radius: 4px;\n  background: var(--acu-bg-2, transparent);\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.5;\n  resize: vertical;\n}\n", "src/presentation-v2/pages/VectorIndexPage.vue#style-0");
-    var VectorIndexPage_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-vector-index-page[data-v-8921a6f8] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-vector-index-page__panel-stack[data-v-8921a6f8] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n.acu-v2-vector-index-page__number-grid[data-v-8921a6f8] {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\n  gap: 10px;\n}\n.acu-v2-vector-api-form[data-v-8921a6f8] {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-v2-vector-api-form__section[data-v-8921a6f8] {\n  min-width: 0;\n  margin: 0;\n  padding: 0 0 18px;\n  border: 0;\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  border-radius: 0;\n  background: transparent;\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n}\n.acu-v2-vector-api-form__section[data-v-8921a6f8]:last-of-type {\n  padding-bottom: 0;\n  border-bottom: 0;\n}\n.acu-v2-vector-api-form__section + .acu-v2-vector-api-form__section[data-v-8921a6f8] {\n  padding-top: 2px;\n}\n.acu-v2-vector-api-form__section legend[data-v-8921a6f8] {\n  width: 100%;\n  margin: 0 0 2px;\n  padding: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  font-weight: 700;\n  line-height: 1.35;\n}\n.acu-v2-vector-api-form__actions[data-v-8921a6f8] {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__hint[data-v-8921a6f8] {\n  margin: 0;\n  font-size: var(--acu-font-size-body, 12px);\n  color: var(--acu-text-3);\n  line-height: 1.55;\n}\n.acu-v2-vector-index-page__maintenance-spacer[data-v-8921a6f8] {\n  flex: 1 1 auto;\n  min-height: 0;\n}\n.acu-v2-vector-index-page__actions[data-v-8921a6f8] {\n  display: flex;\n  justify-content: flex-end;\n  flex-wrap: wrap;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__prompt-actions[data-v-8921a6f8] {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-vector-index-page[data-v-8921a6f8] {\n    padding: 14px;\n}\n}\n.acu-v2-vector-api-form__instruction-textarea[data-v-8921a6f8] {\n  width: 100%;\n  min-height: 60px;\n  padding: 6px 8px;\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\n  border-radius: 4px;\n  background: var(--acu-bg-2, transparent);\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.5;\n  resize: vertical;\n}\n", "src/presentation-v2/pages/VectorIndexPage.vue#style-0-8921a6f8");
+    var VectorIndexPage_vue_vue_type_style_index_0_scoped_8921a6f8_lang = null;
 
     const _hoisted_1$g = { class: "acu-v2-vector-index-page" };
     const _hoisted_2$f = { class: "acu-v2-vector-index-page__panel-stack" };
@@ -88076,7 +88401,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		])
     	]);
     }
-    var VectorIndexPage = /* @__PURE__ */ _export_sfc(_sfc_main$g, [["render", _sfc_render$g]]);
+    var VectorIndexPage = /* @__PURE__ */ _export_sfc(_sfc_main$g, [["render", _sfc_render$g], ["__scopeId", "data-v-8921a6f8"]]);
 
     /**
      * useDataManagement — 数据管理页业务流编排
@@ -88084,6 +88409,19 @@ Expected function or array of functions, received type ${typeof value}.`
      * v2 页面只依赖本 composable；旧 settings / chat / worldbook / template service
      * 调用集中在这里，避免 Vue 组件跨进旧 presentation 层。
      */
+    const DEFAULT_RESET_DEFAULTS_OPTIONS = {
+        restoreTemplateAndPrompts: true,
+        clearTemplateSnapshots: true,
+        clearPlotSnapshots: true,
+        clearTableLocks: true,
+        clearTableOrder: true,
+    };
+    function normalizeResetDefaultsOptions(options = {}) {
+        return { ...DEFAULT_RESET_DEFAULTS_OPTIONS, ...options };
+    }
+    function hasSelectedResetDefaultsOption(options) {
+        return Object.values(options).some(Boolean);
+    }
     function setMessage$1(target, kind, text) {
         target.value = { kind, text, at: Date.now() };
     }
@@ -88326,26 +88664,74 @@ Expected function or array of functions, received type ${typeof value}.`
                 toast.error('导出 JSON 失败，详情见运行日志。');
             }
         }
-        async function resetAllDefaults() {
+        async function resetAllDefaults(options = {}) {
+            const cleanup = normalizeResetDefaultsOptions(options);
+            if (!hasSelectedResetDefaultsOption(cleanup)) {
+                toast.warning('未选择需要恢复或清理的项目。');
+                return;
+            }
             busyAction.value = 'reset-defaults';
             try {
-                settings_ACU.charCardPrompt = isSqliteMode() ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU;
-                settings_ACU.mergeSummaryPrompt = isSqliteMode() ? DEFAULT_MERGE_SUMMARY_PROMPT_SQL_ACU : DEFAULT_MERGE_SUMMARY_PROMPT_ACU;
-                const snapshot = getDefaultTemplateSnapshot_ACU();
-                if (!snapshot?.templateStr)
+                const snapshot = cleanup.restoreTemplateAndPrompts ? getDefaultTemplateSnapshot_ACU() : null;
+                if (cleanup.restoreTemplateAndPrompts && !snapshot?.templateStr)
                     throw new Error('无法解析默认模板。');
-                const applied = await applyTemplateSnapshotToScope_ACU(snapshot.templateStr, {
-                    scope: 'global',
-                    source: 'v2_reset_all_defaults',
-                    presetName: '',
-                    save: true,
-                    persistChatScope: false,
-                });
-                if (!applied)
-                    throw new Error('默认模板应用失败。');
-                saveSettings_ACU();
+                if (cleanup.restoreTemplateAndPrompts) {
+                    settings_ACU.charCardPrompt = isSqliteMode() ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU;
+                    settings_ACU.mergeSummaryPrompt = isSqliteMode() ? DEFAULT_MERGE_SUMMARY_PROMPT_SQL_ACU : DEFAULT_MERGE_SUMMARY_PROMPT_ACU;
+                }
+                if (cleanup.clearTableOrder) {
+                    settings_ACU.tableKeyOrder = [];
+                }
+                if (cleanup.clearTableLocks) {
+                    clearCurrentTableLocks_ACU({ save: false });
+                }
+                if (cleanup.clearPlotSnapshots) {
+                    await clearCurrentChatPlotPresetOverride_ACU({
+                        source: 'v2_reset_all_defaults',
+                        saveSettings: false,
+                        saveChat: true,
+                    });
+                }
+                if (cleanup.clearTemplateSnapshots) {
+                    await clearCurrentChatTemplateSnapshots_ACU({
+                        clearCurrentOverride: true,
+                        clearArchives: true,
+                        clearGuide: true,
+                        clearLegacyGuide: true,
+                        save: true,
+                    });
+                }
+                if (cleanup.restoreTemplateAndPrompts) {
+                    const applied = await applyTemplateSnapshotToScope_ACU(snapshot.templateStr, {
+                        scope: 'global',
+                        source: 'v2_reset_all_defaults',
+                        presetName: '',
+                        save: true,
+                        persistChatScope: false,
+                    });
+                    if (!applied)
+                        throw new Error('默认模板应用失败。');
+                }
+                else if (cleanup.clearTemplateSnapshots) {
+                    applyTemplateScopeForCurrentChat_ACU();
+                }
+                const shouldSaveSettings = cleanup.restoreTemplateAndPrompts
+                    || cleanup.clearTableOrder
+                    || cleanup.clearTableLocks
+                    || cleanup.clearPlotSnapshots;
+                if (shouldSaveSettings)
+                    saveSettings_ACU();
+                const shouldRefreshTableData = cleanup.restoreTemplateAndPrompts
+                    || cleanup.clearTemplateSnapshots
+                    || cleanup.clearTableOrder
+                    || cleanup.clearTableLocks;
+                if (shouldRefreshTableData) {
+                    await loadOrCreateJsonTableFromChatHistory_ACU();
+                    await refreshMergedDataAndNotify_ACU();
+                }
+                refresh();
                 message.value = null;
-                toast.success('默认模板及提示词已恢复。');
+                toast.success('已按所选项目恢复默认配置。');
             }
             catch (e) {
                 logError_ACU('[ACU-V2] resetAllDefaults failed', e);
@@ -88463,7 +88849,7 @@ Expected function or array of functions, received type ${typeof value}.`
             },
             cleanup: {
                 title: "删除与清理",
-                description: "此处仅用于清理当前聊天楼层里的插件本地数据，不影响聊天正文。自动保留策略只会在自动更新结束后清理旧楼层；下面两个本地数据删除按钮会立即按 AI 楼层范围删除。",
+                description: "此处用于清理当前聊天楼层里的插件本地数据，或把数据库模板、提示词与当前聊天快照缓存恢复到默认状态；不会影响聊天正文。自动保留策略只会在自动更新结束后清理旧楼层；本地数据删除按钮会立即按 AI 楼层范围删除。",
             },
         },
     };
@@ -88472,6 +88858,38 @@ Expected function or array of functions, received type ${typeof value}.`
         __name: 'DataMgmtPage',
         setup(__props, { expose: __expose }) {
             __expose();
+            const resetDefaultsCleanupOptions = [
+                {
+                    value: "restore-template-prompts",
+                    label: "默认表格模板与提示词",
+                    description: "恢复默认表格模板、填表提示词和合并总结提示词。",
+                    defaultChecked: true,
+                },
+                {
+                    value: "clear-template-snapshots",
+                    label: "当前聊天表格模板快照",
+                    description: "清理当前标识下由前端或角色卡导入的临时表格模板、预设快照和指导表。",
+                    defaultChecked: true,
+                },
+                {
+                    value: "clear-plot-snapshots",
+                    label: "当前聊天剧情推进预设快照",
+                    description: "清理当前聊天临时剧情推进覆盖，让它重新跟随全局设置。",
+                    defaultChecked: true,
+                },
+                {
+                    value: "clear-table-locks",
+                    label: "当前聊天表格锁",
+                    description: "清理当前聊天和当前标识下的表格行、列、单元格锁定状态。",
+                    defaultChecked: true,
+                },
+                {
+                    value: "clear-table-order",
+                    label: "表格顺序缓存",
+                    description: "清空旧的表格顺序缓存，后续按当前模板顺序重新显示。",
+                    defaultChecked: true,
+                },
+            ];
             const dialogStore = useDialogStore();
             const flow = useDataManagement();
             const historyExpanded = ref(false);
@@ -88531,20 +88949,41 @@ Expected function or array of functions, received type ${typeof value}.`
                     return;
                 void flow.deleteLocalData(mode);
             }
+            async function onResetAllDefaults() {
+                const selected = await dialogStore.selectMany({
+                    title: "恢复默认配置",
+                    message: "选择本次要恢复或清理的项目。默认全选；取消某一项后会保留对应内容。此流程不会删除聊天正文、本地楼层数据、API 配置或全局预设库。",
+                    options: resetDefaultsCleanupOptions,
+                    confirmLabel: "按所选项目恢复",
+                    confirmVariant: "danger",
+                    requireNonEmpty: true,
+                });
+                if (!selected)
+                    return;
+                const selectedSet = new Set(selected);
+                const cleanup = {
+                    restoreTemplateAndPrompts: selectedSet.has("restore-template-prompts"),
+                    clearTemplateSnapshots: selectedSet.has("clear-template-snapshots"),
+                    clearPlotSnapshots: selectedSet.has("clear-plot-snapshots"),
+                    clearTableLocks: selectedSet.has("clear-table-locks"),
+                    clearTableOrder: selectedSet.has("clear-table-order"),
+                };
+                void flow.resetAllDefaults(cleanup);
+            }
             function refreshAll() {
                 flow.refresh();
                 historyExpanded.value = false;
             }
             onMounted(refreshAll);
             watch(useChatChangedTick(), refreshAll);
-            const __returned__ = { dialogStore, flow, historyExpanded, isolationCodeHint, historyMetaLabel, selectHistory, onApplyIsolation, onRemoveHistory, onDeleteCurrentIsolationEntries, onOverrideLatestLayer, onDeleteLocalData, refreshAll, AcuButton, AcuDisclosureGroup, AcuFileButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuPanelGrid, get dataMgmtCopy() { return dataMgmtCopy; } };
+            const __returned__ = { resetDefaultsCleanupOptions, dialogStore, flow, historyExpanded, isolationCodeHint, historyMetaLabel, selectHistory, onApplyIsolation, onRemoveHistory, onDeleteCurrentIsolationEntries, onOverrideLatestLayer, onDeleteLocalData, onResetAllDefaults, refreshAll, AcuButton, AcuDisclosureGroup, AcuFileButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuPanelGrid, get dataMgmtCopy() { return dataMgmtCopy; } };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-v2-data-mgmt-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-data-mgmt-page__panel-stack {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n.acu-v2-data-mgmt-page__form-grid {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 12px;\n}\n.acu-v2-data-mgmt-page__form-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n}\n.acu-v2-data-mgmt-page__meta {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-v2-data-mgmt-page__cleanup-section {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  min-width: 0;\n}\n.acu-v2-data-mgmt-page__cleanup-section\n  + .acu-v2-data-mgmt-page__cleanup-section {\n  margin-top: 4px;\n  padding-top: 14px;\n  border-top: 1px solid var(--acu-border);\n}\n.acu-v2-data-mgmt-page__section-title {\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 600;\n  line-height: 1.35;\n}\n.acu-v2-data-mgmt-page__history {\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-bg-2) 72%, transparent);\n}\n.acu-v2-data-mgmt-page__history :deep(.acu-disclosure-group__header) {\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-data-mgmt-page__history-list {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-v2-data-mgmt-page__history-item {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 8px;\n  align-items: center;\n}\n.acu-v2-data-mgmt-page__history-fill {\n  width: 100%;\n  min-width: 0;\n  justify-content: flex-start;\n}\n.acu-v2-data-mgmt-page__history-code {\n  flex: 1;\n  min-width: 0;\n  overflow: hidden;\n  text-align: left;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-family: var(--acu-font-mono, Consolas, Menlo, monospace);\n}\n.acu-v2-data-mgmt-page__history-current {\n  flex-shrink: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-data-mgmt-page__history-empty {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-v2-data-mgmt-page__actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  justify-content: flex-end;\n}\n.acu-v2-data-mgmt-page__actions,\n.acu-v2-data-mgmt-page__command-grid {\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-data-mgmt-page__command-grid {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 8px;\n}\n.acu-v2-data-mgmt-page__command-grid--cleanup {\n  margin-top: 12px;\n}\n.acu-v2-data-mgmt-page__command-grid :deep(.acu-file-button),\n.acu-v2-data-mgmt-page__command-grid :deep(.acu-btn) {\n  width: 100%;\n  min-width: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-data-mgmt-page {\n    padding: 14px;\n}\n.acu-v2-data-mgmt-page__form-grid {\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 560px) {\n.acu-v2-data-mgmt-page__command-grid {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/DataMgmtPage.vue#style-0");
-    var DataMgmtPage_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-data-mgmt-page[data-v-a0cbd209] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-data-mgmt-page__panel-stack[data-v-a0cbd209] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n.acu-v2-data-mgmt-page__form-grid[data-v-a0cbd209] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 12px;\n}\n.acu-v2-data-mgmt-page__form-stack[data-v-a0cbd209] {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n}\n.acu-v2-data-mgmt-page__meta[data-v-a0cbd209] {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-v2-data-mgmt-page__cleanup-section[data-v-a0cbd209] {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  min-width: 0;\n}\n.acu-v2-data-mgmt-page__cleanup-section\n  + .acu-v2-data-mgmt-page__cleanup-section[data-v-a0cbd209] {\n  margin-top: 4px;\n  padding-top: 14px;\n  border-top: 1px solid var(--acu-border);\n}\n.acu-v2-data-mgmt-page__section-title[data-v-a0cbd209] {\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 600;\n  line-height: 1.35;\n}\n.acu-v2-data-mgmt-page__history[data-v-a0cbd209] {\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-bg-2) 72%, transparent);\n}\n.acu-v2-data-mgmt-page__history[data-v-a0cbd209] .acu-disclosure-group__header {\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-data-mgmt-page__history-list[data-v-a0cbd209] {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-v2-data-mgmt-page__history-item[data-v-a0cbd209] {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 8px;\n  align-items: center;\n}\n.acu-v2-data-mgmt-page__history-fill[data-v-a0cbd209] {\n  width: 100%;\n  min-width: 0;\n  justify-content: flex-start;\n}\n.acu-v2-data-mgmt-page__history-code[data-v-a0cbd209] {\n  flex: 1;\n  min-width: 0;\n  overflow: hidden;\n  text-align: left;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-family: var(--acu-font-mono, Consolas, Menlo, monospace);\n}\n.acu-v2-data-mgmt-page__history-current[data-v-a0cbd209] {\n  flex-shrink: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-data-mgmt-page__history-empty[data-v-a0cbd209] {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-v2-data-mgmt-page__actions[data-v-a0cbd209] {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  justify-content: flex-end;\n}\n.acu-v2-data-mgmt-page__actions[data-v-a0cbd209],\n.acu-v2-data-mgmt-page__command-grid[data-v-a0cbd209] {\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-data-mgmt-page__command-grid[data-v-a0cbd209] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 8px;\n}\n.acu-v2-data-mgmt-page__command-grid--cleanup[data-v-a0cbd209] {\n  margin-top: 12px;\n}\n.acu-v2-data-mgmt-page__command-grid[data-v-a0cbd209] .acu-file-button,\n.acu-v2-data-mgmt-page__command-grid[data-v-a0cbd209] .acu-btn {\n  width: 100%;\n  min-width: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-data-mgmt-page[data-v-a0cbd209] {\n    padding: 14px;\n}\n.acu-v2-data-mgmt-page__form-grid[data-v-a0cbd209] {\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 560px) {\n.acu-v2-data-mgmt-page__command-grid[data-v-a0cbd209] {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/DataMgmtPage.vue#style-0-a0cbd209");
+    var DataMgmtPage_vue_vue_type_style_index_0_scoped_a0cbd209_lang = null;
 
     const _hoisted_1$f = { class: "acu-v2-data-mgmt-page" };
     const _hoisted_2$e = { class: "acu-v2-data-mgmt-page__panel-stack" };
@@ -88759,102 +89198,120 @@ Expected function or array of functions, received type ${typeof value}.`
     			title: $setup.dataMgmtCopy.panels.cleanup.title,
     			description: $setup.dataMgmtCopy.panels.cleanup.description
     		}, {
-    			default: withCtx(() => [createBaseVNode("section", _hoisted_11$6, [_cache[13] || (_cache[13] = createBaseVNode(
-    				"h3",
-    				{
-    					id: "acu-cleanup-auto-title",
-    					class: "acu-v2-data-mgmt-page__section-title"
-    				},
-    				" 自动清理 ",
-    				-1
-    				/* CACHED */
-    			)), createBaseVNode("div", _hoisted_12$6, [createVNode($setup["AcuFormRow"], {
-    				label: "保留数据层数",
-    				hint: "自动更新结束后，超过保留范围的旧楼层插件数据会被清理；不影响聊天正文。"
-    			}, {
-    				default: withCtx(() => [createVNode($setup["AcuInput"], {
-    					type: "number",
-    					min: 0,
-    					step: 1,
-    					"model-value": $setup.flow.retainRecentLayers.value,
-    					onChange: _cache[2] || (_cache[2] = ($event) => $setup.flow.setRetainRecentLayers($event))
-    				}, null, 8, ["model-value"])]),
-    				_: 1
-    			})])]), createBaseVNode("section", _hoisted_13$5, [
-    				_cache[16] || (_cache[16] = createBaseVNode(
+    			default: withCtx(() => [
+    				createBaseVNode("section", _hoisted_11$6, [_cache[13] || (_cache[13] = createBaseVNode(
     					"h3",
     					{
-    						id: "acu-cleanup-manual-title",
+    						id: "acu-cleanup-auto-title",
     						class: "acu-v2-data-mgmt-page__section-title"
     					},
-    					" 手动删除 ",
+    					" 自动清理 ",
     					-1
     					/* CACHED */
-    				)),
-    				createBaseVNode(
-    					"p",
-    					_hoisted_14$5,
-    					" 当前聊天 " + toDisplayString($setup.flow.aiMessageCount.value) + " 个 AI 楼层 · 将处理：" + toDisplayString($setup.flow.rangeLabel.value),
-    					1
-    					/* TEXT */
-    				),
-    				createBaseVNode("div", _hoisted_15$4, [createVNode($setup["AcuFormRow"], {
-    					label: "起始楼层",
-    					hint: "从第N个楼层 AI 回复开始，留空为第 1 层。"
+    				)), createBaseVNode("div", _hoisted_12$6, [createVNode($setup["AcuFormRow"], {
+    					label: "保留数据层数",
+    					hint: "自动更新结束后，超过保留范围的旧楼层插件数据会被清理；不影响聊天正文。"
     				}, {
     					default: withCtx(() => [createVNode($setup["AcuInput"], {
-    						"model-value": $setup.flow.deleteRange.startFloor,
     						type: "number",
-    						min: 1,
+    						min: 0,
     						step: 1,
-    						"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.flow.deleteRange.startFloor = $event)
+    						"model-value": $setup.flow.retainRecentLayers.value,
+    						onChange: _cache[2] || (_cache[2] = ($event) => $setup.flow.setRetainRecentLayers($event))
     					}, null, 8, ["model-value"])]),
     					_: 1
-    				}), createVNode($setup["AcuFormRow"], {
-    					label: "终止楼层",
-    					hint: "留空为最新楼层。"
-    				}, {
-    					default: withCtx(() => [createVNode($setup["AcuInput"], {
-    						"model-value": $setup.flow.deleteRange.endFloor,
-    						type: "number",
-    						min: 1,
-    						step: 1,
-    						placeholder: "到最后",
-    						"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.flow.deleteRange.endFloor = $event)
-    					}, null, 8, ["model-value"])]),
-    					_: 1
-    				})]),
-    				createBaseVNode("div", _hoisted_16$4, [createVNode($setup["AcuButton"], {
-    					block: "",
-    					loading: $setup.flow.busyAction.value === "delete-current-local",
-    					onClick: _cache[5] || (_cache[5] = ($event) => $setup.onDeleteLocalData("current"))
-    				}, {
-    					default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
-    						" 删除当前标识本地数据 ",
+    				})])]),
+    				createBaseVNode("section", _hoisted_13$5, [
+    					_cache[14] || (_cache[14] = createBaseVNode(
+    						"h3",
+    						{
+    							id: "acu-cleanup-manual-title",
+    							class: "acu-v2-data-mgmt-page__section-title"
+    						},
+    						" 手动删除 ",
     						-1
     						/* CACHED */
-    					)])]),
-    					_: 1
-    				}, 8, ["loading"]), createVNode($setup["AcuButton"], {
-    					block: "",
-    					variant: "danger",
-    					loading: $setup.flow.busyAction.value === "delete-all-local",
-    					onClick: _cache[6] || (_cache[6] = ($event) => $setup.onDeleteLocalData("all"))
-    				}, {
-    					default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
-    						" 删除所有本地数据 ",
-    						-1
-    						/* CACHED */
-    					)])]),
-    					_: 1
-    				}, 8, ["loading"])])
-    			])]),
+    					)),
+    					createBaseVNode(
+    						"p",
+    						_hoisted_14$5,
+    						" 当前聊天 " + toDisplayString($setup.flow.aiMessageCount.value) + " 个 AI 楼层 · 将处理：" + toDisplayString($setup.flow.rangeLabel.value),
+    						1
+    						/* TEXT */
+    					),
+    					createBaseVNode("div", _hoisted_15$4, [createVNode($setup["AcuFormRow"], {
+    						label: "起始楼层",
+    						hint: "从第N个楼层 AI 回复开始，留空为第 1 层。"
+    					}, {
+    						default: withCtx(() => [createVNode($setup["AcuInput"], {
+    							"model-value": $setup.flow.deleteRange.startFloor,
+    							type: "number",
+    							min: 1,
+    							step: 1,
+    							"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.flow.deleteRange.startFloor = $event)
+    						}, null, 8, ["model-value"])]),
+    						_: 1
+    					}), createVNode($setup["AcuFormRow"], {
+    						label: "终止楼层",
+    						hint: "留空为最新楼层。"
+    					}, {
+    						default: withCtx(() => [createVNode($setup["AcuInput"], {
+    							"model-value": $setup.flow.deleteRange.endFloor,
+    							type: "number",
+    							min: 1,
+    							step: 1,
+    							placeholder: "到最后",
+    							"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.flow.deleteRange.endFloor = $event)
+    						}, null, 8, ["model-value"])]),
+    						_: 1
+    					})])
+    				]),
+    				createBaseVNode("div", _hoisted_16$4, [
+    					createVNode($setup["AcuButton"], {
+    						block: "",
+    						loading: $setup.flow.busyAction.value === "delete-current-local",
+    						onClick: _cache[5] || (_cache[5] = ($event) => $setup.onDeleteLocalData("current"))
+    					}, {
+    						default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
+    							" 删除当前标识本地数据 ",
+    							-1
+    							/* CACHED */
+    						)])]),
+    						_: 1
+    					}, 8, ["loading"]),
+    					createVNode($setup["AcuButton"], {
+    						block: "",
+    						variant: "danger",
+    						loading: $setup.flow.busyAction.value === "delete-all-local",
+    						onClick: _cache[6] || (_cache[6] = ($event) => $setup.onDeleteLocalData("all"))
+    					}, {
+    						default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+    							" 删除所有本地数据 ",
+    							-1
+    							/* CACHED */
+    						)])]),
+    						_: 1
+    					}, 8, ["loading"]),
+    					createVNode($setup["AcuButton"], {
+    						block: "",
+    						loading: $setup.flow.busyAction.value === "reset-defaults",
+    						onClick: $setup.onResetAllDefaults
+    					}, {
+    						default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
+    							" 恢复默认配置 ",
+    							-1
+    							/* CACHED */
+    						)])]),
+    						_: 1
+    					}, 8, ["loading"])
+    				])
+    			]),
     			_: 1
     		}, 8, ["title", "description"])])]),
     		_: 1
     	})]);
     }
-    var DataMgmtPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$f]]);
+    var DataMgmtPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$f], ["__scopeId", "data-v-a0cbd209"]]);
 
     var _sfc_main$e = /*@__PURE__*/ defineComponent({
         __name: 'ContentReplacePresetDrawer',
@@ -88872,8 +89329,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-content-replace-preset-drawer__top-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-content-replace-preset-drawer__empty {\n  margin: 12px 0;\n}\n.acu-v2-manage-list {\n  list-style: none;\n  margin: 0;\n  padding: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-v2-manage-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 10px 12px;\n  border: 0;\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-manage-item:last-child {\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info {\n  flex: 1;\n  min-width: 0;\n}\n.acu-v2-manage-item__name {\n  display: block;\n  font-size: var(--acu-font-size-list-title, 13px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 500;\n  color: var(--acu-text-1);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta {\n  display: block;\n  margin-top: 2px;\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: var(--acu-line-height-caption, 1.5);\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions {\n  display: flex;\n  gap: 4px;\n}\n", "src/presentation-v2/components/ContentReplacePresetDrawer.vue#style-0");
-    var ContentReplacePresetDrawer_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-content-replace-preset-drawer__top-actions[data-v-d59c3617] {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-content-replace-preset-drawer__empty[data-v-d59c3617] {\n  margin: 12px 0;\n}\n.acu-v2-manage-list[data-v-d59c3617] {\n  list-style: none;\n  margin: 0;\n  padding: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n.acu-v2-manage-item[data-v-d59c3617] {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 10px 12px;\n  border: 0;\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-manage-item[data-v-d59c3617]:last-child {\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info[data-v-d59c3617] {\n  flex: 1;\n  min-width: 0;\n}\n.acu-v2-manage-item__name[data-v-d59c3617] {\n  display: block;\n  font-size: var(--acu-font-size-list-title, 13px);\n  line-height: var(--acu-line-height-body, 1.45);\n  font-weight: 500;\n  color: var(--acu-text-1);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta[data-v-d59c3617] {\n  display: block;\n  margin-top: 2px;\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: var(--acu-line-height-caption, 1.5);\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions[data-v-d59c3617] {\n  display: flex;\n  gap: 4px;\n}\n", "src/presentation-v2/components/ContentReplacePresetDrawer.vue#style-0-d59c3617");
+    var ContentReplacePresetDrawer_vue_vue_type_style_index_0_scoped_d59c3617_lang = null;
 
     const _hoisted_1$e = { class: "acu-content-replace-preset-drawer__top-actions" };
     const _hoisted_2$d = {
@@ -89013,7 +89470,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	}, 8, ["is-open"]);
     }
-    var ContentReplacePresetDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$e, [["render", _sfc_render$e]]);
+    var ContentReplacePresetDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$e, [["render", _sfc_render$e], ["__scopeId", "data-v-d59c3617"]]);
 
     var _sfc_main$d = /*@__PURE__*/ defineComponent({
         __name: 'ContentReplacePromptDrawer',
@@ -89049,8 +89506,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-content-replace-prompt-drawer__meta {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  flex-wrap: wrap;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-content-replace-prompt-drawer__meta code {\n  padding: 2px 5px;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  color: var(--acu-text-2);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-content-replace-prompt-drawer__toolbar {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-content-replace-prompt-drawer__actions {\n  position: sticky;\n  bottom: -16px;\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding: 12px 0 0;\n  background: var(--acu-bg-1);\n}\n", "src/presentation-v2/components/ContentReplacePromptDrawer.vue#style-0");
-    var ContentReplacePromptDrawer_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-content-replace-prompt-drawer__meta[data-v-15ea84da] {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  flex-wrap: wrap;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-content-replace-prompt-drawer__meta code[data-v-15ea84da] {\n  padding: 2px 5px;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  color: var(--acu-text-2);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-content-replace-prompt-drawer__toolbar[data-v-15ea84da] {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-content-replace-prompt-drawer__actions[data-v-15ea84da] {\n  position: sticky;\n  bottom: -16px;\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding: 12px 0 0;\n  background: var(--acu-bg-1);\n}\n", "src/presentation-v2/components/ContentReplacePromptDrawer.vue#style-0-15ea84da");
+    var ContentReplacePromptDrawer_vue_vue_type_style_index_0_scoped_15ea84da_lang = null;
 
     const _hoisted_1$d = { class: "acu-content-replace-prompt-drawer__meta" };
     const _hoisted_2$c = { class: "acu-content-replace-prompt-drawer__toolbar" };
@@ -89183,7 +89640,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	}, 8, ["is-open"]);
     }
-    var ContentReplacePromptDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$d]]);
+    var ContentReplacePromptDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$d], ["__scopeId", "data-v-15ea84da"]]);
 
     const contentReplaceCopy = {
         nav: {
@@ -89953,8 +90410,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-content-replace-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-content-replace-page__mini-status span {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-v2-content-replace-page__number-grid,\n.acu-v2-content-replace-page__form-grid {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 12px;\n}\n.acu-v2-content-replace-page__choice-list,\n.acu-v2-content-replace-page__rule-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-v2-content-replace-page__mini-status {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 10px;\n  padding: 8px 0;\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-content-replace-page__mini-status strong {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-content-replace-page__status-line {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-wrap: wrap;\n  margin: 0 0 10px;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-content-replace-page__status-line strong {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-content-replace-page__badge {\n  display: inline-flex;\n  align-items: center;\n  padding: 1px 8px;\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 500;\n}\n.acu-v2-content-replace-page__select-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\n  gap: 6px;\n  align-items: stretch;\n  min-width: 0;\n}\n.acu-v2-content-replace-page__actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  justify-content: flex-end;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-content-replace-page__test-output {\n  margin: 0;\n  max-height: 280px;\n  overflow: auto;\n  padding: 10px 0;\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.55;\n  white-space: pre-wrap;\n  word-break: break-word;\n}\n@media (max-width: 860px) {\n.acu-v2-content-replace-page {\n    padding: 14px;\n}\n.acu-v2-content-replace-page__number-grid,\n  .acu-v2-content-replace-page__form-grid {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/ContentReplacePage.vue#style-0");
-    var ContentReplacePage_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-content-replace-page[data-v-a1ce246d] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-content-replace-page__mini-status span[data-v-a1ce246d] {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-v2-content-replace-page__number-grid[data-v-a1ce246d],\n.acu-v2-content-replace-page__form-grid[data-v-a1ce246d] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 12px;\n}\n.acu-v2-content-replace-page__choice-list[data-v-a1ce246d],\n.acu-v2-content-replace-page__rule-stack[data-v-a1ce246d] {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-v2-content-replace-page__mini-status[data-v-a1ce246d] {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 10px;\n  padding: 8px 0;\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-content-replace-page__mini-status strong[data-v-a1ce246d] {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-content-replace-page__status-line[data-v-a1ce246d] {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-wrap: wrap;\n  margin: 0 0 10px;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-content-replace-page__status-line strong[data-v-a1ce246d] {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-content-replace-page__badge[data-v-a1ce246d] {\n  display: inline-flex;\n  align-items: center;\n  padding: 1px 8px;\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 500;\n}\n.acu-v2-content-replace-page__select-row[data-v-a1ce246d] {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\n  gap: 6px;\n  align-items: stretch;\n  min-width: 0;\n}\n.acu-v2-content-replace-page__actions[data-v-a1ce246d] {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  justify-content: flex-end;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-content-replace-page__test-output[data-v-a1ce246d] {\n  margin: 0;\n  max-height: 280px;\n  overflow: auto;\n  padding: 10px 0;\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.55;\n  white-space: pre-wrap;\n  word-break: break-word;\n}\n@media (max-width: 860px) {\n.acu-v2-content-replace-page[data-v-a1ce246d] {\n    padding: 14px;\n}\n.acu-v2-content-replace-page__number-grid[data-v-a1ce246d],\n  .acu-v2-content-replace-page__form-grid[data-v-a1ce246d] {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/ContentReplacePage.vue#style-0-a1ce246d");
+    var ContentReplacePage_vue_vue_type_style_index_0_scoped_a1ce246d_lang = null;
 
     const _hoisted_1$c = { class: "acu-v2-content-replace-page" };
     const _hoisted_2$b = { class: "acu-v2-content-replace-page__number-grid" };
@@ -90341,7 +90798,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		])
     	]);
     }
-    var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$c]]);
+    var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$c], ["__scopeId", "data-v-a1ce246d"]]);
 
     /**
      * useSqlConsole — SQL 控制台业务流编排
@@ -90754,8 +91211,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-advanced-tools-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-advanced-tools-page__sql-panel,\n.acu-v2-advanced-tools-page__log-panel {\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__quick-actions,\n.acu-v2-advanced-tools-page__log-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-textarea {\n  font-family: var(--acu-font-mono);\n  min-height: 210px;\n  white-space: pre;\n}\n.acu-v2-advanced-tools-page__sql-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  align-items: center;\n  justify-content: flex-end;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-advanced-tools-page__sql-status {\n  margin-left: auto;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.5;\n}\n.acu-v2-advanced-tools-page__sql-status--success {\n  color: var(--acu-success);\n}\n.acu-v2-advanced-tools-page__sql-status--warning {\n  color: var(--acu-warning);\n}\n.acu-v2-advanced-tools-page__sql-status--error {\n  color: var(--acu-danger);\n}\n.acu-v2-advanced-tools-page__sql-result-section,\n.acu-v2-advanced-tools-page__sql-history-section {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-v2-advanced-tools-page__sql-history-section {\n  padding-top: 12px;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-v2-advanced-tools-page__section-title {\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 600;\n  line-height: 1.35;\n}\n.acu-v2-advanced-tools-page__empty {\n  min-height: 96px;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: center;\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__empty--compact {\n  min-height: 72px;\n}\n.acu-v2-advanced-tools-page__empty--log {\n  min-height: 180px;\n  border: 0;\n}\n.acu-v2-advanced-tools-page__sql-table-wrap {\n  max-height: 330px;\n  overflow: auto;\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-result-table {\n  width: 100%;\n  border-collapse: collapse;\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-advanced-tools-page__sql-result-table th,\n.acu-v2-advanced-tools-page__sql-result-table td {\n  max-width: 300px;\n  padding: 7px 10px;\n  border-bottom: 1px solid var(--acu-border-2);\n  text-align: left;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n.acu-v2-advanced-tools-page__sql-result-table th {\n  position: sticky;\n  top: 0;\n  z-index: 1;\n  background: var(--acu-bg-1);\n  color: var(--acu-text-1);\n  font-weight: 600;\n}\n.acu-v2-advanced-tools-page__sql-result-table tbody tr:nth-child(even) {\n  background: color-mix(in srgb, var(--acu-text-3) 5%, transparent);\n}\n.acu-v2-advanced-tools-page__cell-null,\n.acu-v2-advanced-tools-page__empty-cell {\n  color: var(--acu-text-3);\n  font-style: italic;\n}\n.acu-v2-advanced-tools-page__sql-result-meta {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: right;\n}\n.acu-v2-advanced-tools-page__sql-error {\n  margin: 0;\n  min-height: 96px;\n  padding: 12px;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-danger) 8%, transparent);\n  color: var(--acu-danger);\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__filter-grid {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 12px;\n  align-items: stretch;\n}\n.acu-v2-advanced-tools-page__keyword-row {\n  grid-column: 1 / -1;\n}\n.acu-v2-advanced-tools-page__log-control-row {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 10px 14px;\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__toggles {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 14px;\n  align-items: center;\n  margin-left: auto;\n}\n.acu-v2-advanced-tools-page__hint {\n  flex: 1 1 100%;\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-list,\n.acu-v2-advanced-tools-page__log-list {\n  overflow: auto;\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-list {\n  max-height: 230px;\n}\n.acu-v2-advanced-tools-page__log-list {\n  min-height: 360px;\n  max-height: 58vh;\n}\n.acu-v2-advanced-tools-page__sql-history-item,\n.acu-v2-advanced-tools-page__log-row {\n  min-width: 0;\n  display: grid;\n  gap: 8px;\n  align-items: baseline;\n  padding: 7px 10px;\n  border-bottom: 1px solid var(--acu-border-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn {\n  display: flex;\n  flex-direction: column;\n  align-items: stretch;\n  gap: 6px;\n  padding-block: 9px;\n  border: 0;\n  border-bottom: 1px solid var(--acu-border-2);\n  background: transparent;\n  color: inherit;\n  cursor: pointer;\n  font: inherit;\n  text-align: left;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-advanced-tools-page__log-row {\n  display: flex;\n  flex-direction: column;\n  align-items: stretch;\n  gap: 6px;\n  padding-block: 9px;\n}\n.acu-v2-advanced-tools-page__log-meta {\n  min-width: 0;\n  display: flex;\n  flex-wrap: wrap;\n  gap: 6px 8px;\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-history-meta {\n  flex-wrap: nowrap;\n}\n.acu-v2-advanced-tools-page__sql-history-item:last-child,\n.acu-v2-advanced-tools-page__log-row:last-child {\n  border-bottom: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item--failure,\n.acu-v2-advanced-tools-page__log-row--error {\n  background: color-mix(in srgb, var(--acu-danger) 7%, transparent);\n}\n.acu-v2-advanced-tools-page__log-row--warn {\n  background: color-mix(in srgb, var(--acu-warning) 6%, transparent);\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn:hover {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn:focus-visible {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n  outline: none;\n}\n.acu-v2-advanced-tools-page__log-time,\n.acu-v2-advanced-tools-page__log-tag,\n.acu-v2-advanced-tools-page__log-message {\n  min-width: 0;\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-advanced-tools-page__log-time {\n  color: var(--acu-text-3);\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-tag {\n  flex: 1 1 180px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-message {\n  margin: 0;\n  color: var(--acu-text-1);\n  white-space: pre-wrap;\n  word-break: break-word;\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__log-body {\n  display: block;\n  width: 100%;\n}\n@media (max-width: 1080px) {\n.acu-v2-advanced-tools-page {\n    padding: 14px;\n}\n.acu-v2-advanced-tools-page__sql-actions {\n    justify-content: stretch;\n}\n.acu-v2-advanced-tools-page__sql-status {\n    width: 100%;\n    margin-left: 0;\n    text-align: right;\n}\n.acu-v2-advanced-tools-page__filter-grid {\n    grid-template-columns: 1fr;\n}\n.acu-v2-advanced-tools-page__log-control-row {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-v2-advanced-tools-page__toggles {\n    margin-left: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item,\n  .acu-v2-advanced-tools-page__log-row {\n    padding-inline: 9px;\n}\n}\n", "src/presentation-v2/pages/AdvancedToolsPage.vue#style-0");
-    var AdvancedToolsPage_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-advanced-tools-page[data-v-a9321fe7] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-advanced-tools-page__sql-panel[data-v-a9321fe7],\n.acu-v2-advanced-tools-page__log-panel[data-v-a9321fe7] {\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__quick-actions[data-v-a9321fe7],\n.acu-v2-advanced-tools-page__log-actions[data-v-a9321fe7] {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-textarea[data-v-a9321fe7] {\n  font-family: var(--acu-font-mono);\n  min-height: 210px;\n  white-space: pre;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-a9321fe7] {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  align-items: center;\n  justify-content: flex-end;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-a9321fe7] {\n  margin-left: auto;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.5;\n}\n.acu-v2-advanced-tools-page__sql-status--success[data-v-a9321fe7] {\n  color: var(--acu-success);\n}\n.acu-v2-advanced-tools-page__sql-status--warning[data-v-a9321fe7] {\n  color: var(--acu-warning);\n}\n.acu-v2-advanced-tools-page__sql-status--error[data-v-a9321fe7] {\n  color: var(--acu-danger);\n}\n.acu-v2-advanced-tools-page__sql-result-section[data-v-a9321fe7],\n.acu-v2-advanced-tools-page__sql-history-section[data-v-a9321fe7] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-v2-advanced-tools-page__sql-history-section[data-v-a9321fe7] {\n  padding-top: 12px;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-v2-advanced-tools-page__section-title[data-v-a9321fe7] {\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 600;\n  line-height: 1.35;\n}\n.acu-v2-advanced-tools-page__empty[data-v-a9321fe7] {\n  min-height: 96px;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: center;\n  border: 0;\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: 0;\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__empty--compact[data-v-a9321fe7] {\n  min-height: 72px;\n}\n.acu-v2-advanced-tools-page__empty--log[data-v-a9321fe7] {\n  min-height: 180px;\n  border: 0;\n}\n.acu-v2-advanced-tools-page__sql-table-wrap[data-v-a9321fe7] {\n  max-height: 330px;\n  overflow: auto;\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-result-table[data-v-a9321fe7] {\n  width: 100%;\n  border-collapse: collapse;\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-a9321fe7],\n.acu-v2-advanced-tools-page__sql-result-table td[data-v-a9321fe7] {\n  max-width: 300px;\n  padding: 7px 10px;\n  border-bottom: 1px solid var(--acu-border-2);\n  text-align: left;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-a9321fe7] {\n  position: sticky;\n  top: 0;\n  z-index: 1;\n  background: var(--acu-bg-1);\n  color: var(--acu-text-1);\n  font-weight: 600;\n}\n.acu-v2-advanced-tools-page__sql-result-table tbody tr[data-v-a9321fe7]:nth-child(even) {\n  background: color-mix(in srgb, var(--acu-text-3) 5%, transparent);\n}\n.acu-v2-advanced-tools-page__cell-null[data-v-a9321fe7],\n.acu-v2-advanced-tools-page__empty-cell[data-v-a9321fe7] {\n  color: var(--acu-text-3);\n  font-style: italic;\n}\n.acu-v2-advanced-tools-page__sql-result-meta[data-v-a9321fe7] {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: right;\n}\n.acu-v2-advanced-tools-page__sql-error[data-v-a9321fe7] {\n  margin: 0;\n  min-height: 96px;\n  padding: 12px;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-danger) 8%, transparent);\n  color: var(--acu-danger);\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-a9321fe7] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 12px;\n  align-items: stretch;\n}\n.acu-v2-advanced-tools-page__keyword-row[data-v-a9321fe7] {\n  grid-column: 1 / -1;\n}\n.acu-v2-advanced-tools-page__log-control-row[data-v-a9321fe7] {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-a9321fe7] {\n  min-width: 0;\n  display: flex;\n  flex-wrap: wrap;\n  gap: 10px 14px;\n  align-items: center;\n  justify-content: space-between;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-a9321fe7] {\n  width: max-content;\n  max-width: 100%;\n  display: grid;\n  grid-template-columns: max-content max-content;\n  gap: 10px 18px;\n  align-items: center;\n  justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-a9321fe7] .acu-toggle {\n  width: max-content;\n  max-width: none;\n  min-width: max-content;\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-a9321fe7] .acu-toggle__label {\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__hint[data-v-a9321fe7] {\n  max-width: 100%;\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-a9321fe7],\n.acu-v2-advanced-tools-page__log-list[data-v-a9321fe7] {\n  overflow: auto;\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-a9321fe7] {\n  max-height: 230px;\n}\n.acu-v2-advanced-tools-page__log-list[data-v-a9321fe7] {\n  min-height: 360px;\n  max-height: 58vh;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-a9321fe7],\n.acu-v2-advanced-tools-page__log-row[data-v-a9321fe7] {\n  min-width: 0;\n  display: grid;\n  gap: 8px;\n  align-items: baseline;\n  padding: 7px 10px;\n  border-bottom: 1px solid var(--acu-border-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-a9321fe7] {\n  display: flex;\n  flex-direction: column;\n  align-items: stretch;\n  gap: 6px;\n  padding-block: 9px;\n  border: 0;\n  border-bottom: 1px solid var(--acu-border-2);\n  background: transparent;\n  color: inherit;\n  cursor: pointer;\n  font: inherit;\n  text-align: left;\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-advanced-tools-page__log-row[data-v-a9321fe7] {\n  display: flex;\n  flex-direction: column;\n  align-items: stretch;\n  gap: 6px;\n  padding-block: 9px;\n}\n.acu-v2-advanced-tools-page__log-meta[data-v-a9321fe7] {\n  min-width: 0;\n  display: flex;\n  flex-wrap: wrap;\n  gap: 6px 8px;\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-history-meta[data-v-a9321fe7] {\n  flex-wrap: nowrap;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-a9321fe7]:last-child,\n.acu-v2-advanced-tools-page__log-row[data-v-a9321fe7]:last-child {\n  border-bottom: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item--failure[data-v-a9321fe7],\n.acu-v2-advanced-tools-page__log-row--error[data-v-a9321fe7] {\n  background: color-mix(in srgb, var(--acu-danger) 7%, transparent);\n}\n.acu-v2-advanced-tools-page__log-row--warn[data-v-a9321fe7] {\n  background: color-mix(in srgb, var(--acu-warning) 6%, transparent);\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-a9321fe7]:hover {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-a9321fe7]:focus-visible {\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n  outline: none;\n}\n.acu-v2-advanced-tools-page__log-time[data-v-a9321fe7],\n.acu-v2-advanced-tools-page__log-tag[data-v-a9321fe7],\n.acu-v2-advanced-tools-page__log-message[data-v-a9321fe7] {\n  min-width: 0;\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-advanced-tools-page__log-time[data-v-a9321fe7] {\n  color: var(--acu-text-3);\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-tag[data-v-a9321fe7] {\n  flex: 1 1 180px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-message[data-v-a9321fe7] {\n  margin: 0;\n  color: var(--acu-text-1);\n  white-space: pre-wrap;\n  word-break: break-word;\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__log-body[data-v-a9321fe7] {\n  display: block;\n  width: 100%;\n}\n@media (max-width: 1080px) {\n.acu-v2-advanced-tools-page[data-v-a9321fe7] {\n    padding: 14px;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-a9321fe7] {\n    justify-content: stretch;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-a9321fe7] {\n    width: 100%;\n    margin-left: 0;\n    text-align: right;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-a9321fe7] {\n    grid-template-columns: 1fr;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-a9321fe7] {\n    align-items: stretch;\n    flex-direction: column;\n    justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-a9321fe7] {\n    align-self: flex-start;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-a9321fe7],\n  .acu-v2-advanced-tools-page__log-row[data-v-a9321fe7] {\n    padding-inline: 9px;\n}\n}\n", "src/presentation-v2/pages/AdvancedToolsPage.vue#style-0-a9321fe7");
+    var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_a9321fe7_lang = null;
 
     const _hoisted_1$b = { class: "acu-v2-advanced-tools-page" };
     const _hoisted_2$a = {
@@ -90797,23 +91254,24 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_17$2 = { class: "acu-v2-advanced-tools-page__log-message acu-v2-advanced-tools-page__log-body" };
     const _hoisted_18$2 = { class: "acu-v2-advanced-tools-page__filter-grid" };
     const _hoisted_19$2 = { class: "acu-v2-advanced-tools-page__log-control-row" };
-    const _hoisted_20$1 = { class: "acu-v2-advanced-tools-page__log-actions" };
-    const _hoisted_21$1 = { class: "acu-v2-advanced-tools-page__toggles" };
-    const _hoisted_22$1 = { class: "acu-v2-advanced-tools-page__hint" };
-    const _hoisted_23$1 = {
+    const _hoisted_20$1 = { class: "acu-v2-advanced-tools-page__log-control-main" };
+    const _hoisted_21$1 = { class: "acu-v2-advanced-tools-page__log-actions" };
+    const _hoisted_22$1 = { class: "acu-v2-advanced-tools-page__toggles" };
+    const _hoisted_23$1 = { class: "acu-v2-advanced-tools-page__hint" };
+    const _hoisted_24$1 = {
     	ref: "logListRef",
     	class: "acu-v2-advanced-tools-page__log-list",
     	role: "log",
     	"aria-live": "polite"
     };
-    const _hoisted_24$1 = {
+    const _hoisted_25$1 = {
     	key: 0,
     	class: "acu-v2-advanced-tools-page__empty acu-v2-advanced-tools-page__empty--log"
     };
-    const _hoisted_25$1 = { class: "acu-v2-advanced-tools-page__log-meta" };
-    const _hoisted_26$1 = { class: "acu-v2-advanced-tools-page__log-time" };
-    const _hoisted_27$1 = { class: "acu-v2-advanced-tools-page__log-tag" };
-    const _hoisted_28$1 = { class: "acu-v2-advanced-tools-page__log-message acu-v2-advanced-tools-page__log-body" };
+    const _hoisted_26$1 = { class: "acu-v2-advanced-tools-page__log-meta" };
+    const _hoisted_27$1 = { class: "acu-v2-advanced-tools-page__log-time" };
+    const _hoisted_28$1 = { class: "acu-v2-advanced-tools-page__log-tag" };
+    const _hoisted_29 = { class: "acu-v2-advanced-tools-page__log-message acu-v2-advanced-tools-page__log-body" };
     function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock("section", _hoisted_1$b, [createVNode($setup["AcuMobilePanelNav"], { items: $setup.panelNavItems }), createVNode($setup["AcuPanelGrid"], {
     		class: "acu-v2-advanced-tools-page__tools-grid",
@@ -91103,82 +91561,78 @@ Expected function or array of functions, received type ${typeof value}.`
     						_: 1
     					})
     				]),
-    				createBaseVNode("div", _hoisted_19$2, [
-    					createBaseVNode("div", _hoisted_20$1, [
-    						createVNode($setup["AcuButton"], {
-    							variant: $setup.logFlow.paused.value ? "primary" : "default",
-    							onClick: _cache[3] || (_cache[3] = ($event) => $setup.logFlow.setPaused(!$setup.logFlow.paused.value))
-    						}, {
-    							default: withCtx(() => [createBaseVNode(
-    								"i",
-    								{ class: normalizeClass($setup.logFlow.paused.value ? "fa-solid fa-play" : "fa-solid fa-pause") },
-    								null,
-    								2
-    								/* CLASS */
-    							), _cache[11] || (_cache[11] = createTextVNode(
-    								" 暂停 ",
-    								-1
-    								/* CACHED */
-    							))]),
-    							_: 1
-    						}, 8, ["variant"]),
-    						createVNode($setup["AcuButton"], {
-    							disabled: !$setup.logFlow.totalCount.value,
-    							onClick: $setup.logFlow.exportFiltered
-    						}, {
-    							default: withCtx(() => [..._cache[12] || (_cache[12] = [createBaseVNode(
-    								"i",
-    								{ class: "fa-solid fa-upload" },
-    								null,
-    								-1
-    								/* CACHED */
-    							), createTextVNode(
-    								" 导出 ",
-    								-1
-    								/* CACHED */
-    							)])]),
-    							_: 1
-    						}, 8, ["disabled", "onClick"]),
-    						createVNode($setup["AcuButton"], {
-    							variant: "danger",
-    							disabled: !$setup.logFlow.totalCount.value,
-    							onClick: $setup.logFlow.clearAll
-    						}, {
-    							default: withCtx(() => [..._cache[13] || (_cache[13] = [createBaseVNode(
-    								"i",
-    								{ class: "fa-solid fa-trash" },
-    								null,
-    								-1
-    								/* CACHED */
-    							), createTextVNode(
-    								" 清空 ",
-    								-1
-    								/* CACHED */
-    							)])]),
-    							_: 1
-    						}, 8, ["disabled", "onClick"])
-    					]),
-    					createBaseVNode("div", _hoisted_21$1, [createVNode($setup["AcuToggle"], {
-    						"model-value": $setup.logFlow.autoScroll.value,
-    						label: "自动滚动",
-    						"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.logFlow.autoScroll.value = $event)
-    					}, null, 8, ["model-value"]), createVNode($setup["AcuToggle"], {
-    						"model-value": $setup.logFlow.debugLogEnabled.value,
-    						label: "Debug",
-    						"onUpdate:modelValue": $setup.logFlow.setDebugCollection
-    					}, null, 8, ["model-value", "onUpdate:modelValue"])]),
-    					createBaseVNode(
-    						"p",
-    						_hoisted_22$1,
-    						" 最多保留最近 2000 条；当前显示 " + toDisplayString($setup.logFlow.filteredCount.value) + " / " + toDisplayString($setup.logFlow.totalCount.value) + " 条。" + toDisplayString($setup.logFlow.pendingCount.value ? `${$setup.logFlow.pendingCount.value} 条暂停期间新增日志等待显示。` : "没有暂停期间积压的日志。"),
-    						1
-    						/* TEXT */
-    					)
-    				]),
+    				createBaseVNode("div", _hoisted_19$2, [createBaseVNode("div", _hoisted_20$1, [createBaseVNode("div", _hoisted_21$1, [
+    					createVNode($setup["AcuButton"], {
+    						variant: $setup.logFlow.paused.value ? "primary" : "default",
+    						onClick: _cache[3] || (_cache[3] = ($event) => $setup.logFlow.setPaused(!$setup.logFlow.paused.value))
+    					}, {
+    						default: withCtx(() => [createBaseVNode(
+    							"i",
+    							{ class: normalizeClass($setup.logFlow.paused.value ? "fa-solid fa-play" : "fa-solid fa-pause") },
+    							null,
+    							2
+    							/* CLASS */
+    						), _cache[11] || (_cache[11] = createTextVNode(
+    							" 暂停 ",
+    							-1
+    							/* CACHED */
+    						))]),
+    						_: 1
+    					}, 8, ["variant"]),
+    					createVNode($setup["AcuButton"], {
+    						disabled: !$setup.logFlow.totalCount.value,
+    						onClick: $setup.logFlow.exportFiltered
+    					}, {
+    						default: withCtx(() => [..._cache[12] || (_cache[12] = [createBaseVNode(
+    							"i",
+    							{ class: "fa-solid fa-upload" },
+    							null,
+    							-1
+    							/* CACHED */
+    						), createTextVNode(
+    							" 导出 ",
+    							-1
+    							/* CACHED */
+    						)])]),
+    						_: 1
+    					}, 8, ["disabled", "onClick"]),
+    					createVNode($setup["AcuButton"], {
+    						variant: "danger",
+    						disabled: !$setup.logFlow.totalCount.value,
+    						onClick: $setup.logFlow.clearAll
+    					}, {
+    						default: withCtx(() => [..._cache[13] || (_cache[13] = [createBaseVNode(
+    							"i",
+    							{ class: "fa-solid fa-trash" },
+    							null,
+    							-1
+    							/* CACHED */
+    						), createTextVNode(
+    							" 清空 ",
+    							-1
+    							/* CACHED */
+    						)])]),
+    						_: 1
+    					}, 8, ["disabled", "onClick"])
+    				]), createBaseVNode("div", _hoisted_22$1, [createVNode($setup["AcuToggle"], {
+    					"model-value": $setup.logFlow.autoScroll.value,
+    					label: "自动滚动",
+    					"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.logFlow.autoScroll.value = $event)
+    				}, null, 8, ["model-value"]), createVNode($setup["AcuToggle"], {
+    					"model-value": $setup.logFlow.debugLogEnabled.value,
+    					label: "Debug",
+    					"onUpdate:modelValue": $setup.logFlow.setDebugCollection
+    				}, null, 8, ["model-value", "onUpdate:modelValue"])])]), createBaseVNode(
+    					"p",
+    					_hoisted_23$1,
+    					" 最多保留最近 2000 条；当前显示 " + toDisplayString($setup.logFlow.filteredCount.value) + " / " + toDisplayString($setup.logFlow.totalCount.value) + " 条。" + toDisplayString($setup.logFlow.pendingCount.value ? `${$setup.logFlow.pendingCount.value} 条暂停期间新增日志等待显示。` : "没有暂停期间积压的日志。"),
+    					1
+    					/* TEXT */
+    				)]),
     				createBaseVNode(
     					"div",
-    					_hoisted_23$1,
-    					[!$setup.logFlow.visibleLogs.value.length ? (openBlock(), createElementBlock("div", _hoisted_24$1, " 暂无匹配日志 ")) : createCommentVNode("v-if", true), (openBlock(true), createElementBlock(
+    					_hoisted_24$1,
+    					[!$setup.logFlow.visibleLogs.value.length ? (openBlock(), createElementBlock("div", _hoisted_25$1, " 暂无匹配日志 ")) : createCommentVNode("v-if", true), (openBlock(true), createElementBlock(
     						Fragment,
     						null,
     						renderList($setup.logFlow.visibleLogs.value, (entry) => {
@@ -91188,10 +91642,10 @@ Expected function or array of functions, received type ${typeof value}.`
     									key: entry.id,
     									class: normalizeClass(["acu-v2-advanced-tools-page__log-row", `acu-v2-advanced-tools-page__log-row--${entry.level}`])
     								},
-    								[createBaseVNode("div", _hoisted_25$1, [
+    								[createBaseVNode("div", _hoisted_26$1, [
     									createBaseVNode(
     										"span",
-    										_hoisted_26$1,
+    										_hoisted_27$1,
     										toDisplayString($setup.formatTime(entry.timestamp)),
     										1
     										/* TEXT */
@@ -91206,14 +91660,14 @@ Expected function or array of functions, received type ${typeof value}.`
     									}, 1032, ["variant"]),
     									createBaseVNode(
     										"span",
-    										_hoisted_27$1,
+    										_hoisted_28$1,
     										toDisplayString(entry.tag),
     										1
     										/* TEXT */
     									)
     								]), createBaseVNode(
     									"code",
-    									_hoisted_28$1,
+    									_hoisted_29,
     									toDisplayString(entry.message),
     									1
     									/* TEXT */
@@ -91234,7 +91688,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	})]);
     }
-    var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b]]);
+    var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-a9321fe7"]]);
 
     const developerCopy = {
         panels: {
@@ -91293,8 +91747,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-developer-page {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-developer-page__toggle-list {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n@media (max-width: 860px) {\n.acu-v2-developer-page {\n    padding: 14px;\n}\n}\n", "src/presentation-v2/pages/DeveloperPage.vue#style-0");
-    var DeveloperPage_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-developer-page[data-v-e5a7f6bb] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-developer-page__toggle-list[data-v-e5a7f6bb] {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n@media (max-width: 860px) {\n.acu-v2-developer-page[data-v-e5a7f6bb] {\n    padding: 14px;\n}\n}\n", "src/presentation-v2/pages/DeveloperPage.vue#style-0-e5a7f6bb");
+    var DeveloperPage_vue_vue_type_style_index_0_scoped_e5a7f6bb_lang = null;
 
     const _hoisted_1$a = { class: "acu-v2-developer-page" };
     const _hoisted_2$9 = { class: "acu-v2-developer-page__toggle-list" };
@@ -91340,7 +91794,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	})]);
     }
-    var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$a, [["render", _sfc_render$a]]);
+    var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$a, [["render", _sfc_render$a], ["__scopeId", "data-v-e5a7f6bb"]]);
 
     /**
      * page-registry — 一级页静态注册表（plan §4.1 + §D24）
@@ -91613,8 +92067,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-main {\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n  overflow: auto;\n  scrollbar-gutter: stable;\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n}\n.acu-v2-main :deep(.acu-v2-dashboard-page),\n.acu-v2-main :deep(.acu-v2-advanced-tools-page),\n.acu-v2-main :deep(.acu-v2-basic-config-page),\n.acu-v2-main :deep(.acu-v2-form-fill-page),\n.acu-v2-main :deep(.acu-v2-api-page),\n.acu-v2-main :deep(.acu-v2-import-page),\n.acu-v2-main :deep(.acu-v2-continuation-page),\n.acu-v2-main :deep(.acu-v2-content-replace-page),\n.acu-v2-main :deep(.acu-v2-data-mgmt-page),\n.acu-v2-main :deep(.acu-v2-developer-page),\n.acu-v2-main :deep(.acu-v2-plot-page),\n.acu-v2-main :deep(.acu-v2-table-page),\n.acu-v2-main :deep(.acu-v2-vector-index-page) {\n  padding: 20px;\n  gap: 14px;\n}\n.acu-v2-main__empty {\n  padding: 24px;\n  font-size: var(--acu-font-size-body-lg, 13px);\n  color: var(--acu-text-3);\n}\n@media (max-width: 720px) {\n.acu-v2-main :deep(.acu-v2-dashboard-page),\n  .acu-v2-main :deep(.acu-v2-advanced-tools-page),\n  .acu-v2-main :deep(.acu-v2-basic-config-page),\n  .acu-v2-main :deep(.acu-v2-form-fill-page),\n  .acu-v2-main :deep(.acu-v2-api-page),\n  .acu-v2-main :deep(.acu-v2-import-page),\n  .acu-v2-main :deep(.acu-v2-continuation-page),\n  .acu-v2-main :deep(.acu-v2-content-replace-page),\n  .acu-v2-main :deep(.acu-v2-data-mgmt-page),\n  .acu-v2-main :deep(.acu-v2-developer-page),\n  .acu-v2-main :deep(.acu-v2-plot-page),\n  .acu-v2-main :deep(.acu-v2-table-page),\n  .acu-v2-main :deep(.acu-v2-vector-index-page) {\n    padding: 14px;\n}\n}\n", "src/presentation-v2/components/MainArea.vue#style-0");
-    var MainArea_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-main[data-v-3da7e8af] {\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n  overflow: auto;\n  scrollbar-gutter: stable;\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n}\n.acu-v2-main[data-v-3da7e8af] .acu-v2-dashboard-page,\n.acu-v2-main[data-v-3da7e8af] .acu-v2-advanced-tools-page,\n.acu-v2-main[data-v-3da7e8af] .acu-v2-basic-config-page,\n.acu-v2-main[data-v-3da7e8af] .acu-v2-form-fill-page,\n.acu-v2-main[data-v-3da7e8af] .acu-v2-api-page,\n.acu-v2-main[data-v-3da7e8af] .acu-v2-import-page,\n.acu-v2-main[data-v-3da7e8af] .acu-v2-continuation-page,\n.acu-v2-main[data-v-3da7e8af] .acu-v2-content-replace-page,\n.acu-v2-main[data-v-3da7e8af] .acu-v2-data-mgmt-page,\n.acu-v2-main[data-v-3da7e8af] .acu-v2-developer-page,\n.acu-v2-main[data-v-3da7e8af] .acu-v2-plot-page,\n.acu-v2-main[data-v-3da7e8af] .acu-v2-table-page,\n.acu-v2-main[data-v-3da7e8af] .acu-v2-vector-index-page {\n  padding: 20px;\n  gap: 14px;\n}\n.acu-v2-main__empty[data-v-3da7e8af] {\n  padding: 24px;\n  font-size: var(--acu-font-size-body-lg, 13px);\n  color: var(--acu-text-3);\n}\n@media (max-width: 720px) {\n.acu-v2-main[data-v-3da7e8af] .acu-v2-dashboard-page,\n  .acu-v2-main[data-v-3da7e8af] .acu-v2-advanced-tools-page,\n  .acu-v2-main[data-v-3da7e8af] .acu-v2-basic-config-page,\n  .acu-v2-main[data-v-3da7e8af] .acu-v2-form-fill-page,\n  .acu-v2-main[data-v-3da7e8af] .acu-v2-api-page,\n  .acu-v2-main[data-v-3da7e8af] .acu-v2-import-page,\n  .acu-v2-main[data-v-3da7e8af] .acu-v2-continuation-page,\n  .acu-v2-main[data-v-3da7e8af] .acu-v2-content-replace-page,\n  .acu-v2-main[data-v-3da7e8af] .acu-v2-data-mgmt-page,\n  .acu-v2-main[data-v-3da7e8af] .acu-v2-developer-page,\n  .acu-v2-main[data-v-3da7e8af] .acu-v2-plot-page,\n  .acu-v2-main[data-v-3da7e8af] .acu-v2-table-page,\n  .acu-v2-main[data-v-3da7e8af] .acu-v2-vector-index-page {\n    padding: 14px;\n}\n}\n", "src/presentation-v2/components/MainArea.vue#style-0-3da7e8af");
+    var MainArea_vue_vue_type_style_index_0_scoped_3da7e8af_lang = null;
 
     const _hoisted_1$9 = {
     	ref: "containerRef",
@@ -91634,7 +92088,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* NEED_PATCH */
     	);
     }
-    var MainArea = /* @__PURE__ */ _export_sfc(_sfc_main$9, [["render", _sfc_render$9]]);
+    var MainArea = /* @__PURE__ */ _export_sfc(_sfc_main$9, [["render", _sfc_render$9], ["__scopeId", "data-v-3da7e8af"]]);
 
     var _sfc_main$8 = /*@__PURE__*/ defineComponent({
         __name: 'Sidebar',
@@ -91662,8 +92116,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-sidebar {\n  min-width: 0;\n  min-height: 0;\n  background: var(--acu-sidebar-bg);\n  padding: 24px 12px 16px;\n  overflow-y: auto;\n}\n.acu-v2-sidebar--desktop {\n  width: 220px;\n  flex: 0 0 220px;\n  border-right: 1px solid var(--acu-border-2);\n}\n.acu-v2-sidebar--drawer {\n  width: 100%;\n  flex: 1 1 auto;\n}\n.acu-v2-sidebar__brand {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 4px 4px 20px;\n  margin-bottom: 14px;\n}\n.acu-v2-sidebar__brand-mark {\n  width: 34px;\n  height: 34px;\n  flex: 0 0 34px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 700;\n  letter-spacing: 0.04em;\n}\n.acu-v2-sidebar__brand-copy {\n  min-width: 0;\n  display: block;\n}\n.acu-v2-sidebar__brand-title {\n  display: block;\n  font-size: var(--acu-font-size-panel-title, 15px);\n  line-height: 1.25;\n  font-weight: 700;\n  color: var(--acu-text-1);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-sidebar__brand-tag {\n  display: block;\n  margin-top: 3px;\n  font-size: var(--acu-font-size-caption, 11px);\n  color: var(--acu-text-3);\n}\n.acu-v2-sidebar__group {\n  margin-bottom: 12px;\n}\n.acu-v2-sidebar__mode {\n  width: 100%;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 7px;\n  min-height: 32px;\n  margin: 0 0 14px;\n  padding: 7px 10px;\n  border: 1px solid var(--acu-border-2);\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-bg-1) 72%, transparent);\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  cursor: pointer;\n  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;\n}\n.acu-v2-sidebar__mode:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n  border-color: var(--acu-border);\n}\n.acu-v2-sidebar__group-title {\n  padding: 7px 12px 6px;\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 600;\n  letter-spacing: 0.06em;\n  color: var(--acu-text-3);\n  text-transform: uppercase;\n}\n.acu-v2-sidebar__item {\n  display: block;\n  width: 100%;\n  padding: 10px 12px;\n  border: 0;\n  background: transparent;\n  text-align: left;\n  font-size: var(--acu-font-size-body-lg, 13px);\n  color: var(--acu-text-2);\n  cursor: pointer;\n  border-radius: var(--acu-radius-sm);\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-sidebar__item:not(.acu-v2-sidebar__item--active):hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-sidebar__item--active {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-weight: 600;\n}\n", "src/presentation-v2/components/Sidebar.vue#style-0");
-    var Sidebar_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-v2-sidebar[data-v-367eafdf] {\n  min-width: 0;\n  min-height: 0;\n  background: var(--acu-sidebar-bg);\n  padding: 24px 12px 16px;\n  overflow-y: auto;\n}\n.acu-v2-sidebar--desktop[data-v-367eafdf] {\n  width: 220px;\n  flex: 0 0 220px;\n  border-right: 1px solid var(--acu-border-2);\n}\n.acu-v2-sidebar--drawer[data-v-367eafdf] {\n  width: 100%;\n  flex: 1 1 auto;\n}\n.acu-v2-sidebar__brand[data-v-367eafdf] {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 4px 4px 20px;\n  margin-bottom: 14px;\n}\n.acu-v2-sidebar__brand-mark[data-v-367eafdf] {\n  width: 34px;\n  height: 34px;\n  flex: 0 0 34px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 700;\n  letter-spacing: 0.04em;\n}\n.acu-v2-sidebar__brand-copy[data-v-367eafdf] {\n  min-width: 0;\n  display: block;\n}\n.acu-v2-sidebar__brand-title[data-v-367eafdf] {\n  display: block;\n  font-size: var(--acu-font-size-panel-title, 15px);\n  line-height: 1.25;\n  font-weight: 700;\n  color: var(--acu-text-1);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-sidebar__brand-tag[data-v-367eafdf] {\n  display: block;\n  margin-top: 3px;\n  font-size: var(--acu-font-size-caption, 11px);\n  color: var(--acu-text-3);\n}\n.acu-v2-sidebar__group[data-v-367eafdf] {\n  margin-bottom: 12px;\n}\n.acu-v2-sidebar__mode[data-v-367eafdf] {\n  width: 100%;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 7px;\n  min-height: 32px;\n  margin: 0 0 14px;\n  padding: 7px 10px;\n  border: 1px solid var(--acu-border-2);\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-bg-1) 72%, transparent);\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  cursor: pointer;\n  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;\n}\n.acu-v2-sidebar__mode[data-v-367eafdf]:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n  border-color: var(--acu-border);\n}\n.acu-v2-sidebar__group-title[data-v-367eafdf] {\n  padding: 7px 12px 6px;\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 600;\n  letter-spacing: 0.06em;\n  color: var(--acu-text-3);\n  text-transform: uppercase;\n}\n.acu-v2-sidebar__item[data-v-367eafdf] {\n  display: block;\n  width: 100%;\n  padding: 10px 12px;\n  border: 0;\n  background: transparent;\n  text-align: left;\n  font-size: var(--acu-font-size-body-lg, 13px);\n  color: var(--acu-text-2);\n  cursor: pointer;\n  border-radius: var(--acu-radius-sm);\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-sidebar__item[data-v-367eafdf]:not(.acu-v2-sidebar__item--active):hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-sidebar__item--active[data-v-367eafdf] {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-weight: 600;\n}\n", "src/presentation-v2/components/Sidebar.vue#style-0-367eafdf");
+    var Sidebar_vue_vue_type_style_index_0_scoped_367eafdf_lang = null;
 
     const _hoisted_1$8 = { class: "acu-v2-sidebar__brand" };
     const _hoisted_2$7 = { class: "acu-v2-sidebar__brand-copy" };
@@ -91767,7 +92221,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* CLASS */
     	);
     }
-    var Sidebar = /* @__PURE__ */ _export_sfc(_sfc_main$8, [["render", _sfc_render$8]]);
+    var Sidebar = /* @__PURE__ */ _export_sfc(_sfc_main$8, [["render", _sfc_render$8], ["__scopeId", "data-v-367eafdf"]]);
 
     const THEME_DEFAULT_LIGHT = {
         id: "default-light",
@@ -92483,9 +92937,7 @@ Expected function or array of functions, received type ${typeof value}.`
             });
         }
         function getGlobalPlacement(key) {
-            const fallback = key === 'wrapperPlacement'
-                ? { position: 'before_character_definition', depth: 2, order: 99980 }
-                : { position: 'before_character_definition', depth: 2, order: 99981 };
+            const fallback = buildDefaultGlobalInjectionConfig_ACU()[key];
             return clonePlacement(globalConfig.value?.[key], fallback);
         }
         function updateGlobalPlacement(key, field, value) {
@@ -93433,8 +93885,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-viz-assistant {\n  min-width: 0;\n  display: grid;\n  gap: 12px;\n}\n.acu-viz-assistant__controls {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(140px, 180px);\n  gap: 10px;\n}\n.acu-viz-assistant__disclosure {\n  min-width: 0;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-bg-1);\n}\n.acu-viz-assistant__disclosure :deep(.acu-disclosure-group__header) {\n  min-height: 38px;\n  padding: 8px 12px;\n}\n:deep(.acu-viz-assistant__disclosure-body) {\n  padding: 0;\n}\n.acu-viz-assistant__folded-panel {\n  border: 0;\n  border-radius: 0;\n}\n.acu-viz-assistant__action-row,\n.acu-viz-assistant__summary,\n.acu-viz-assistant__running,\n.acu-viz-assistant__turn-head {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.acu-viz-assistant__action-row,\n.acu-viz-assistant__summary {\n  flex-wrap: wrap;\n}\n.acu-viz-assistant__running {\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-viz-assistant__empty {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-viz-assistant__turns,\n.acu-viz-assistant__risk-list {\n  min-width: 0;\n  display: grid;\n  gap: 8px;\n}\n.acu-viz-assistant__turn,\n.acu-viz-assistant__risk-item,\n.acu-viz-assistant__diff-group {\n  min-width: 0;\n  padding: 10px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-assistant__turn strong,\n.acu-viz-assistant__diff-group h4,\n.acu-viz-assistant__risk-list h4 {\n  min-width: 0;\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.35;\n}\n.acu-viz-assistant__turn {\n  display: grid;\n  gap: 6px;\n}\n.acu-viz-assistant__turn--user {\n  box-shadow: inset 3px 0 0 var(--acu-accent);\n}\n.acu-viz-assistant__turn--round {\n  background: var(--acu-bg-1);\n}\n.acu-viz-assistant__turn--error {\n  box-shadow: inset 3px 0 0 var(--acu-warning);\n}\n.acu-viz-assistant__turn-head {\n  justify-content: space-between;\n}\n.acu-viz-assistant__turn-head strong {\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-viz-assistant__turn p {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-viz-assistant__diff-grid {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-viz-assistant__turn-diff {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr);\n  gap: 8px;\n}\n.acu-viz-assistant__diff-group {\n  display: grid;\n  gap: 8px;\n}\n.acu-viz-assistant__diff-group--warning {\n  box-shadow: inset 3px 0 0 var(--acu-warning);\n}\n.acu-viz-assistant__diff-group ul,\n.acu-viz-assistant__inline-list {\n  margin: 0;\n  padding-left: 18px;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-viz-assistant__risk-list {\n  padding-top: 10px;\n  border-top: 1px solid var(--acu-border-2);\n}\n@media (max-width: 860px) {\n.acu-viz-assistant__controls,\n  .acu-viz-assistant__diff-grid {\n    grid-template-columns: 1fr;\n}\n:deep(.acu-viz-assistant__disclosure-body) {\n    max-height: min(68vh, 620px);\n    overflow-y: auto;\n}\n}\n@media (max-width: 767px) {\n.acu-viz-assistant__action-row {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-viz-assistant__action-row :deep(.acu-btn) {\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-viz-assistant__turn-head {\n    align-items: flex-start;\n    flex-direction: column;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerAssistantPanel.vue#style-0");
-    var VisualizerAssistantPanel_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-viz-assistant[data-v-dd5c39fa] {\n  min-width: 0;\n  display: grid;\n  gap: 12px;\n}\n.acu-viz-assistant__controls[data-v-dd5c39fa] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(140px, 180px);\n  gap: 10px;\n}\n.acu-viz-assistant__disclosure[data-v-dd5c39fa] {\n  min-width: 0;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-bg-1);\n}\n.acu-viz-assistant__disclosure[data-v-dd5c39fa] .acu-disclosure-group__header {\n  min-height: 38px;\n  padding: 8px 12px;\n}\n[data-v-dd5c39fa] .acu-viz-assistant__disclosure-body {\n  padding: 0;\n}\n.acu-viz-assistant__folded-panel[data-v-dd5c39fa] {\n  border: 0;\n  border-radius: 0;\n}\n.acu-viz-assistant__action-row[data-v-dd5c39fa],\n.acu-viz-assistant__summary[data-v-dd5c39fa],\n.acu-viz-assistant__running[data-v-dd5c39fa],\n.acu-viz-assistant__turn-head[data-v-dd5c39fa] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.acu-viz-assistant__action-row[data-v-dd5c39fa],\n.acu-viz-assistant__summary[data-v-dd5c39fa] {\n  flex-wrap: wrap;\n}\n.acu-viz-assistant__running[data-v-dd5c39fa] {\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-viz-assistant__empty[data-v-dd5c39fa] {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-viz-assistant__turns[data-v-dd5c39fa],\n.acu-viz-assistant__risk-list[data-v-dd5c39fa] {\n  min-width: 0;\n  display: grid;\n  gap: 8px;\n}\n.acu-viz-assistant__turn[data-v-dd5c39fa],\n.acu-viz-assistant__risk-item[data-v-dd5c39fa],\n.acu-viz-assistant__diff-group[data-v-dd5c39fa] {\n  min-width: 0;\n  padding: 10px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-assistant__turn strong[data-v-dd5c39fa],\n.acu-viz-assistant__diff-group h4[data-v-dd5c39fa],\n.acu-viz-assistant__risk-list h4[data-v-dd5c39fa] {\n  min-width: 0;\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.35;\n}\n.acu-viz-assistant__turn[data-v-dd5c39fa] {\n  display: grid;\n  gap: 6px;\n}\n.acu-viz-assistant__turn--user[data-v-dd5c39fa] {\n  box-shadow: inset 3px 0 0 var(--acu-accent);\n}\n.acu-viz-assistant__turn--round[data-v-dd5c39fa] {\n  background: var(--acu-bg-1);\n}\n.acu-viz-assistant__turn--error[data-v-dd5c39fa] {\n  box-shadow: inset 3px 0 0 var(--acu-warning);\n}\n.acu-viz-assistant__turn-head[data-v-dd5c39fa] {\n  justify-content: space-between;\n}\n.acu-viz-assistant__turn-head strong[data-v-dd5c39fa] {\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-viz-assistant__turn p[data-v-dd5c39fa] {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-viz-assistant__diff-grid[data-v-dd5c39fa] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-viz-assistant__turn-diff[data-v-dd5c39fa] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr);\n  gap: 8px;\n}\n.acu-viz-assistant__diff-group[data-v-dd5c39fa] {\n  display: grid;\n  gap: 8px;\n}\n.acu-viz-assistant__diff-group--warning[data-v-dd5c39fa] {\n  box-shadow: inset 3px 0 0 var(--acu-warning);\n}\n.acu-viz-assistant__diff-group ul[data-v-dd5c39fa],\n.acu-viz-assistant__inline-list[data-v-dd5c39fa] {\n  margin: 0;\n  padding-left: 18px;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-viz-assistant__risk-list[data-v-dd5c39fa] {\n  padding-top: 10px;\n  border-top: 1px solid var(--acu-border-2);\n}\n@media (max-width: 860px) {\n.acu-viz-assistant__controls[data-v-dd5c39fa],\n  .acu-viz-assistant__diff-grid[data-v-dd5c39fa] {\n    grid-template-columns: 1fr;\n}\n[data-v-dd5c39fa] .acu-viz-assistant__disclosure-body {\n    max-height: min(68vh, 620px);\n    overflow-y: auto;\n}\n}\n@media (max-width: 767px) {\n.acu-viz-assistant__action-row[data-v-dd5c39fa] {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-viz-assistant__action-row[data-v-dd5c39fa] .acu-btn {\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-viz-assistant__turn-head[data-v-dd5c39fa] {\n    align-items: flex-start;\n    flex-direction: column;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerAssistantPanel.vue#style-0-dd5c39fa");
+    var VisualizerAssistantPanel_vue_vue_type_style_index_0_scoped_dd5c39fa_lang = null;
 
     const _hoisted_1$7 = {
     	class: "acu-viz-assistant",
@@ -93940,7 +94392,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		}, 8, ["expanded"])) : createCommentVNode("v-if", true)
     	]);
     }
-    var VisualizerAssistantPanel = /* @__PURE__ */ _export_sfc(_sfc_main$7, [["render", _sfc_render$7]]);
+    var VisualizerAssistantPanel = /* @__PURE__ */ _export_sfc(_sfc_main$7, [["render", _sfc_render$7], ["__scopeId", "data-v-dd5c39fa"]]);
 
     var _sfc_main$6 = /*@__PURE__*/ defineComponent({
         __name: 'VisualizerPlacementEditor',
@@ -93962,8 +94414,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-viz-placement {\n  min-width: 0;\n  display: grid;\n  gap: 8px;\n  padding-top: 10px;\n  border-top: 1px solid var(--acu-border-2);\n}\n.acu-viz-placement:first-of-type {\n  margin-top: 12px;\n}\n.acu-viz-placement__title {\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.35;\n}\n.acu-viz-placement__grid {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(96px, 120px) minmax(96px, 120px);\n  gap: 10px;\n}\n.acu-viz-placement__number {\n  max-width: 120px;\n}\n@media (max-width: 860px) {\n.acu-viz-placement__grid {\n    grid-template-columns: 1fr;\n}\n.acu-viz-placement__number {\n    max-width: 100%;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerPlacementEditor.vue#style-0");
-    var VisualizerPlacementEditor_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-viz-placement[data-v-82cf8890] {\n  min-width: 0;\n  display: grid;\n  gap: 8px;\n  padding-top: 10px;\n  border-top: 1px solid var(--acu-border-2);\n}\n.acu-viz-placement[data-v-82cf8890]:first-of-type {\n  margin-top: 12px;\n}\n.acu-viz-placement__title[data-v-82cf8890] {\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.35;\n}\n.acu-viz-placement__grid[data-v-82cf8890] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(96px, 120px) minmax(96px, 120px);\n  gap: 10px;\n}\n.acu-viz-placement__number[data-v-82cf8890] {\n  max-width: 120px;\n}\n@media (max-width: 860px) {\n.acu-viz-placement__grid[data-v-82cf8890] {\n    grid-template-columns: 1fr;\n}\n.acu-viz-placement__number[data-v-82cf8890] {\n    max-width: 100%;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerPlacementEditor.vue#style-0-82cf8890");
+    var VisualizerPlacementEditor_vue_vue_type_style_index_0_scoped_82cf8890_lang = null;
 
     const _hoisted_1$6 = { class: "acu-viz-placement" };
     const _hoisted_2$5 = { class: "acu-viz-placement__title" };
@@ -94007,7 +94459,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		})
     	])]);
     }
-    var PlacementEditor = /* @__PURE__ */ _export_sfc(_sfc_main$6, [["render", _sfc_render$6]]);
+    var PlacementEditor = /* @__PURE__ */ _export_sfc(_sfc_main$6, [["render", _sfc_render$6], ["__scopeId", "data-v-82cf8890"]]);
 
     var _sfc_main$5 = /*@__PURE__*/ defineComponent({
         __name: 'VisualizerConfigPanels',
@@ -94058,8 +94510,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-viz-config {\n  min-width: 0;\n  display: grid;\n  gap: 12px;\n}\n.acu-viz-config__grid {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-viz-config__grid--three {\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n}\n.acu-viz-config__columns,\n.acu-viz-config__prompts,\n.acu-viz-config__toggles,\n.acu-viz-config__subsection,\n.acu-viz-config__column-modes {\n  min-width: 0;\n  display: grid;\n  gap: 10px;\n}\n.acu-viz-config__columns {\n  margin-top: 12px;\n}\n.acu-viz-config__column-operation {\n  display: flex;\n  justify-content: flex-end;\n  padding-top: 2px;\n}\n.acu-viz-config__column-row {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: 42px minmax(0, 1fr) auto;\n  align-items: center;\n  gap: 8px;\n  padding: 8px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-index {\n  color: var(--acu-text-3);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: right;\n}\n.acu-viz-config__empty {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-viz-config__inline-actions,\n.acu-viz-config__column-mode {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-viz-config__inline-actions {\n  margin-top: 10px;\n}\n.acu-viz-config__ddl {\n  font-family: var(--acu-font-mono);\n}\n.acu-viz-config__column-mode {\n  padding: 8px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-mode :deep(.acu-checkbox) {\n  flex: 1 1 220px;\n}\n.acu-viz-config__column-mode :deep(.acu-select) {\n  flex: 1 1 260px;\n}\n@media (max-width: 860px) {\n.acu-viz-config__grid,\n  .acu-viz-config__grid--three {\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 767px) {\n.acu-viz-config__column-operation {\n    justify-content: stretch;\n}\n.acu-viz-config__column-operation :deep(.acu-btn) {\n    width: 100%;\n}\n}\n@media (max-width: 520px) {\n.acu-viz-config__column-row {\n    grid-template-columns: 34px minmax(0, 1fr) auto;\n    padding: 7px;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerConfigPanels.vue#style-0");
-    var VisualizerConfigPanels_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-viz-config[data-v-5b19ce24] {\n  min-width: 0;\n  display: grid;\n  gap: 12px;\n}\n.acu-viz-config__grid[data-v-5b19ce24] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-viz-config__grid--three[data-v-5b19ce24] {\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n}\n.acu-viz-config__columns[data-v-5b19ce24],\n.acu-viz-config__prompts[data-v-5b19ce24],\n.acu-viz-config__toggles[data-v-5b19ce24],\n.acu-viz-config__subsection[data-v-5b19ce24],\n.acu-viz-config__column-modes[data-v-5b19ce24] {\n  min-width: 0;\n  display: grid;\n  gap: 10px;\n}\n.acu-viz-config__columns[data-v-5b19ce24] {\n  margin-top: 12px;\n}\n.acu-viz-config__column-operation[data-v-5b19ce24] {\n  display: flex;\n  justify-content: flex-end;\n  padding-top: 2px;\n}\n.acu-viz-config__column-row[data-v-5b19ce24] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: 42px minmax(0, 1fr) auto;\n  align-items: center;\n  gap: 8px;\n  padding: 8px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-index[data-v-5b19ce24] {\n  color: var(--acu-text-3);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: right;\n}\n.acu-viz-config__empty[data-v-5b19ce24] {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-viz-config__inline-actions[data-v-5b19ce24],\n.acu-viz-config__column-mode[data-v-5b19ce24] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-viz-config__inline-actions[data-v-5b19ce24] {\n  margin-top: 10px;\n}\n.acu-viz-config__ddl[data-v-5b19ce24] {\n  font-family: var(--acu-font-mono);\n}\n.acu-viz-config__column-mode[data-v-5b19ce24] {\n  padding: 8px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-mode[data-v-5b19ce24] .acu-checkbox {\n  flex: 1 1 220px;\n}\n.acu-viz-config__column-mode[data-v-5b19ce24] .acu-select {\n  flex: 1 1 260px;\n}\n@media (max-width: 860px) {\n.acu-viz-config__grid[data-v-5b19ce24],\n  .acu-viz-config__grid--three[data-v-5b19ce24] {\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 767px) {\n.acu-viz-config__column-operation[data-v-5b19ce24] {\n    justify-content: stretch;\n}\n.acu-viz-config__column-operation[data-v-5b19ce24] .acu-btn {\n    width: 100%;\n}\n}\n@media (max-width: 520px) {\n.acu-viz-config__column-row[data-v-5b19ce24] {\n    grid-template-columns: 34px minmax(0, 1fr) auto;\n    padding: 7px;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerConfigPanels.vue#style-0-5b19ce24");
+    var VisualizerConfigPanels_vue_vue_type_style_index_0_scoped_5b19ce24_lang = null;
 
     const _hoisted_1$5 = {
     	class: "acu-viz-config",
@@ -94513,7 +94965,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		})) : createCommentVNode("v-if", true)
     	]);
     }
-    var VisualizerConfigPanels = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$5]]);
+    var VisualizerConfigPanels = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$5], ["__scopeId", "data-v-5b19ce24"]]);
 
     var _sfc_main$4 = /*@__PURE__*/ defineComponent({
         __name: 'VisualizerGlobalInjectionPanels',
@@ -94526,8 +94978,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-viz-global {\n  min-width: 0;\n  display: grid;\n  gap: 12px;\n}\n\n", "src/presentation-v2/surfaces/visualizer/VisualizerGlobalInjectionPanels.vue#style-0");
-    var VisualizerGlobalInjectionPanels_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-viz-global[data-v-40c058a8] {\n  min-width: 0;\n  display: grid;\n  gap: 12px;\n}\n\n", "src/presentation-v2/surfaces/visualizer/VisualizerGlobalInjectionPanels.vue#style-0-40c058a8");
+    var VisualizerGlobalInjectionPanels_vue_vue_type_style_index_0_scoped_40c058a8_lang = null;
 
     const _hoisted_1$4 = {
     	class: "acu-viz-global",
@@ -94560,7 +95012,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	})]);
     }
-    var VisualizerGlobalInjectionPanels = /* @__PURE__ */ _export_sfc(_sfc_main$4, [["render", _sfc_render$4]]);
+    var VisualizerGlobalInjectionPanels = /* @__PURE__ */ _export_sfc(_sfc_main$4, [["render", _sfc_render$4], ["__scopeId", "data-v-40c058a8"]]);
 
     var _sfc_main$3 = /*@__PURE__*/ defineComponent({
         __name: 'VisualizerNavigation',
@@ -94621,8 +95073,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-visualizer-nav {\n  min-width: 0;\n  min-height: 0;\n  display: flex;\n  flex: 1 1 auto;\n  flex-direction: column;\n  gap: 8px;\n}\n.acu-visualizer-nav__brand {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 4px 4px 20px;\n  margin-bottom: 14px;\n}\n.acu-visualizer-nav__brand-mark {\n  width: 34px;\n  height: 34px;\n  flex: 0 0 34px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 700;\n  letter-spacing: 0.04em;\n}\n.acu-visualizer-nav__brand-copy {\n  min-width: 0;\n  display: block;\n}\n.acu-visualizer-nav__brand-title {\n  display: block;\n  min-width: 0;\n  overflow: hidden;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-panel-title, 15px);\n  font-weight: 700;\n  line-height: 1.25;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-nav__brand-tag {\n  display: block;\n  min-width: 0;\n  margin-top: 3px;\n  overflow: hidden;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-nav__head {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 8px;\n}\n.acu-visualizer-nav__head--management {\n  margin-top: auto;\n}\n.acu-visualizer-nav__head h2 {\n  margin: 0;\n  padding: 7px 0 6px;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 600;\n  letter-spacing: 0.06em;\n  line-height: 1.3;\n  text-transform: uppercase;\n}\n.acu-visualizer-nav__sheet-row {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr);\n  align-items: center;\n  gap: 6px;\n  border-radius: var(--acu-radius-sm);\n  color: var(--acu-text-2);\n  transition:\n    background 0.15s ease,\n    color 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-nav__sheet-row:not(.is-active):hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-visualizer-nav__sheet-row.is-active {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-weight: 600;\n}\n.acu-visualizer-nav__sheet-select,\n.acu-visualizer-nav__global-item {\n  font: inherit;\n  border: 0;\n  cursor: pointer;\n  transition:\n    background 0.15s ease,\n    color 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-nav__sheet-select {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  padding: 8px 9px;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: inherit;\n  text-align: left;\n  box-shadow: none;\n}\n.acu-visualizer-nav__sheet-select.acu-btn:hover:not(:disabled) {\n  background: transparent;\n}\n.acu-visualizer-nav__sheet-select span,\n.acu-visualizer-nav__sheet-select small {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-nav__sheet-select small {\n  color: currentColor;\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 400;\n  opacity: 0.72;\n}\n.acu-visualizer-nav__global-item {\n  padding: 8px 9px;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: var(--acu-text-2);\n  text-align: left;\n}\n.acu-visualizer-nav__global-item:not(.is-active).acu-btn:hover:not(\n    :disabled\n  ) {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-visualizer-nav__global-item.is-active {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-weight: 600;\n}\n.acu-visualizer-nav__sheet-select:focus-visible,\n.acu-visualizer-nav__global-item:focus-visible {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerNavigation.vue#style-0");
-    var VisualizerNavigation_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-visualizer-nav[data-v-e2fae9a5] {\n  min-width: 0;\n  min-height: 0;\n  display: flex;\n  flex: 1 1 auto;\n  flex-direction: column;\n  gap: 8px;\n}\n.acu-visualizer-nav__brand[data-v-e2fae9a5] {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 4px 4px 20px;\n  margin-bottom: 14px;\n}\n.acu-visualizer-nav__brand-mark[data-v-e2fae9a5] {\n  width: 34px;\n  height: 34px;\n  flex: 0 0 34px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 700;\n  letter-spacing: 0.04em;\n}\n.acu-visualizer-nav__brand-copy[data-v-e2fae9a5] {\n  min-width: 0;\n  display: block;\n}\n.acu-visualizer-nav__brand-title[data-v-e2fae9a5] {\n  display: block;\n  min-width: 0;\n  overflow: hidden;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-panel-title, 15px);\n  font-weight: 700;\n  line-height: 1.25;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-nav__brand-tag[data-v-e2fae9a5] {\n  display: block;\n  min-width: 0;\n  margin-top: 3px;\n  overflow: hidden;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-nav__head[data-v-e2fae9a5] {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 8px;\n}\n.acu-visualizer-nav__head--management[data-v-e2fae9a5] {\n  margin-top: auto;\n}\n.acu-visualizer-nav__head h2[data-v-e2fae9a5] {\n  margin: 0;\n  padding: 7px 0 6px;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 600;\n  letter-spacing: 0.06em;\n  line-height: 1.3;\n  text-transform: uppercase;\n}\n.acu-visualizer-nav__sheet-row[data-v-e2fae9a5] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr);\n  align-items: center;\n  gap: 6px;\n  border-radius: var(--acu-radius-sm);\n  color: var(--acu-text-2);\n  transition:\n    background 0.15s ease,\n    color 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-nav__sheet-row[data-v-e2fae9a5]:not(.is-active):hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-visualizer-nav__sheet-row.is-active[data-v-e2fae9a5] {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-weight: 600;\n}\n.acu-visualizer-nav__sheet-select[data-v-e2fae9a5],\n.acu-visualizer-nav__global-item[data-v-e2fae9a5] {\n  font: inherit;\n  border: 0;\n  cursor: pointer;\n  transition:\n    background 0.15s ease,\n    color 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-nav__sheet-select[data-v-e2fae9a5] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  padding: 8px 9px;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: inherit;\n  text-align: left;\n  box-shadow: none;\n}\n.acu-visualizer-nav__sheet-select.acu-btn[data-v-e2fae9a5]:hover:not(:disabled) {\n  background: transparent;\n}\n.acu-visualizer-nav__sheet-select span[data-v-e2fae9a5],\n.acu-visualizer-nav__sheet-select small[data-v-e2fae9a5] {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-nav__sheet-select small[data-v-e2fae9a5] {\n  color: currentColor;\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 400;\n  opacity: 0.72;\n}\n.acu-visualizer-nav__global-item[data-v-e2fae9a5] {\n  padding: 8px 9px;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: var(--acu-text-2);\n  text-align: left;\n}\n.acu-visualizer-nav__global-item:not(.is-active).acu-btn[data-v-e2fae9a5]:hover:not(\n    :disabled\n  ) {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-visualizer-nav__global-item.is-active[data-v-e2fae9a5] {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n  font-weight: 600;\n}\n.acu-visualizer-nav__sheet-select[data-v-e2fae9a5]:focus-visible,\n.acu-visualizer-nav__global-item[data-v-e2fae9a5]:focus-visible {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerNavigation.vue#style-0-e2fae9a5");
+    var VisualizerNavigation_vue_vue_type_style_index_0_scoped_e2fae9a5_lang = null;
 
     const _hoisted_1$3 = {
     	class: "acu-visualizer-nav",
@@ -94731,7 +95183,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		}, 8, ["class"])
     	]);
     }
-    var VisualizerNavigation = /* @__PURE__ */ _export_sfc(_sfc_main$3, [["render", _sfc_render$3]]);
+    var VisualizerNavigation = /* @__PURE__ */ _export_sfc(_sfc_main$3, [["render", _sfc_render$3], ["__scopeId", "data-v-e2fae9a5"]]);
 
     var _sfc_main$2 = /*@__PURE__*/ defineComponent({
         __name: 'VisualizerTableManagementPanel',
@@ -94747,8 +95199,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-viz-table-management {\n  min-width: 0;\n  display: grid;\n  gap: 12px;\n}\n.acu-viz-table-management__list {\n  min-width: 0;\n  display: grid;\n  gap: 8px;\n}\n.acu-viz-table-management__item {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  align-items: center;\n  gap: 10px;\n  padding: 10px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n  transition:\n    background 0.15s ease,\n    border-color 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-viz-table-management__copy {\n  min-width: 0;\n  display: grid;\n  gap: 3px;\n}\n.acu-viz-table-management__copy h3 {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.35;\n}\n.acu-viz-table-management__copy h3 > span {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-viz-table-management__copy p,\n.acu-viz-table-management__empty {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-viz-table-management__actions,\n.acu-viz-table-management__operation {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n}\n.acu-viz-table-management__operation {\n  justify-content: flex-end;\n  padding-top: 2px;\n}\n@media (max-width: 767px) {\n.acu-viz-table-management__item {\n    grid-template-columns: minmax(0, 1fr);\n    align-items: stretch;\n}\n.acu-viz-table-management__actions {\n    justify-content: flex-end;\n}\n.acu-viz-table-management__operation :deep(.acu-btn) {\n    width: 100%;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerTableManagementPanel.vue#style-0");
-    var VisualizerTableManagementPanel_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-viz-table-management[data-v-37cdc104] {\n  min-width: 0;\n  display: grid;\n  gap: 12px;\n}\n.acu-viz-table-management__list[data-v-37cdc104] {\n  min-width: 0;\n  display: grid;\n  gap: 8px;\n}\n.acu-viz-table-management__item[data-v-37cdc104] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  align-items: center;\n  gap: 10px;\n  padding: 10px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n  transition:\n    background 0.15s ease,\n    border-color 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-viz-table-management__copy[data-v-37cdc104] {\n  min-width: 0;\n  display: grid;\n  gap: 3px;\n}\n.acu-viz-table-management__copy h3[data-v-37cdc104] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.35;\n}\n.acu-viz-table-management__copy h3 > span[data-v-37cdc104] {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-viz-table-management__copy p[data-v-37cdc104],\n.acu-viz-table-management__empty[data-v-37cdc104] {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.55;\n}\n.acu-viz-table-management__actions[data-v-37cdc104],\n.acu-viz-table-management__operation[data-v-37cdc104] {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n}\n.acu-viz-table-management__operation[data-v-37cdc104] {\n  justify-content: flex-end;\n  padding-top: 2px;\n}\n@media (max-width: 767px) {\n.acu-viz-table-management__item[data-v-37cdc104] {\n    grid-template-columns: minmax(0, 1fr);\n    align-items: stretch;\n}\n.acu-viz-table-management__actions[data-v-37cdc104] {\n    justify-content: flex-end;\n}\n.acu-viz-table-management__operation[data-v-37cdc104] .acu-btn {\n    width: 100%;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerTableManagementPanel.vue#style-0-37cdc104");
+    var VisualizerTableManagementPanel_vue_vue_type_style_index_0_scoped_37cdc104_lang = null;
 
     const _hoisted_1$2 = {
     	class: "acu-viz-table-management",
@@ -94844,7 +95296,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	})]);
     }
-    var VisualizerTableManagementPanel = /* @__PURE__ */ _export_sfc(_sfc_main$2, [["render", _sfc_render$2]]);
+    var VisualizerTableManagementPanel = /* @__PURE__ */ _export_sfc(_sfc_main$2, [["render", _sfc_render$2], ["__scopeId", "data-v-37cdc104"]]);
 
     const VISUALIZER_MOBILE_NAV_LEAVE_MS = 150;
     const VISUALIZER_DATA_PAGE_SIZE = 30;
@@ -94863,6 +95315,11 @@ Expected function or array of functions, received type ${typeof value}.`
             const isMobileNavClosing = ref(false);
             const workspaceRef = ref(null);
             const paginationRef = ref(null);
+            const mobileNavDrawerStyle = {
+                width: "360px",
+                maxWidth: "calc(100% - 24px)",
+                flex: "0 0 360px",
+            };
             let mobileNavCloseTimer;
             let paginationResizeObserver;
             const save = useVisualizerSave({
@@ -94948,6 +95405,7 @@ Expected function or array of functions, received type ${typeof value}.`
             });
             const activeDataCell = ref(null);
             const activeFieldActions = ref(null);
+            const fieldLockPointerAction = ref(null);
             const activeDataTextareaRef = ref(null);
             const editingColumnLayoutSnapshot = ref(null);
             const currentDataPage = ref(1);
@@ -95163,6 +95621,49 @@ Expected function or array of functions, received type ${typeof value}.`
             }
             function clearFieldActions() {
                 activeFieldActions.value = null;
+            }
+            function consumeFieldLockPointerAction(kind, rowIndex, columnIndex) {
+                const action = fieldLockPointerAction.value;
+                fieldLockPointerAction.value = null;
+                return (!!action &&
+                    action.kind === kind &&
+                    action.rowIndex === Math.trunc(Number(rowIndex)) &&
+                    action.columnIndex === Math.trunc(Number(columnIndex)) &&
+                    Date.now() - action.at < 1000);
+            }
+            function markFieldLockPointerAction(kind, rowIndex, columnIndex) {
+                fieldLockPointerAction.value = {
+                    kind,
+                    rowIndex: Math.trunc(Number(rowIndex)),
+                    columnIndex: Math.trunc(Number(columnIndex)),
+                    at: Date.now(),
+                };
+            }
+            function toggleFieldColumnLock(rowIndex, columnIndex) {
+                setActiveFieldActions(rowIndex, columnIndex);
+                visualizer.toggleColumnLock(visualizer.currentSheetKey, columnIndex);
+            }
+            function toggleFieldCellLock(rowIndex, columnIndex) {
+                setActiveFieldActions(rowIndex, columnIndex);
+                visualizer.toggleCellLock(visualizer.currentSheetKey, rowIndex, columnIndex);
+            }
+            function handleFieldColumnLockPointerDown(rowIndex, columnIndex) {
+                markFieldLockPointerAction("column", rowIndex, columnIndex);
+                toggleFieldColumnLock(rowIndex, columnIndex);
+            }
+            function handleFieldCellLockPointerDown(rowIndex, columnIndex) {
+                markFieldLockPointerAction("cell", rowIndex, columnIndex);
+                toggleFieldCellLock(rowIndex, columnIndex);
+            }
+            function handleFieldColumnLockClick(rowIndex, columnIndex) {
+                if (consumeFieldLockPointerAction("column", rowIndex, columnIndex))
+                    return;
+                toggleFieldColumnLock(rowIndex, columnIndex);
+            }
+            function handleFieldCellLockClick(rowIndex, columnIndex) {
+                if (consumeFieldLockPointerAction("cell", rowIndex, columnIndex))
+                    return;
+                toggleFieldCellLock(rowIndex, columnIndex);
             }
             function handleSurfacePointerDown(event) {
                 const target = event.target;
@@ -95444,14 +95945,14 @@ Expected function or array of functions, received type ${typeof value}.`
                     currentDataPage.value = 1;
                 clearDataCellEditing();
             });
-            const __returned__ = { visualizer, dialogStore, data, config, emit, isMobileNavRendered, isMobileNavClosing, workspaceRef, paginationRef, VISUALIZER_MOBILE_NAV_LEAVE_MS, VISUALIZER_DATA_PAGE_SIZE, get mobileNavCloseTimer() { return mobileNavCloseTimer; }, set mobileNavCloseTimer(v) { mobileNavCloseTimer = v; }, get paginationResizeObserver() { return paginationResizeObserver; }, set paginationResizeObserver(v) { paginationResizeObserver = v; }, save, modes, setWorkspaceMode, isSheetEditingMode, currentSheetName, templatePresetLabel, isMobileNavOpen, openMobileNav, closeMobileNav, clearMobileNavCloseTimer, selectNavSheet, selectTableManagementNav, returnToCurrentSheet, moveSheet, headers, VISUALIZER_SHORT_FIELD_CHAR_LIMIT, activeDataCell, activeFieldActions, activeDataTextareaRef, editingColumnLayoutSnapshot, currentDataPage, dataPageJumpValue, paginationWidth, rowCount, dataPageSize, dataPageCount, isDataPaginated, dataPaginationSiblingWindow, dataPaginationItems, dataPageStartIndex, dataPageEndIndex, dataRangeText, visibleDataRows, scrollWorkspaceToTop, preserveWorkspaceScrollPosition, setDataPage, updateDataPageJumpValue, commitDataPageJumpValue, isShortDataField, getColumnIsShort, getEffectiveColumnIsShort, buildFieldLayoutRows, asTextarea, setActiveDataTextareaRef, isDataCellEditing, setActiveFieldActions, isFieldActionsActive, clearFieldActions, handleSurfacePointerDown, startDataCellEditing, stopDataCellEditing, clearDataCellEditing, rows, footerStatus, saveDisabled, requestAddSheet, requestDeleteSheet, deleteRow, addRow, refreshSpecialIndexColumnDraft, requestAddColumn, requestDeleteColumn, openInputDialog, openConfirmDialog, updatePaginationWidth, observePaginationWidth, openCloseDirtyDialog, AcuBadge, AcuButton, AcuIconButton, AcuInfoBanner, AcuInput, AcuPanel, AcuSegmentedControl, AcuTextarea, VisualizerAssistantPanel, VisualizerConfigPanels, VisualizerGlobalInjectionPanels, VisualizerNavigation, VisualizerTableManagementPanel };
+            const __returned__ = { visualizer, dialogStore, data, config, emit, isMobileNavRendered, isMobileNavClosing, workspaceRef, paginationRef, VISUALIZER_MOBILE_NAV_LEAVE_MS, VISUALIZER_DATA_PAGE_SIZE, mobileNavDrawerStyle, get mobileNavCloseTimer() { return mobileNavCloseTimer; }, set mobileNavCloseTimer(v) { mobileNavCloseTimer = v; }, get paginationResizeObserver() { return paginationResizeObserver; }, set paginationResizeObserver(v) { paginationResizeObserver = v; }, save, modes, setWorkspaceMode, isSheetEditingMode, currentSheetName, templatePresetLabel, isMobileNavOpen, openMobileNav, closeMobileNav, clearMobileNavCloseTimer, selectNavSheet, selectTableManagementNav, returnToCurrentSheet, moveSheet, headers, VISUALIZER_SHORT_FIELD_CHAR_LIMIT, activeDataCell, activeFieldActions, fieldLockPointerAction, activeDataTextareaRef, editingColumnLayoutSnapshot, currentDataPage, dataPageJumpValue, paginationWidth, rowCount, dataPageSize, dataPageCount, isDataPaginated, dataPaginationSiblingWindow, dataPaginationItems, dataPageStartIndex, dataPageEndIndex, dataRangeText, visibleDataRows, scrollWorkspaceToTop, preserveWorkspaceScrollPosition, setDataPage, updateDataPageJumpValue, commitDataPageJumpValue, isShortDataField, getColumnIsShort, getEffectiveColumnIsShort, buildFieldLayoutRows, asTextarea, setActiveDataTextareaRef, isDataCellEditing, setActiveFieldActions, isFieldActionsActive, clearFieldActions, consumeFieldLockPointerAction, markFieldLockPointerAction, toggleFieldColumnLock, toggleFieldCellLock, handleFieldColumnLockPointerDown, handleFieldCellLockPointerDown, handleFieldColumnLockClick, handleFieldCellLockClick, handleSurfacePointerDown, startDataCellEditing, stopDataCellEditing, clearDataCellEditing, rows, footerStatus, saveDisabled, requestAddSheet, requestDeleteSheet, deleteRow, addRow, refreshSpecialIndexColumnDraft, requestAddColumn, requestDeleteColumn, openInputDialog, openConfirmDialog, updatePaginationWidth, observePaginationWidth, openCloseDirtyDialog, AcuBadge, AcuButton, AcuIconButton, AcuInfoBanner, AcuInput, AcuPanel, AcuSegmentedControl, AcuTextarea, VisualizerAssistantPanel, VisualizerConfigPanels, VisualizerGlobalInjectionPanels, VisualizerNavigation, VisualizerTableManagementPanel };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-visualizer-surface {\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n  display: grid;\n  grid-template-columns: 260px minmax(0, 1fr);\n  overflow: hidden;\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__sidebar {\n  min-width: 0;\n  min-height: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  padding: 24px 12px 16px;\n  overflow-y: auto;\n  border-right: 1px solid var(--acu-border-2);\n  background: var(--acu-sidebar-bg);\n}\n.acu-visualizer-surface__main {\n  min-width: 0;\n  min-height: 0;\n  display: flex;\n  flex-direction: column;\n  overflow: hidden;\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar {\n  flex: 0 0 auto;\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  min-height: 50px;\n  padding: 8px 12px 8px 16px;\n  border-bottom: 1px solid var(--acu-border-2);\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar-context {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex: 1 1 auto;\n  gap: 10px;\n}\n.acu-visualizer-surface__mobile-menu {\n  display: none;\n  flex: 0 0 auto;\n  background: transparent;\n  color: var(--acu-text-2);\n  box-shadow: none;\n}\n.acu-visualizer-surface__mobile-menu:hover:not(:disabled) {\n  background: transparent;\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__context-items {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex: 1 1 auto;\n  justify-content: flex-start;\n  gap: 16px;\n}\n.acu-visualizer-surface__context-item {\n  min-width: 0;\n  display: grid;\n  gap: 2px;\n}\n.acu-visualizer-surface__context-item:first-child {\n  flex: 0 1 auto;\n  max-width: min(560px, 42vw);\n}\n.acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item {\n  flex: 0 0 auto;\n  max-width: min(260px, 20vw);\n}\n.acu-visualizer-surface__context-item span {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.2;\n}\n.acu-visualizer-surface__context-item strong {\n  min-width: 0;\n  overflow: hidden;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 600;\n  line-height: 1.25;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__context-item:first-child strong {\n  overflow: visible;\n  text-overflow: clip;\n  white-space: normal;\n  word-break: break-word;\n}\n.acu-visualizer-surface__context-badge {\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__conflict {\n  flex: 0 0 auto;\n  margin: 12px 16px 0;\n}\n.acu-visualizer-surface__conflict-actions {\n  display: inline-flex;\n  flex-wrap: wrap;\n  gap: 6px;\n  margin-left: 8px;\n}\n.acu-visualizer-surface__data-toolbar,\n.acu-visualizer-surface__data-toolbar-actions,\n.acu-visualizer-surface__database-toolbar,\n.acu-visualizer-surface__pagination,\n.acu-visualizer-surface__pagination-pages,\n.acu-visualizer-surface__card-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 8px;\n}\n.acu-visualizer-surface__workspace {\n  flex: 1 1 auto;\n  min-height: 0;\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  overflow: auto;\n  padding: 16px;\n}\n.acu-visualizer-surface__loading {\n  min-height: 140px;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  gap: 8px;\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__mode-tabs {\n  flex: 0 0 auto;\n  width: min(360px, 42vw);\n}\n.acu-visualizer-surface__close {\n  width: 30px;\n  height: 30px;\n  flex: 0 0 auto;\n  border: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-page-title, 22px);\n  line-height: 1;\n  border-radius: var(--acu-radius-sm);\n}\n.acu-visualizer-surface__close:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__data-toolbar {\n  flex: 0 0 auto;\n  justify-content: space-between;\n  padding: 4px 0 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__data-toolbar-actions {\n  flex: 0 0 auto;\n  justify-content: flex-end;\n}\n.acu-visualizer-surface__pagination {\n  flex: 0 0 auto;\n  justify-content: center;\n  gap: 14px;\n  padding: 6px 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-visualizer-surface__pagination-pages {\n  min-width: 0;\n  flex-wrap: wrap;\n  justify-content: center;\n  gap: 8px;\n}\n.acu-visualizer-surface__page-button {\n  width: 34px;\n  min-width: 34px;\n  height: 34px;\n  padding: 0;\n  border: 1px solid var(--acu-border);\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n}\n.acu-visualizer-surface__page-button:hover:not(:disabled) {\n  border-color: var(--acu-accent);\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__page-button--active,\n.acu-visualizer-surface__page-button--active:hover:not(:disabled) {\n  border-color: var(--acu-accent);\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-visualizer-surface__page-button:disabled:not(\n    .acu-visualizer-surface__page-button--active\n  ) {\n  border-color: var(--acu-border);\n  background: var(--acu-bg-0);\n  color: var(--acu-text-2);\n  opacity: 1;\n  cursor: default;\n}\n.acu-visualizer-surface__page-jump {\n  flex: 0 0 64px;\n  width: 64px;\n}\n.acu-visualizer-surface__page-jump :deep(.acu-input) {\n  min-height: 34px;\n  border: 1px solid var(--acu-border) !important;\n  background: var(--acu-bg-0) !important;\n  text-align: center;\n  font-size: var(--acu-font-size-body-lg, 13px) !important;\n  font-variant-numeric: tabular-nums;\n}\n.acu-visualizer-surface__data-range {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__database-toolbar {\n  flex: 0 0 auto;\n  padding: 0 0 4px;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar h2 {\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-page-title, 22px);\n  font-weight: 700;\n  line-height: 1.2;\n}\n.acu-visualizer-surface__database-toolbar p {\n  margin: 5px 0 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-readable, 1.55);\n}\n.acu-visualizer-surface__empty {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-visualizer-surface__card-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));\n  gap: 12px;\n}\n.acu-visualizer-surface__data-card {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  height: 100%;\n  padding: 16px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-bg-1);\n}\n.acu-visualizer-surface__card-header strong {\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-visualizer-surface__card-header span {\n  min-width: 0;\n  margin-right: auto;\n  overflow: hidden;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__card-header :deep(.acu-icon-btn) {\n  background: transparent;\n}\n.acu-visualizer-surface__card-header\n  :deep(.acu-icon-btn--default:hover:not(:disabled)) {\n  background:\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\n    transparent;\n}\n.acu-visualizer-surface__card-header :deep(.acu-icon-btn--accent) {\n  background: var(--acu-accent-glow);\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__card-header\n  :deep(.acu-icon-btn--danger:hover:not(:disabled)) {\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-visualizer-surface__fields {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.acu-visualizer-surface__field-row {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 8px;\n  align-items: stretch;\n}\n.acu-visualizer-surface__field-row.is-wide {\n  grid-template-columns: minmax(0, 1fr);\n}\n.acu-visualizer-surface__field {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  padding: 2px;\n  border: 1px solid transparent;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  transition:\n    background 0.15s ease,\n    border-color 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field :deep(.acu-textarea) {\n  flex: 1 1 auto;\n  min-height: 34px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.45;\n  white-space: pre-wrap;\n  word-break: break-word;\n  overflow-wrap: break-word;\n}\n.acu-visualizer-surface__field-preview {\n  width: 100%;\n  min-height: 34px;\n  box-sizing: border-box;\n  padding: 8px 10px;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  color: var(--acu-text-1);\n  cursor: text;\n  display: block;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.45;\n  white-space: pre-wrap;\n  word-break: break-word;\n  overflow-wrap: break-word;\n  transition:\n    background 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field-preview:hover,\n.acu-visualizer-surface__field-preview:focus-visible {\n  outline: none;\n  background:\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\n    var(--acu-bg-2);\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field-preview.is-empty {\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__field-label {\n  min-width: 0;\n  min-height: 24px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 6px;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 600;\n}\n.acu-visualizer-surface__field-label > span:first-child {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__field-locks {\n  flex: 0 0 auto;\n  min-width: 51px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: flex-end;\n  gap: 3px;\n  opacity: 0.44;\n  transition: opacity 0.15s ease;\n}\n.acu-visualizer-surface__field:hover .acu-visualizer-surface__field-locks,\n.acu-visualizer-surface__field:focus-within\n  .acu-visualizer-surface__field-locks,\n.acu-visualizer-surface__field.is-actions-active\n  .acu-visualizer-surface__field-locks,\n.acu-visualizer-surface__field.is-locked .acu-visualizer-surface__field-locks,\n.acu-visualizer-surface__field.is-special-index\n  .acu-visualizer-surface__field-locks {\n  opacity: 1;\n}\n.acu-visualizer-surface__field-locks :deep(.acu-icon-btn) {\n  --acu-icon-btn-size: 24px;\n  --acu-icon-btn-font-size: 11px;\n  width: 24px;\n  height: 24px;\n  background: transparent !important;\n}\n.acu-visualizer-surface__field-locks\n  :deep(.acu-icon-btn--default:hover:not(:disabled)) {\n  background:\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\n    transparent;\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__field-locks :deep(.acu-icon-btn--accent) {\n  color: var(--acu-accent);\n  background: var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field.is-locked {\n  border-color: var(--acu-border);\n  background: color-mix(in srgb, var(--acu-warning) 8%, transparent);\n}\n.acu-visualizer-surface__field.is-actions-active:not(.is-locked) {\n  background: color-mix(in srgb, var(--acu-accent) 6%, transparent);\n}\n.acu-visualizer-surface__footer {\n  flex: 0 0 auto;\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 12px 16px;\n  border-top: 1px solid var(--acu-border-2);\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__footer-actions {\n  display: flex;\n  gap: 8px;\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__footer-actions :deep(.acu-btn) {\n  min-width: 132px;\n}\n.acu-visualizer-surface__mobile-nav-layer {\n  position: fixed;\n  top: 0;\n  right: 0;\n  bottom: 0;\n  left: 0;\n  inset: 0;\n  width: 100%;\n  width: 100vw;\n  width: 100dvw;\n  height: 100%;\n  height: 100vh;\n  height: 100dvh;\n  min-height: 100vh;\n  min-height: 100dvh;\n  z-index: 9350;\n  display: none;\n  align-items: stretch;\n  justify-content: flex-start;\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\n  overflow: hidden;\n  background: rgba(0, 0, 0, 0.58);\n  pointer-events: auto;\n  overscroll-behavior: contain;\n  animation: visualizer-mobile-nav-layer-in 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing {\n  pointer-events: auto;\n  animation: visualizer-mobile-nav-layer-out 0.15s ease-in both;\n}\n.acu-visualizer-surface__mobile-nav {\n  width: 280px;\n  max-width: calc(100vw - 72px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n  height: 100%;\n  max-height: 100%;\n  min-width: 0;\n  min-height: 0;\n  align-self: stretch;\n  flex: 0 1 280px;\n  display: flex;\n  flex-direction: column;\n  padding: 24px 12px 16px;\n  overflow-y: auto;\n  border-right: 0;\n  background: var(--acu-sidebar-bg);\n  box-shadow: var(--acu-shadow);\n  pointer-events: auto;\n  animation: visualizer-mobile-nav-drawer-in 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing\n  .acu-visualizer-surface__mobile-nav {\n  animation: visualizer-mobile-nav-drawer-out 0.15s ease-in both;\n}\n@supports (width: min(280px, calc(100vw - 72px))) {\n.acu-visualizer-surface__mobile-nav {\n    width: min(280px, calc(100vw - 72px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n    flex: 0 0 min(280px, calc(100vw - 72px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n}\n}\n@supports (width: 100dvw) {\n.acu-visualizer-surface__mobile-nav {\n    max-width: calc(100dvw - 72px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n}\n}\n@supports (height: 100dvh) {\n.acu-visualizer-surface__mobile-nav {\n    height: 100%;\n    max-height: 100%;\n}\n}\n@keyframes visualizer-mobile-nav-layer-in {\nfrom {\n    opacity: 0;\n}\nto {\n    opacity: 1;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-in {\nfrom {\n    transform: translateX(-100%);\n}\nto {\n    transform: translateX(0);\n}\n}\n@keyframes visualizer-mobile-nav-layer-out {\nfrom {\n    opacity: 1;\n}\nto {\n    opacity: 0;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-out {\nfrom {\n    transform: translateX(0);\n}\nto {\n    transform: translateX(-100%);\n}\n}\n@media (max-width: 1024px) {\n.acu-visualizer-surface {\n    grid-template-columns: 220px minmax(0, 1fr);\n}\n.acu-visualizer-surface__card-grid {\n    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));\n}\n.acu-visualizer-surface__topbar {\n    flex-wrap: wrap;\n}\n.acu-visualizer-surface__mode-tabs {\n    order: 3;\n    width: min(420px, 100%);\n}\n}\n@media (max-width: 767px) {\n.acu-visualizer-surface {\n    grid-template-columns: 1fr;\n    grid-template-rows: minmax(0, 1fr);\n}\n.acu-visualizer-surface__sidebar {\n    display: none;\n}\n.acu-visualizer-surface__topbar {\n    display: grid;\n    grid-template-columns: minmax(0, 1fr) auto;\n    gap: 8px;\n    min-height: 0;\n    padding: 8px;\n}\n.acu-visualizer-surface__topbar-context {\n    grid-column: 1;\n    display: grid;\n    grid-template-columns: auto minmax(0, 1fr) auto;\n    align-items: center;\n    gap: 8px;\n    min-width: 0;\n}\n.acu-visualizer-surface__mobile-menu {\n    display: inline-flex;\n}\n.acu-visualizer-surface__context-items {\n    display: grid;\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n    gap: 8px;\n}\n.acu-visualizer-surface__context-item:first-child,\n  .acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item {\n    max-width: none;\n}\n.acu-visualizer-surface__mobile-nav-layer {\n    display: flex;\n}\n.acu-visualizer-surface__close {\n    grid-column: 2;\n    grid-row: 1;\n    align-self: center;\n}\n.acu-visualizer-surface__mode-tabs {\n    grid-column: 1 / -1;\n    width: 100%;\n}\n.acu-visualizer-surface__workspace {\n    padding: 10px;\n}\n.acu-visualizer-surface__data-toolbar,\n  .acu-visualizer-surface__database-toolbar {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-visualizer-surface__data-toolbar :deep(.acu-btn),\n  .acu-visualizer-surface__database-toolbar :deep(.acu-btn) {\n    width: 100%;\n}\n.acu-visualizer-surface__data-toolbar-actions {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-visualizer-surface__pagination {\n    align-items: center;\n    flex-direction: row;\n    flex-wrap: wrap;\n    gap: 6px;\n    padding: 2px 0 6px;\n}\n.acu-visualizer-surface__pagination-pages {\n    flex: 0 1 auto;\n    align-items: center;\n    flex-direction: row;\n    flex-wrap: wrap;\n    gap: 5px;\n}\n.acu-visualizer-surface__page-button {\n    width: 36px;\n    min-width: 36px;\n    height: 34px;\n    flex: 0 0 36px;\n}\n.acu-visualizer-surface__page-jump {\n    flex: 0 0 54px;\n    width: 54px;\n}\n.acu-visualizer-surface__footer {\n    display: grid;\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\n    align-items: center;\n    gap: 8px;\n    padding: 8px;\n}\n.acu-visualizer-surface__footer > span {\n    min-width: 0;\n    overflow: hidden;\n    text-overflow: ellipsis;\n    white-space: nowrap;\n}\n.acu-visualizer-surface__footer-actions {\n    display: grid;\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n    gap: 6px;\n}\n.acu-visualizer-surface__footer-actions :deep(.acu-btn) {\n    min-width: 0;\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-visualizer-surface__card-grid {\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__fields {\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__mode-tabs {\n    width: 100%;\n}\n.acu-visualizer-surface__conflict-actions {\n    display: flex;\n    margin: 8px 0 0;\n}\n.acu-visualizer-surface__footer {\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__footer > span {\n    display: none;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue#style-0");
-    var VisualizerSurface_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n.acu-visualizer-surface[data-v-da714d75] {\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n  display: grid;\n  grid-template-columns: 260px minmax(0, 1fr);\n  overflow: hidden;\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__sidebar[data-v-da714d75] {\n  min-width: 0;\n  min-height: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  padding: 24px 12px 16px;\n  overflow-y: auto;\n  border-right: 1px solid var(--acu-border-2);\n  background: var(--acu-sidebar-bg);\n}\n.acu-visualizer-surface__main[data-v-da714d75] {\n  min-width: 0;\n  min-height: 0;\n  display: flex;\n  flex-direction: column;\n  overflow: hidden;\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar[data-v-da714d75] {\n  flex: 0 0 auto;\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  min-height: 50px;\n  padding: 8px 12px 8px 16px;\n  border-bottom: 1px solid var(--acu-border-2);\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar-context[data-v-da714d75] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex: 1 1 auto;\n  gap: 10px;\n}\n.acu-visualizer-surface__mobile-menu[data-v-da714d75] {\n  display: none;\n  flex: 0 0 auto;\n  background: transparent;\n  color: var(--acu-text-2);\n  box-shadow: none;\n}\n.acu-visualizer-surface__mobile-menu[data-v-da714d75]:hover:not(:disabled) {\n  background: transparent;\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__context-items[data-v-da714d75] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex: 1 1 auto;\n  justify-content: flex-start;\n  gap: 16px;\n}\n.acu-visualizer-surface__context-item[data-v-da714d75] {\n  min-width: 0;\n  display: grid;\n  gap: 2px;\n}\n.acu-visualizer-surface__context-item[data-v-da714d75]:first-child {\n  flex: 0 1 auto;\n  max-width: min(560px, 42vw);\n}\n.acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-da714d75] {\n  flex: 0 0 auto;\n  max-width: min(260px, 20vw);\n}\n.acu-visualizer-surface__context-item span[data-v-da714d75] {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.2;\n}\n.acu-visualizer-surface__context-item strong[data-v-da714d75] {\n  min-width: 0;\n  overflow: hidden;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 600;\n  line-height: 1.25;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__context-item:first-child strong[data-v-da714d75] {\n  overflow: visible;\n  text-overflow: clip;\n  white-space: normal;\n  word-break: break-word;\n}\n.acu-visualizer-surface__context-badge[data-v-da714d75] {\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__conflict[data-v-da714d75] {\n  flex: 0 0 auto;\n  margin: 12px 16px 0;\n}\n.acu-visualizer-surface__conflict-actions[data-v-da714d75] {\n  display: inline-flex;\n  flex-wrap: wrap;\n  gap: 6px;\n  margin-left: 8px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-da714d75],\n.acu-visualizer-surface__data-toolbar-actions[data-v-da714d75],\n.acu-visualizer-surface__database-toolbar[data-v-da714d75],\n.acu-visualizer-surface__pagination[data-v-da714d75],\n.acu-visualizer-surface__pagination-pages[data-v-da714d75],\n.acu-visualizer-surface__card-header[data-v-da714d75] {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 8px;\n}\n.acu-visualizer-surface__workspace[data-v-da714d75] {\n  flex: 1 1 auto;\n  min-height: 0;\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  overflow: auto;\n  padding: 16px;\n}\n.acu-visualizer-surface__loading[data-v-da714d75] {\n  min-height: 140px;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  gap: 8px;\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__mode-tabs[data-v-da714d75] {\n  flex: 0 0 auto;\n  width: min(360px, 42vw);\n}\n.acu-visualizer-surface__close[data-v-da714d75] {\n  width: 30px;\n  height: 30px;\n  flex: 0 0 auto;\n  border: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-page-title, 22px);\n  line-height: 1;\n  border-radius: var(--acu-radius-sm);\n}\n.acu-visualizer-surface__close[data-v-da714d75]:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__data-toolbar[data-v-da714d75] {\n  flex: 0 0 auto;\n  justify-content: space-between;\n  padding: 4px 0 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__data-toolbar-actions[data-v-da714d75] {\n  flex: 0 0 auto;\n  justify-content: flex-end;\n}\n.acu-visualizer-surface__pagination[data-v-da714d75] {\n  flex: 0 0 auto;\n  justify-content: center;\n  gap: 14px;\n  padding: 6px 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-visualizer-surface__pagination-pages[data-v-da714d75] {\n  min-width: 0;\n  flex-wrap: wrap;\n  justify-content: center;\n  gap: 8px;\n}\n.acu-visualizer-surface__page-button[data-v-da714d75] {\n  width: 34px;\n  min-width: 34px;\n  height: 34px;\n  padding: 0;\n  border: 1px solid var(--acu-border);\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n}\n.acu-visualizer-surface__page-button[data-v-da714d75]:hover:not(:disabled) {\n  border-color: var(--acu-accent);\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__page-button--active[data-v-da714d75],\n.acu-visualizer-surface__page-button--active[data-v-da714d75]:hover:not(:disabled) {\n  border-color: var(--acu-accent);\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-visualizer-surface__page-button[data-v-da714d75]:disabled:not(\n    .acu-visualizer-surface__page-button--active\n  ) {\n  border-color: var(--acu-border);\n  background: var(--acu-bg-0);\n  color: var(--acu-text-2);\n  opacity: 1;\n  cursor: default;\n}\n.acu-visualizer-surface__page-jump[data-v-da714d75] {\n  flex: 0 0 64px;\n  width: 64px;\n}\n.acu-visualizer-surface__page-jump[data-v-da714d75] .acu-input {\n  min-height: 34px;\n  border: 1px solid var(--acu-border) !important;\n  background: var(--acu-bg-0) !important;\n  text-align: center;\n  font-size: var(--acu-font-size-body-lg, 13px) !important;\n  font-variant-numeric: tabular-nums;\n}\n.acu-visualizer-surface__data-range[data-v-da714d75] {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__database-toolbar[data-v-da714d75] {\n  flex: 0 0 auto;\n  padding: 0 0 4px;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar h2[data-v-da714d75] {\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-page-title, 22px);\n  font-weight: 700;\n  line-height: 1.2;\n}\n.acu-visualizer-surface__database-toolbar p[data-v-da714d75] {\n  margin: 5px 0 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-readable, 1.55);\n}\n.acu-visualizer-surface__empty[data-v-da714d75] {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-visualizer-surface__card-grid[data-v-da714d75] {\n  display: grid;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));\n  gap: 12px;\n}\n.acu-visualizer-surface__data-card[data-v-da714d75] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  height: 100%;\n  padding: 16px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-bg-1);\n}\n.acu-visualizer-surface__card-header strong[data-v-da714d75] {\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-visualizer-surface__card-header span[data-v-da714d75] {\n  min-width: 0;\n  margin-right: auto;\n  overflow: hidden;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__card-header[data-v-da714d75] .acu-icon-btn {\n  background: transparent;\n}\n.acu-visualizer-surface__card-header[data-v-da714d75]\n  .acu-icon-btn--default:hover:not(:disabled) {\n  background:\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\n    transparent;\n}\n.acu-visualizer-surface__card-header[data-v-da714d75] .acu-icon-btn--accent {\n  background: var(--acu-accent-glow);\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__card-header[data-v-da714d75]\n  .acu-icon-btn--danger:hover:not(:disabled) {\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-visualizer-surface__fields[data-v-da714d75] {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.acu-visualizer-surface__field-row[data-v-da714d75] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 8px;\n  align-items: stretch;\n}\n.acu-visualizer-surface__field-row.is-wide[data-v-da714d75] {\n  grid-template-columns: minmax(0, 1fr);\n}\n.acu-visualizer-surface__field[data-v-da714d75] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  padding: 2px;\n  border: 1px solid transparent;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  transition:\n    background 0.15s ease,\n    border-color 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field[data-v-da714d75] .acu-textarea {\n  flex: 1 1 auto;\n  min-height: 34px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.45;\n  white-space: pre-wrap;\n  word-break: break-word;\n  overflow-wrap: break-word;\n}\n.acu-visualizer-surface__field-preview[data-v-da714d75] {\n  width: 100%;\n  min-height: 34px;\n  box-sizing: border-box;\n  padding: 8px 10px;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  color: var(--acu-text-1);\n  cursor: text;\n  display: block;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.45;\n  white-space: pre-wrap;\n  word-break: break-word;\n  overflow-wrap: break-word;\n  transition:\n    background 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field-preview[data-v-da714d75]:hover,\n.acu-visualizer-surface__field-preview[data-v-da714d75]:focus-visible {\n  outline: none;\n  background:\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\n    var(--acu-bg-2);\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field-preview.is-empty[data-v-da714d75] {\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__field-label[data-v-da714d75] {\n  min-width: 0;\n  min-height: 24px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 6px;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 600;\n}\n.acu-visualizer-surface__field-label > span[data-v-da714d75]:first-child {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__field-locks[data-v-da714d75] {\n  flex: 0 0 auto;\n  min-width: 51px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: flex-end;\n  gap: 3px;\n  opacity: 0.44;\n  transition: opacity 0.15s ease;\n}\n.acu-visualizer-surface__field:hover .acu-visualizer-surface__field-locks[data-v-da714d75],\n.acu-visualizer-surface__field:focus-within\n  .acu-visualizer-surface__field-locks[data-v-da714d75],\n.acu-visualizer-surface__field.is-actions-active\n  .acu-visualizer-surface__field-locks[data-v-da714d75],\n.acu-visualizer-surface__field.is-locked .acu-visualizer-surface__field-locks[data-v-da714d75],\n.acu-visualizer-surface__field.is-special-index\n  .acu-visualizer-surface__field-locks[data-v-da714d75] {\n  opacity: 1;\n}\n.acu-visualizer-surface__field-locks[data-v-da714d75] .acu-icon-btn {\n  --acu-icon-btn-size: 24px;\n  --acu-icon-btn-font-size: 11px;\n  width: 24px;\n  height: 24px;\n  background: transparent !important;\n}\n.acu-visualizer-surface__field-locks[data-v-da714d75]\n  .acu-icon-btn--default:hover:not(:disabled) {\n  background:\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\n    transparent;\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__field-locks[data-v-da714d75] .acu-icon-btn--accent {\n  color: var(--acu-warning) !important;\n  background: color-mix(in srgb, var(--acu-warning) 16%, transparent) !important;\n}\n.acu-visualizer-surface__field-locks[data-v-da714d75]\n  .acu-icon-btn--accent:hover:not(:disabled) {\n  color: var(--acu-warning) !important;\n  background: color-mix(in srgb, var(--acu-warning) 22%, transparent) !important;\n}\n.acu-visualizer-surface__field.is-locked[data-v-da714d75] {\n  border-color: var(--acu-border);\n  background: color-mix(in srgb, var(--acu-warning) 8%, transparent);\n}\n.acu-visualizer-surface__field.is-actions-active[data-v-da714d75]:not(.is-locked) {\n  background: color-mix(in srgb, var(--acu-accent) 6%, transparent);\n}\n.acu-visualizer-surface__footer[data-v-da714d75] {\n  flex: 0 0 auto;\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 12px 16px;\n  border-top: 1px solid var(--acu-border-2);\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__footer-actions[data-v-da714d75] {\n  display: flex;\n  gap: 8px;\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__footer-actions[data-v-da714d75] .acu-btn {\n  min-width: 132px;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-da714d75] {\n  position: fixed;\n  top: 0;\n  right: 0;\n  bottom: 0;\n  left: 0;\n  inset: 0;\n  width: 100%;\n  width: 100vw;\n  width: 100dvw;\n  height: 100%;\n  height: 100vh;\n  height: 100dvh;\n  min-height: 100vh;\n  min-height: 100dvh;\n  z-index: 9350;\n  display: none;\n  align-items: stretch;\n  justify-content: flex-start;\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\n  overflow: hidden;\n  background: rgba(0, 0, 0, 0.58);\n  pointer-events: auto;\n  overscroll-behavior: contain;\n  animation: visualizer-mobile-nav-layer-in-da714d75 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing[data-v-da714d75] {\n  pointer-events: auto;\n  animation: visualizer-mobile-nav-layer-out-da714d75 0.15s ease-in both;\n}\n.acu-visualizer-surface__mobile-nav[data-v-da714d75] {\n  width: 360px;\n  max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n  height: 100%;\n  max-height: 100%;\n  min-width: 0;\n  min-height: 0;\n  align-self: stretch;\n  flex: 0 1 360px;\n  display: flex;\n  flex-direction: column;\n  padding: 24px 12px 16px;\n  overflow-y: auto;\n  border-right: 0;\n  background: var(--acu-sidebar-bg);\n  box-shadow: var(--acu-shadow);\n  pointer-events: auto;\n  animation: visualizer-mobile-nav-drawer-in-da714d75 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing\n  .acu-visualizer-surface__mobile-nav[data-v-da714d75] {\n  animation: visualizer-mobile-nav-drawer-out-da714d75 0.15s ease-in both;\n}\n@supports (width: min(360px, calc(100% - 24px))) {\n.acu-visualizer-surface__mobile-nav[data-v-da714d75] {\n    width: min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n    flex: 0 0 min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n}\n}\n@supports (width: 100dvw) {\n.acu-visualizer-surface__mobile-nav[data-v-da714d75] {\n    max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n}\n}\n@supports (height: 100dvh) {\n.acu-visualizer-surface__mobile-nav[data-v-da714d75] {\n    height: 100%;\n    max-height: 100%;\n}\n}\n@keyframes visualizer-mobile-nav-layer-in-da714d75 {\nfrom {\n    opacity: 0;\n}\nto {\n    opacity: 1;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-in-da714d75 {\nfrom {\n    transform: translateX(-100%);\n}\nto {\n    transform: translateX(0);\n}\n}\n@keyframes visualizer-mobile-nav-layer-out-da714d75 {\nfrom {\n    opacity: 1;\n}\nto {\n    opacity: 0;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-out-da714d75 {\nfrom {\n    transform: translateX(0);\n}\nto {\n    transform: translateX(-100%);\n}\n}\n@media (max-width: 1024px) {\n.acu-visualizer-surface[data-v-da714d75] {\n    grid-template-columns: 220px minmax(0, 1fr);\n}\n.acu-visualizer-surface__card-grid[data-v-da714d75] {\n    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));\n}\n.acu-visualizer-surface__topbar[data-v-da714d75] {\n    flex-wrap: wrap;\n}\n.acu-visualizer-surface__mode-tabs[data-v-da714d75] {\n    order: 3;\n    width: min(420px, 100%);\n}\n}\n@media (max-width: 767px) {\n.acu-visualizer-surface[data-v-da714d75] {\n    grid-template-columns: 1fr;\n    grid-template-rows: minmax(0, 1fr);\n}\n.acu-visualizer-surface__sidebar[data-v-da714d75] {\n    display: none;\n}\n.acu-visualizer-surface__topbar[data-v-da714d75] {\n    display: grid;\n    grid-template-columns: minmax(0, 1fr) auto;\n    gap: 8px;\n    min-height: 0;\n    padding: 8px;\n}\n.acu-visualizer-surface__topbar-context[data-v-da714d75] {\n    grid-column: 1;\n    display: grid;\n    grid-template-columns: auto minmax(0, 1fr) auto;\n    align-items: center;\n    gap: 8px;\n    min-width: 0;\n}\n.acu-visualizer-surface__mobile-menu[data-v-da714d75] {\n    display: inline-flex;\n}\n.acu-visualizer-surface__context-items[data-v-da714d75] {\n    display: grid;\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n    gap: 8px;\n}\n.acu-visualizer-surface__context-item[data-v-da714d75]:first-child,\n  .acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-da714d75] {\n    max-width: none;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-da714d75] {\n    display: flex;\n}\n.acu-visualizer-surface__close[data-v-da714d75] {\n    grid-column: 2;\n    grid-row: 1;\n    align-self: center;\n}\n.acu-visualizer-surface__mode-tabs[data-v-da714d75] {\n    grid-column: 1 / -1;\n    width: 100%;\n}\n.acu-visualizer-surface__workspace[data-v-da714d75] {\n    padding: 10px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-da714d75],\n  .acu-visualizer-surface__database-toolbar[data-v-da714d75] {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-visualizer-surface__data-toolbar[data-v-da714d75] .acu-btn,\n  .acu-visualizer-surface__database-toolbar[data-v-da714d75] .acu-btn {\n    width: 100%;\n}\n.acu-visualizer-surface__data-toolbar-actions[data-v-da714d75] {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-visualizer-surface__pagination[data-v-da714d75] {\n    align-items: center;\n    flex-direction: row;\n    flex-wrap: wrap;\n    gap: 6px;\n    padding: 2px 0 6px;\n}\n.acu-visualizer-surface__pagination-pages[data-v-da714d75] {\n    flex: 0 1 auto;\n    align-items: center;\n    flex-direction: row;\n    flex-wrap: wrap;\n    gap: 5px;\n}\n.acu-visualizer-surface__page-button[data-v-da714d75] {\n    width: 36px;\n    min-width: 36px;\n    height: 34px;\n    flex: 0 0 36px;\n}\n.acu-visualizer-surface__page-jump[data-v-da714d75] {\n    flex: 0 0 54px;\n    width: 54px;\n}\n.acu-visualizer-surface__footer[data-v-da714d75] {\n    display: grid;\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\n    align-items: center;\n    gap: 8px;\n    padding: 8px;\n}\n.acu-visualizer-surface__footer > span[data-v-da714d75] {\n    min-width: 0;\n    overflow: hidden;\n    text-overflow: ellipsis;\n    white-space: nowrap;\n}\n.acu-visualizer-surface__footer-actions[data-v-da714d75] {\n    display: grid;\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n    gap: 6px;\n}\n.acu-visualizer-surface__footer-actions[data-v-da714d75] .acu-btn {\n    min-width: 0;\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-visualizer-surface__card-grid[data-v-da714d75] {\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__fields[data-v-da714d75] {\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__mode-tabs[data-v-da714d75] {\n    width: 100%;\n}\n.acu-visualizer-surface__conflict-actions[data-v-da714d75] {\n    display: flex;\n    margin: 8px 0 0;\n}\n.acu-visualizer-surface__footer[data-v-da714d75] {\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__footer > span[data-v-da714d75] {\n    display: none;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue#style-0-da714d75");
+    var VisualizerSurface_vue_vue_type_style_index_0_scoped_da714d75_lang = null;
 
     const _hoisted_1$1 = {
     	class: "acu-visualizer-surface__sidebar",
@@ -95877,12 +96378,14 @@ Expected function or array of functions, received type ${typeof value}.`
     															variant: field.columnLocked ? "accent" : "default",
     															title: field.columnLocked ? "取消当前列的自动更新保护" : "锁定当前列，阻止自动更新改动这一列",
     															"aria-label": field.columnLocked ? "取消锁定当前列" : "锁定当前列",
-    															onClick: withModifiers(($event) => $setup.visualizer.toggleColumnLock($setup.visualizer.currentSheetKey, field.columnIndex), ["prevent"])
+    															onClick: withModifiers(($event) => $setup.handleFieldColumnLockClick(row.index, field.columnIndex), ["stop", "prevent"]),
+    															onPointerdown: withModifiers(($event) => $setup.handleFieldColumnLockPointerDown(row.index, field.columnIndex), ["stop", "prevent"])
     														}, null, 8, [
     															"variant",
     															"title",
     															"aria-label",
-    															"onClick"
+    															"onClick",
+    															"onPointerdown"
     														])) : createCommentVNode("v-if", true), !field.specialIndexLocked && (field.locked || $setup.isFieldActionsActive(row.index, field.columnIndex)) ? (openBlock(), createBlock($setup["AcuIconButton"], {
     															key: 2,
     															class: "acu-visualizer-surface__lock-button",
@@ -95891,12 +96394,14 @@ Expected function or array of functions, received type ${typeof value}.`
     															variant: field.cellLocked ? "accent" : "default",
     															title: field.cellLocked ? "取消当前单元格的自动更新保护" : "锁定当前单元格，阻止自动更新改动这个值",
     															"aria-label": field.cellLocked ? "取消锁定当前单元格" : "锁定当前单元格",
-    															onClick: withModifiers(($event) => $setup.visualizer.toggleCellLock($setup.visualizer.currentSheetKey, row.index, field.columnIndex), ["prevent"])
+    															onClick: withModifiers(($event) => $setup.handleFieldCellLockClick(row.index, field.columnIndex), ["stop", "prevent"]),
+    															onPointerdown: withModifiers(($event) => $setup.handleFieldCellLockPointerDown(row.index, field.columnIndex), ["stop", "prevent"])
     														}, null, 8, [
     															"variant",
     															"title",
     															"aria-label",
-    															"onClick"
+    															"onClick",
+    															"onPointerdown"
     														])) : createCommentVNode("v-if", true)])]), $setup.isDataCellEditing(row.index, field.columnIndex) ? (openBlock(), createBlock($setup["AcuTextarea"], {
     															key: 0,
     															ref_for: true,
@@ -96022,9 +96527,11 @@ Expected function or array of functions, received type ${typeof value}.`
     				},
     				[createBaseVNode("aside", {
     					class: "acu-visualizer-surface__mobile-nav",
+    					style: $setup.mobileNavDrawerStyle,
     					role: "dialog",
     					"aria-modal": "true",
     					"aria-label": "数据库导航",
+    					"data-acu-mobile-nav-width": "360px",
     					onClick: _cache[1] || (_cache[1] = withModifiers(() => {}, ["stop"]))
     				}, [createVNode($setup["VisualizerNavigation"], {
     					"sheet-items": $setup.visualizer.sheetItems,
@@ -96049,7 +96556,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* NEED_HYDRATION */
     	);
     }
-    var VisualizerSurface = /* @__PURE__ */ _export_sfc(_sfc_main$1, [["render", _sfc_render$1]]);
+    var VisualizerSurface = /* @__PURE__ */ _export_sfc(_sfc_main$1, [["render", _sfc_render$1], ["__scopeId", "data-v-da714d75"]]);
 
     const THEME_MENU_LEAVE_MS = 120;
     const MOBILE_NAV_LEAVE_MS = 150;
@@ -96072,6 +96579,11 @@ Expected function or array of functions, received type ${typeof value}.`
             const isThemeMenuOpen = ref(false);
             const isThemeMenuRendered = ref(false);
             const isThemeMenuClosing = ref(false);
+            const mobileNavDrawerStyle = {
+                width: "360px",
+                maxWidth: "calc(100% - 24px)",
+                flex: "0 0 360px",
+            };
             let themeMenuCloseTimer;
             let mobileNavCloseTimer;
             const shellTitle = computed(() => visualizer.isActive ? "数据库编辑器" : router.activePage?.title || "SP·数据库 III");
@@ -96247,14 +96759,14 @@ Expected function or array of functions, received type ${typeof value}.`
                 acuClearTimeout(mobileNavCloseTimer);
                 mobileNavCloseTimer = undefined;
             }
-            const __returned__ = { emit, rootShell, router, dialogStore, themeStore, toastStore, uiMode, visualizer, isMobileNavOpen, isMobileNavRendered, isMobileNavClosing, isThemeMenuOpen, isThemeMenuRendered, isThemeMenuClosing, THEME_MENU_LEAVE_MS, MOBILE_NAV_LEAVE_MS, get themeMenuCloseTimer() { return themeMenuCloseTimer; }, set themeMenuCloseTimer(v) { themeMenuCloseTimer = v; }, get mobileNavCloseTimer() { return mobileNavCloseTimer; }, set mobileNavCloseTimer(v) { mobileNavCloseTimer = v; }, shellTitle, toggleThemeMenu, selectTheme, readFileText, importThemeFile, exportTheme, deleteTheme, sanitizeFilename, downloadJson, onDocPointer, devOptions, openMobileNav, closeMobileNav, closeApp, openThemeMenu, closeThemeMenu, clearThemeMenuCloseTimer, clearMobileNavCloseTimer, AcuDialogHost, AcuFileButton, AcuIconButton, AcuToastViewport, MainArea, Sidebar, get isCustomThemeId() { return isCustomThemeId; }, VisualizerSurface };
+            const __returned__ = { emit, rootShell, router, dialogStore, themeStore, toastStore, uiMode, visualizer, isMobileNavOpen, isMobileNavRendered, isMobileNavClosing, isThemeMenuOpen, isThemeMenuRendered, isThemeMenuClosing, THEME_MENU_LEAVE_MS, MOBILE_NAV_LEAVE_MS, mobileNavDrawerStyle, get themeMenuCloseTimer() { return themeMenuCloseTimer; }, set themeMenuCloseTimer(v) { themeMenuCloseTimer = v; }, get mobileNavCloseTimer() { return mobileNavCloseTimer; }, set mobileNavCloseTimer(v) { mobileNavCloseTimer = v; }, shellTitle, toggleThemeMenu, selectTheme, readFileText, importThemeFile, exportTheme, deleteTheme, sanitizeFilename, downloadJson, onDocPointer, devOptions, openMobileNav, closeMobileNav, closeApp, openThemeMenu, closeThemeMenu, clearThemeMenuCloseTimer, clearMobileNavCloseTimer, AcuDialogHost, AcuFileButton, AcuIconButton, AcuToastViewport, MainArea, Sidebar, get isCustomThemeId() { return isCustomThemeId; }, VisualizerSurface };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n:global(#acu-app-v2) {\n  --acu-safe-top: max(env(safe-area-inset-top, 0px), var(--acu-native-safe-top, 0px));\n  --acu-safe-right: max(env(safe-area-inset-right, 0px), var(--acu-native-safe-right, 0px));\n  --acu-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--acu-native-safe-bottom, 0px));\n  --acu-safe-left: max(env(safe-area-inset-left, 0px), var(--acu-native-safe-left, 0px));\n  --acu-font-size-micro: 10px;\n  --acu-font-size-caption: 11px;\n  --acu-font-size-body: 12px;\n  --acu-font-size-body-lg: 13px;\n  --acu-font-size-section-title: 12px;\n  --acu-font-size-list-title: 13px;\n  --acu-font-size-panel-title: 15px;\n  --acu-font-size-page-title: 22px;\n  --acu-line-height-caption: 1.5;\n  --acu-line-height-body: 1.45;\n  --acu-line-height-readable: 1.55;\n  box-sizing: border-box;\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-ui);\n  font-size: var(--acu-font-size-body);\n}\n:global(#acu-app-v2),\n:global(#acu-app-v2 *) {\n  box-sizing: border-box;\n}\n:global(#acu-app-v2 button) {\n  appearance: none;\n  -webkit-appearance: none;\n  -webkit-tap-highlight-color: transparent;\n}\n:global(#acu-app-v2 button:focus:not(:focus-visible)) {\n  outline: none;\n  box-shadow: none;\n}\n.acu-v2-app {\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-ui);\n  font-size: var(--acu-font-size-body);\n}\n.acu-v2-app__shell {\n  position: fixed;\n  top: 0;\n  right: 0;\n  bottom: 0;\n  left: 0;\n  inset: 0;\n  z-index: 9000;\n  width: 100%;\n  width: 100vw;\n  width: 100dvw;\n  height: 100%;\n  height: 100vh;\n  height: 100dvh;\n  min-width: 0;\n  min-height: 0;\n  display: flex;\n  flex-direction: column;\n  padding: var(--acu-safe-top) var(--acu-safe-right) var(--acu-safe-bottom) var(--acu-safe-left);\n  overflow: hidden;\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-ui);\n  font-size: var(--acu-font-size-body);\n}\n.acu-v2-app__header {\n  position: relative;\n  z-index: 40;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  min-height: 50px;\n  padding: 8px 12px 8px 20px;\n  background: var(--acu-bg-0);\n  border-bottom: 1px solid var(--acu-border-2);\n  flex: 0 0 auto;\n}\n.acu-v2-app__header-left {\n  display: flex;\n  align-items: center;\n  min-width: 0;\n  gap: 8px;\n  flex: 1 1 auto;\n}\n.acu-v2-app__menu {\n  display: none;\n  flex: 0 0 auto;\n  font-size: 14px;\n  background: transparent;\n  color: var(--acu-text-2);\n  box-shadow: none;\n}\n.acu-v2-app__menu:hover:not(:disabled) {\n  background: transparent;\n  color: var(--acu-text-1);\n}\n.acu-v2-app__page-title {\n  min-width: 0;\n  margin: 0;\n  overflow: hidden;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-page-title, 22px);\n  font-weight: 700;\n  line-height: 1.2;\n  letter-spacing: 0;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-app__close {\n  width: 30px;\n  height: 30px;\n  border: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-page-title, 22px);\n  line-height: 1;\n  cursor: pointer;\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__close:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-app__body {\n  flex: 1 1 auto;\n  display: flex;\n  min-width: 0;\n  min-height: 0;\n  overflow: hidden;\n}\n.acu-v2-app__content {\n  flex: 1 1 auto;\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  min-height: 0;\n  overflow: hidden;\n}\n.acu-v2-app__mobile-nav-layer {\n  position: fixed;\n  top: 0;\n  right: 0;\n  bottom: 0;\n  left: 0;\n  inset: 0;\n  width: 100%;\n  width: 100vw;\n  width: 100dvw;\n  height: 100%;\n  height: 100vh;\n  height: 100dvh;\n  min-height: 100vh;\n  min-height: 100dvh;\n  z-index: 9300;\n  display: none;\n  align-items: stretch;\n  justify-content: flex-start;\n  padding: var(--acu-safe-top) var(--acu-safe-right) var(--acu-safe-bottom) var(--acu-safe-left);\n  overflow: hidden;\n  background: rgba(0, 0, 0, 0.58);\n  pointer-events: auto;\n  overscroll-behavior: contain;\n  animation: mobile-nav-layer-in 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing {\n  pointer-events: auto;\n  animation: mobile-nav-layer-out 0.15s ease-in both;\n}\n.acu-v2-app__mobile-nav {\n  width: 280px;\n  max-width: calc(100vw - 72px - var(--acu-safe-left) - var(--acu-safe-right));\n  height: 100%;\n  max-height: 100%;\n  min-width: 0;\n  min-height: 0;\n  align-self: stretch;\n  flex: 0 1 280px;\n  display: flex;\n  flex-direction: column;\n  background: var(--acu-sidebar-bg);\n  border-right: 0;\n  box-shadow: var(--acu-shadow);\n  overflow: hidden;\n  pointer-events: auto;\n  animation: mobile-nav-drawer-in 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing .acu-v2-app__mobile-nav {\n  animation: mobile-nav-drawer-out 0.15s ease-in both;\n}\n@supports (width: min(280px, calc(100vw - 72px))) {\n.acu-v2-app__mobile-nav {\n    width: min(280px, calc(100vw - 72px - var(--acu-safe-left) - var(--acu-safe-right)));\n    flex: 0 0 min(280px, calc(100vw - 72px - var(--acu-safe-left) - var(--acu-safe-right)));\n}\n}\n@supports (width: 100dvw) {\n.acu-v2-app__mobile-nav {\n    max-width: calc(100dvw - 72px - var(--acu-safe-left) - var(--acu-safe-right));\n}\n}\n@supports (height: 100dvh) {\n.acu-v2-app__mobile-nav {\n    height: 100%;\n    max-height: 100%;\n}\n}\n\n/* ── Theme switcher ── */\n.acu-v2-app__header-right {\n  display: flex;\n  align-items: center;\n  gap: 4px;\n  flex: 0 0 auto;\n}\n.acu-v2-app__theme-switcher {\n  position: relative;\n}\n.acu-v2-app__theme-btn {\n  width: 30px;\n  height: 30px;\n  border: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font-size: 14px;\n  cursor: pointer;\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__theme-btn:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-menu {\n  position: absolute;\n  top: calc(100% + 6px);\n  right: 0;\n  z-index: 10;\n  list-style: none;\n  margin: 0;\n  padding: 4px;\n  width: min(280px, calc(100vw - 24px));\n  min-width: 240px;\n  background: var(--acu-bg-1);\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  box-shadow: var(--acu-shadow);\n  animation: theme-menu-in 0.12s ease-out both;\n}\n.acu-v2-app__theme-menu.is-closing {\n  pointer-events: none;\n  animation: theme-menu-out 0.12s ease-in both;\n}\n.acu-v2-app__theme-option {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 8px;\n  padding: 7px 10px;\n  font-size: var(--acu-font-size-body-lg, 13px);\n  color: var(--acu-text-2);\n  border-radius: var(--acu-radius-sm);\n  cursor: pointer;\n  user-select: none;\n}\n.acu-v2-app__theme-option:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active {\n  color: var(--acu-on-accent);\n  background: var(--acu-accent);\n  font-weight: 600;\n}\n.acu-v2-app__theme-option-main {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  min-width: 0;\n  flex: 1 1 auto;\n}\n.acu-v2-app__theme-name {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-app__theme-tag {\n  flex: 0 0 auto;\n  padding: 1px 5px;\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-accent) 12%, transparent);\n  color: var(--acu-accent);\n  font-size: var(--acu-font-size-micro, 10px);\n  font-weight: 600;\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tag {\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools {\n  display: inline-flex;\n  align-items: center;\n  gap: 4px;\n  flex: 0 0 auto;\n  opacity: 0.72;\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn) {\n  background: transparent;\n  color: inherit;\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn:hover:not(:disabled)) {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools :deep(.acu-icon-btn:hover:not(:disabled)) {\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools :deep(.acu-icon-btn--danger:hover:not(:disabled)) {\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n  color: var(--acu-danger);\n}\n.acu-v2-app__theme-option:hover .acu-v2-app__theme-tools,\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools {\n  opacity: 1;\n}\n.acu-v2-app__theme-swatch {\n  display: block;\n  width: 18px;\n  height: 18px;\n  border-radius: 999px;\n  flex: 0 0 18px;\n  background: linear-gradient(\n    135deg,\n    var(--acu-theme-swatch-bg) 0 56%,\n    var(--acu-theme-swatch-accent) 56% 100%\n  );\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-border-2) 72%, transparent);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-swatch {\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-on-accent) 62%, transparent);\n}\n.acu-v2-app__theme-menu-footer {\n  display: flex;\n  justify-content: stretch;\n  margin-top: 4px;\n  padding: 7px 6px 4px;\n  border-top: 1px solid var(--acu-border);\n}\n.acu-v2-app__theme-menu-footer :deep(.acu-file-button),\n.acu-v2-app__theme-menu-footer :deep(.acu-btn) {\n  width: 100%;\n}\n@keyframes theme-menu-in {\nfrom {\n    opacity: 0;\n    transform: translateY(-4px);\n}\nto {\n    opacity: 1;\n    transform: translateY(0);\n}\n}\n@keyframes theme-menu-out {\nfrom {\n    opacity: 1;\n    transform: translateY(0);\n}\nto {\n    opacity: 0;\n    transform: translateY(-4px);\n}\n}\n@keyframes mobile-nav-layer-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes mobile-nav-drawer-in {\nfrom { transform: translateX(-100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes mobile-nav-layer-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes mobile-nav-drawer-out {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(-100%);\n}\n}\n@media (max-width: 720px) {\n.acu-v2-app__header {\n    min-height: 48px;\n    padding: 8px 10px;\n}\n.acu-v2-app__header-left {\n    gap: 6px;\n}\n.acu-v2-app__menu {\n    display: inline-flex;\n}\n.acu-v2-app__page-title {\n    font-size: 18px;\n}\n.acu-v2-app__desktop-sidebar {\n    display: none;\n}\n.acu-v2-app__mobile-nav-layer {\n    display: flex;\n}\n}\n", "src/presentation-v2/App.vue#style-0");
-    var App_vue_vue_type_style_index_0_lang = null;
+    injectSfcStyle("\n#acu-app-v2 {\n  --acu-safe-top: max(env(safe-area-inset-top, 0px), var(--acu-native-safe-top, 0px));\n  --acu-safe-right: max(env(safe-area-inset-right, 0px), var(--acu-native-safe-right, 0px));\n  --acu-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--acu-native-safe-bottom, 0px));\n  --acu-safe-left: max(env(safe-area-inset-left, 0px), var(--acu-native-safe-left, 0px));\n  --acu-font-size-micro: 10px;\n  --acu-font-size-caption: 11px;\n  --acu-font-size-body: 12px;\n  --acu-font-size-body-lg: 13px;\n  --acu-font-size-section-title: 12px;\n  --acu-font-size-list-title: 13px;\n  --acu-font-size-panel-title: 15px;\n  --acu-font-size-page-title: 22px;\n  --acu-line-height-caption: 1.5;\n  --acu-line-height-body: 1.45;\n  --acu-line-height-readable: 1.55;\n  box-sizing: border-box;\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-ui);\n  font-size: var(--acu-font-size-body);\n}\n#acu-app-v2,#acu-app-v2 * {\n  box-sizing: border-box;\n}\n#acu-app-v2 button {\n  appearance: none;\n  -webkit-appearance: none;\n  -webkit-tap-highlight-color: transparent;\n}\n#acu-app-v2 button:focus:not(:focus-visible) {\n  outline: none;\n  box-shadow: none;\n}\n.acu-v2-app[data-v-7aaf04b5] {\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-ui);\n  font-size: var(--acu-font-size-body);\n}\n.acu-v2-app__shell[data-v-7aaf04b5] {\n  position: fixed;\n  top: 0;\n  right: 0;\n  bottom: 0;\n  left: 0;\n  inset: 0;\n  z-index: 9000;\n  width: 100%;\n  width: 100vw;\n  width: 100dvw;\n  height: 100%;\n  height: 100vh;\n  height: 100dvh;\n  min-width: 0;\n  min-height: 0;\n  display: flex;\n  flex-direction: column;\n  padding: var(--acu-safe-top) var(--acu-safe-right) var(--acu-safe-bottom) var(--acu-safe-left);\n  overflow: hidden;\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-ui);\n  font-size: var(--acu-font-size-body);\n}\n.acu-v2-app__header[data-v-7aaf04b5] {\n  position: relative;\n  z-index: 40;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  min-height: 50px;\n  padding: 8px 12px 8px 20px;\n  background: var(--acu-bg-0);\n  border-bottom: 1px solid var(--acu-border-2);\n  flex: 0 0 auto;\n}\n.acu-v2-app__header-left[data-v-7aaf04b5] {\n  display: flex;\n  align-items: center;\n  min-width: 0;\n  gap: 8px;\n  flex: 1 1 auto;\n}\n.acu-v2-app__menu[data-v-7aaf04b5] {\n  display: none;\n  flex: 0 0 auto;\n  font-size: 14px;\n  background: transparent;\n  color: var(--acu-text-2);\n  box-shadow: none;\n}\n.acu-v2-app__menu[data-v-7aaf04b5]:hover:not(:disabled) {\n  background: transparent;\n  color: var(--acu-text-1);\n}\n.acu-v2-app__page-title[data-v-7aaf04b5] {\n  min-width: 0;\n  margin: 0;\n  overflow: hidden;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-page-title, 22px);\n  font-weight: 700;\n  line-height: 1.2;\n  letter-spacing: 0;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-app__close[data-v-7aaf04b5] {\n  width: 30px;\n  height: 30px;\n  border: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-page-title, 22px);\n  line-height: 1;\n  cursor: pointer;\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__close[data-v-7aaf04b5]:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-app__body[data-v-7aaf04b5] {\n  flex: 1 1 auto;\n  display: flex;\n  min-width: 0;\n  min-height: 0;\n  overflow: hidden;\n}\n.acu-v2-app__content[data-v-7aaf04b5] {\n  flex: 1 1 auto;\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  min-height: 0;\n  overflow: hidden;\n}\n.acu-v2-app__mobile-nav-layer[data-v-7aaf04b5] {\n  position: fixed;\n  top: 0;\n  right: 0;\n  bottom: 0;\n  left: 0;\n  inset: 0;\n  width: 100%;\n  width: 100vw;\n  width: 100dvw;\n  height: 100%;\n  height: 100vh;\n  height: 100dvh;\n  min-height: 100vh;\n  min-height: 100dvh;\n  z-index: 9300;\n  display: none;\n  align-items: stretch;\n  justify-content: flex-start;\n  padding: var(--acu-safe-top) var(--acu-safe-right) var(--acu-safe-bottom) var(--acu-safe-left);\n  overflow: hidden;\n  background: rgba(0, 0, 0, 0.58);\n  pointer-events: auto;\n  overscroll-behavior: contain;\n  animation: mobile-nav-layer-in-7aaf04b5 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing[data-v-7aaf04b5] {\n  pointer-events: auto;\n  animation: mobile-nav-layer-out-7aaf04b5 0.15s ease-in both;\n}\n.acu-v2-app__mobile-nav[data-v-7aaf04b5] {\n  width: 360px;\n  max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n  height: 100%;\n  max-height: 100%;\n  min-width: 0;\n  min-height: 0;\n  align-self: stretch;\n  flex: 0 1 360px;\n  display: flex;\n  flex-direction: column;\n  background: var(--acu-sidebar-bg);\n  border-right: 0;\n  box-shadow: var(--acu-shadow);\n  overflow: hidden;\n  pointer-events: auto;\n  animation: mobile-nav-drawer-in-7aaf04b5 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing .acu-v2-app__mobile-nav[data-v-7aaf04b5] {\n  animation: mobile-nav-drawer-out-7aaf04b5 0.15s ease-in both;\n}\n@supports (width: min(360px, calc(100% - 24px))) {\n.acu-v2-app__mobile-nav[data-v-7aaf04b5] {\n    width: min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n    flex: 0 0 min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n}\n}\n@supports (width: 100dvw) {\n.acu-v2-app__mobile-nav[data-v-7aaf04b5] {\n    max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n}\n}\n@supports (height: 100dvh) {\n.acu-v2-app__mobile-nav[data-v-7aaf04b5] {\n    height: 100%;\n    max-height: 100%;\n}\n}\n\n/* ── Theme switcher ── */\n.acu-v2-app__header-right[data-v-7aaf04b5] {\n  display: flex;\n  align-items: center;\n  gap: 4px;\n  flex: 0 0 auto;\n}\n.acu-v2-app__theme-switcher[data-v-7aaf04b5] {\n  position: relative;\n}\n.acu-v2-app__theme-btn[data-v-7aaf04b5] {\n  width: 30px;\n  height: 30px;\n  border: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font-size: 14px;\n  cursor: pointer;\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__theme-btn[data-v-7aaf04b5]:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-menu[data-v-7aaf04b5] {\n  position: absolute;\n  top: calc(100% + 6px);\n  right: 0;\n  z-index: 10;\n  list-style: none;\n  margin: 0;\n  padding: 4px;\n  width: min(280px, calc(100vw - 24px));\n  min-width: 240px;\n  background: var(--acu-bg-1);\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  box-shadow: var(--acu-shadow);\n  animation: theme-menu-in-7aaf04b5 0.12s ease-out both;\n}\n.acu-v2-app__theme-menu.is-closing[data-v-7aaf04b5] {\n  pointer-events: none;\n  animation: theme-menu-out-7aaf04b5 0.12s ease-in both;\n}\n.acu-v2-app__theme-option[data-v-7aaf04b5] {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 8px;\n  padding: 7px 10px;\n  font-size: var(--acu-font-size-body-lg, 13px);\n  color: var(--acu-text-2);\n  border-radius: var(--acu-radius-sm);\n  cursor: pointer;\n  user-select: none;\n}\n.acu-v2-app__theme-option[data-v-7aaf04b5]:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active[data-v-7aaf04b5] {\n  color: var(--acu-on-accent);\n  background: var(--acu-accent);\n  font-weight: 600;\n}\n.acu-v2-app__theme-option-main[data-v-7aaf04b5] {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  min-width: 0;\n  flex: 1 1 auto;\n}\n.acu-v2-app__theme-name[data-v-7aaf04b5] {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-app__theme-tag[data-v-7aaf04b5] {\n  flex: 0 0 auto;\n  padding: 1px 5px;\n  border-radius: var(--acu-radius-sm);\n  background: color-mix(in srgb, var(--acu-accent) 12%, transparent);\n  color: var(--acu-accent);\n  font-size: var(--acu-font-size-micro, 10px);\n  font-weight: 600;\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tag[data-v-7aaf04b5] {\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools[data-v-7aaf04b5] {\n  display: inline-flex;\n  align-items: center;\n  gap: 4px;\n  flex: 0 0 auto;\n  opacity: 0.72;\n}\n.acu-v2-app__theme-tools[data-v-7aaf04b5] .acu-icon-btn {\n  background: transparent;\n  color: inherit;\n}\n.acu-v2-app__theme-tools[data-v-7aaf04b5] .acu-icon-btn:hover:not(:disabled) {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools[data-v-7aaf04b5] .acu-icon-btn:hover:not(:disabled) {\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools[data-v-7aaf04b5] .acu-icon-btn--danger:hover:not(:disabled) {\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n  color: var(--acu-danger);\n}\n.acu-v2-app__theme-option:hover .acu-v2-app__theme-tools[data-v-7aaf04b5],\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools[data-v-7aaf04b5] {\n  opacity: 1;\n}\n.acu-v2-app__theme-swatch[data-v-7aaf04b5] {\n  display: block;\n  width: 18px;\n  height: 18px;\n  border-radius: 999px;\n  flex: 0 0 18px;\n  background: linear-gradient(\n    135deg,\n    var(--acu-theme-swatch-bg) 0 56%,\n    var(--acu-theme-swatch-accent) 56% 100%\n  );\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-border-2) 72%, transparent);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-swatch[data-v-7aaf04b5] {\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-on-accent) 62%, transparent);\n}\n.acu-v2-app__theme-menu-footer[data-v-7aaf04b5] {\n  display: flex;\n  justify-content: stretch;\n  margin-top: 4px;\n  padding: 7px 6px 4px;\n  border-top: 1px solid var(--acu-border);\n}\n.acu-v2-app__theme-menu-footer[data-v-7aaf04b5] .acu-file-button,\n.acu-v2-app__theme-menu-footer[data-v-7aaf04b5] .acu-btn {\n  width: 100%;\n}\n@keyframes theme-menu-in-7aaf04b5 {\nfrom {\n    opacity: 0;\n    transform: translateY(-4px);\n}\nto {\n    opacity: 1;\n    transform: translateY(0);\n}\n}\n@keyframes theme-menu-out-7aaf04b5 {\nfrom {\n    opacity: 1;\n    transform: translateY(0);\n}\nto {\n    opacity: 0;\n    transform: translateY(-4px);\n}\n}\n@keyframes mobile-nav-layer-in-7aaf04b5 {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes mobile-nav-drawer-in-7aaf04b5 {\nfrom { transform: translateX(-100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes mobile-nav-layer-out-7aaf04b5 {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes mobile-nav-drawer-out-7aaf04b5 {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(-100%);\n}\n}\n@media (max-width: 720px) {\n.acu-v2-app__header[data-v-7aaf04b5] {\n    min-height: 48px;\n    padding: 8px 10px;\n}\n.acu-v2-app__header-left[data-v-7aaf04b5] {\n    gap: 6px;\n}\n.acu-v2-app__menu[data-v-7aaf04b5] {\n    display: inline-flex;\n}\n.acu-v2-app__page-title[data-v-7aaf04b5] {\n    font-size: 18px;\n}\n.acu-v2-app__desktop-sidebar[data-v-7aaf04b5] {\n    display: none;\n}\n.acu-v2-app__mobile-nav-layer[data-v-7aaf04b5] {\n    display: flex;\n}\n}\n", "src/presentation-v2/App.vue#style-0-7aaf04b5");
+    var App_vue_vue_type_style_index_0_scoped_7aaf04b5_lang = null;
 
     const _hoisted_1 = { class: "acu-v2-app" };
     const _hoisted_2 = { class: "acu-v2-app__shell" };
@@ -96400,9 +96912,11 @@ Expected function or array of functions, received type ${typeof value}.`
     				},
     				[createBaseVNode("aside", {
     					class: "acu-v2-app__mobile-nav",
+    					style: $setup.mobileNavDrawerStyle,
     					role: "dialog",
     					"aria-modal": "true",
     					"aria-label": "一级页导航",
+    					"data-acu-mobile-nav-width": "360px",
     					onClick: _cache[1] || (_cache[1] = withModifiers(() => {}, ["stop"]))
     				}, [createVNode($setup["Sidebar"], {
     					variant: "drawer",
@@ -96418,7 +96932,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* NEED_PATCH */
     	), [[vShow, $setup.rootShell.isOpen]])]);
     }
-    var App = /* @__PURE__ */ _export_sfc(_sfc_main, [["render", _sfc_render]]);
+    var App = /* @__PURE__ */ _export_sfc(_sfc_main, [["render", _sfc_render], ["__scopeId", "data-v-7aaf04b5"]]);
 
     const THEME_STYLE_NODE_ID = 'acu-v2-theme';
     const APP_ROOT_ID = 'acu-app-v2';
@@ -96594,7 +97108,12 @@ ${lines.join('\n')}
         if (state)
             return state;
         const doc = getAcuHostDocument();
+        const hostWindow = getAcuHostWindow();
         const source = getAcuHostSource();
+        const hostWidth = Math.round(hostWindow.visualViewport?.width ||
+            hostWindow.innerWidth ||
+            doc.documentElement?.clientWidth ||
+            0);
         setSfcStyleHost({ document: doc });
         let root = doc.getElementById(ROOT_ID);
         if (!root) {
@@ -96602,6 +97121,11 @@ ${lines.join('\n')}
             root.id = ROOT_ID;
             root.style.display = 'none';
             doc.body.appendChild(root);
+        }
+        root.setAttribute('data-acu-host-source', source);
+        root.setAttribute('data-acu-host-width', String(hostWidth));
+        if (hostWidth > 0 && hostWidth <= 240) {
+            logDebug_ACU(`[ACU-V2] narrow host detected: source=${source}, width=${hostWidth}px`);
         }
         const pinia = createPinia();
         root.textContent = '';
@@ -96617,7 +97141,7 @@ ${lines.join('\n')}
         applyTheme(themeStore.activeTheme);
         themeStore.$subscribe(() => applyTheme(themeStore.activeTheme));
         state = { vueApp, pinia, root };
-        logDebug_ACU(`[ACU-V2] app mounted into ${source} (id=#${ROOT_ID})`);
+        logDebug_ACU(`[ACU-V2] app mounted into ${source} (id=#${ROOT_ID}, width=${hostWidth}px)`);
         return state;
     }
     /** 打开新 UI：首次调用执行 mount，后续只切 display + 标记 isOpen。 */
