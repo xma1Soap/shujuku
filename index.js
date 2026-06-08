@@ -31131,6 +31131,13 @@ $CONTENT
         const maxConcurrentGroups = Math.max(1, settings.maxConcurrentGroups || 1);
         setAutoUpdating(true);
         const failedGroupKeys = [];
+        const failedGroupErrors = [];
+        const pushGroupError_ACU = (groupKey, error) => {
+            const message = error instanceof Error ? error.message : String(error || '').trim();
+            if (!message)
+                return;
+            failedGroupErrors.push(`group ${groupKey}: ${message}`);
+        };
         for (let start = 0; start < groupKeys.length; start += maxConcurrentGroups) {
             const chunkKeys = groupKeys.slice(start, start + maxConcurrentGroups);
             if (ops.processGroupedUpdates) {
@@ -31149,6 +31156,8 @@ $CONTENT
                 const groupedResult = await ops.processGroupedUpdates(groupedChunk, 'auto_independent', {});
                 if (!groupedResult.success) {
                     failedGroupKeys.push(...groupedResult.failedGroups);
+                    const groupedError = groupedResult.error || '分组更新失败，未返回具体错误。';
+                    groupedResult.failedGroups.forEach(groupKey => pushGroupError_ACU(groupKey, groupedError));
                 }
             }
             else {
@@ -31164,14 +31173,28 @@ $CONTENT
                 })());
                 const results = await Promise.allSettled(groupPromises);
                 results.forEach((result, idx) => {
-                    if (result.status === 'rejected' || !result.value?.success) {
+                    if (result.status === 'rejected') {
                         failedGroupKeys.push(chunkKeys[idx]);
+                        pushGroupError_ACU(chunkKeys[idx], result.reason || '分组更新异常退出。');
+                        return;
+                    }
+                    const rawResult = result.value?.success;
+                    const groupSucceeded = typeof rawResult === 'object' && rawResult !== null && 'success' in rawResult
+                        ? rawResult.success !== false
+                        : !!rawResult;
+                    if (!groupSucceeded) {
+                        failedGroupKeys.push(chunkKeys[idx]);
+                        const error = rawResult && typeof rawResult === 'object' && 'error' in rawResult
+                            ? rawResult.error
+                            : '分组更新失败，未返回具体错误。';
+                        pushGroupError_ACU(chunkKeys[idx], error);
                     }
                 });
             }
         }
         if (failedGroupKeys.length > 0) {
-            logWarn_ACU(`并发分组更新失败 ${failedGroupKeys.length}/${totalGroups} 组。`);
+            const errorSummary = failedGroupErrors.length > 0 ? `原因：${failedGroupErrors.slice(0, 3).join('；')}` : '未返回具体原因。';
+            logWarn_ACU(`并发分组更新失败 ${failedGroupKeys.length}/${totalGroups} 组。${errorSummary}`);
         }
         // 并发更新完成后统一刷新数据链条
         logDebug_ACU(`All group updates completed. Forcing data refresh...`);
@@ -31215,6 +31238,7 @@ $CONTENT
             success: failedGroupKeys.length === 0,
             failedGroups: failedGroupKeys.length,
             totalGroups,
+            errors: failedGroupErrors,
             autoMergeTriggered,
             autoMergeSuccess,
         };
@@ -32895,25 +32919,87 @@ $CONTENT
             return fallback;
         return null;
     }
-    function buildBatchMergeBase_ACU(batchNumber) {
-        try {
-            const runtimeData = getRuntimeTableDataSnapshot_ACU();
-            if (runtimeData) {
-                logDebug_ACU(`[Batch ${batchNumber}] Using runtime storage snapshot as merge base.`);
-                return { data: runtimeData, error: null };
-            }
-            const batchIsoKey = getCurrentIsolationKey_ACU();
-            const sheetGuideForBatch = getChatSheetGuideDataForIsolationKey_ACU(batchIsoKey);
-            if (sheetGuideForBatch && typeof sheetGuideForBatch === 'object' && Object.keys(sheetGuideForBatch).some(k => k.startsWith('sheet_'))) {
-                const data = buildGuidedBaseDataFromSheetGuide_ACU(sheetGuideForBatch);
-                logDebug_ACU(`[Batch ${batchNumber}] Using chat sheet guide as merge base.`);
-                return { data, error: null };
+    function mergeGuideStructureIntoBaseData_ACU(data) {
+        const base = cloneTableDataSnapshot_ACU(data) || {};
+        const batchIsoKey = getCurrentIsolationKey_ACU();
+        const sheetGuideForBatch = getChatSheetGuideDataForIsolationKey_ACU(batchIsoKey);
+        if (!sheetGuideForBatch || typeof sheetGuideForBatch !== 'object' || !Object.keys(sheetGuideForBatch).some(k => k.startsWith('sheet_'))) {
+            return base;
+        }
+        const guideBase = buildGuidedBaseDataFromSheetGuide_ACU(sheetGuideForBatch);
+        if (!base.mate && guideBase?.mate)
+            base.mate = JSON.parse(JSON.stringify(guideBase.mate));
+        Object.keys(guideBase || {}).forEach(sheetKey => {
+            if (!sheetKey.startsWith('sheet_'))
+                return;
+            if (base[sheetKey]) {
+                restoreGuideStructure(base[sheetKey], guideBase[sheetKey]);
             }
             else {
-                const data = parseTableTemplateJson_ACU({ stripSeedRows: true });
-                logDebug_ACU(`[Batch ${batchNumber}] No chat sheet guide found, using template as merge base.`);
-                return { data, error: null };
+                base[sheetKey] = JSON.parse(JSON.stringify(guideBase[sheetKey]));
             }
+        });
+        return base;
+    }
+    async function loadV2ReplayMergeBase_ACU(batchNumber, options = {}) {
+        const chat = getChatArray_ACU();
+        if (!Array.isArray(chat) || chat.length === 0)
+            return { data: null, attempted: false };
+        const isolationKey = getCurrentIsolationKey_ACU();
+        const strategy = resolveTableStorageStrategy_ACU(chat, isolationKey, {
+            enabled: settings_ACU.dataIsolationEnabled,
+            code: settings_ACU.dataIsolationCode,
+        });
+        if (strategy.mode !== 'v2')
+            return { data: null, attempted: false };
+        try {
+            const replayedData = await loadTableStateFromFramesV2_ACU(chat, isolationKey, options);
+            const cloned = cloneTableDataSnapshot_ACU(replayedData);
+            if (!hasUsableRuntimeTableData_ACU(cloned))
+                return { data: null, attempted: true };
+            const mergedData = mergeGuideStructureIntoBaseData_ACU(cloned);
+            _set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(mergedData)));
+            const scope = Number.isInteger(options.maxMessageIndex) ? `<=${options.maxMessageIndex}` : 'latest';
+            logDebug_ACU(`[Batch ${batchNumber}] Using V2 replay state as merge base (${scope}).`);
+            return { data: mergedData, attempted: true };
+        }
+        catch (error) {
+            logWarn_ACU(`[Batch ${batchNumber}] V2 replay merge base failed; fallback guarded by scope.`, error);
+            return { data: null, attempted: true };
+        }
+    }
+    function buildGuideOrTemplateMergeBase_ACU(batchNumber) {
+        const batchIsoKey = getCurrentIsolationKey_ACU();
+        const sheetGuideForBatch = getChatSheetGuideDataForIsolationKey_ACU(batchIsoKey);
+        if (sheetGuideForBatch && typeof sheetGuideForBatch === 'object' && Object.keys(sheetGuideForBatch).some(k => k.startsWith('sheet_'))) {
+            const data = buildGuidedBaseDataFromSheetGuide_ACU(sheetGuideForBatch);
+            logDebug_ACU(`[Batch ${batchNumber}] Using chat sheet guide as merge base.`);
+            return { data, error: null };
+        }
+        const data = parseTableTemplateJson_ACU({ stripSeedRows: true });
+        logDebug_ACU(`[Batch ${batchNumber}] No chat sheet guide found, using template as merge base.`);
+        return { data, error: null };
+    }
+    async function buildBatchMergeBase_ACU(batchNumber, options = {}) {
+        try {
+            const runtimeData = getRuntimeTableDataSnapshot_ACU();
+            if (runtimeData && isSqliteMode()) {
+                logDebug_ACU(`[Batch ${batchNumber}] Using SQLite runtime storage snapshot as merge base.`);
+                return { data: mergeGuideStructureIntoBaseData_ACU(runtimeData), error: null };
+            }
+            const v2ReplayResult = await loadV2ReplayMergeBase_ACU(batchNumber, options);
+            if (v2ReplayResult.data)
+                return { data: v2ReplayResult.data, error: null };
+            // 指定了历史边界时，若当前聊天是 V2 但边界前没有可重放 checkpoint，不能退回“最新运行时快照”，
+            // 否则会把目标楼之后的表格数据喂给本批次；此时应按空指导表/模板从零开始。
+            if (!isSqliteMode() && v2ReplayResult.attempted && Number.isInteger(options.maxMessageIndex)) {
+                return buildGuideOrTemplateMergeBase_ACU(batchNumber);
+            }
+            if (runtimeData) {
+                logDebug_ACU(`[Batch ${batchNumber}] Using runtime storage snapshot as merge base.`);
+                return { data: mergeGuideStructureIntoBaseData_ACU(runtimeData), error: null };
+            }
+            return buildGuideOrTemplateMergeBase_ACU(batchNumber);
         }
         catch (e) {
             logError_ACU(`[Batch ${batchNumber}] Failed to build merge base from guide/template.`, e);
@@ -33463,9 +33549,10 @@ $CONTENT
             let bucketSucceeded = false;
             for (let bucketAttempt = 1; bucketAttempt <= maxBucketRetries; bucketAttempt++) {
                 const chatHistory = getChatArray_ACU();
+                const bucketFirstMessageIndex = Math.min(...bucket.plannedJobs.map(job => job.firstMessageIndexOfBatch));
                 const baseResult = options.deferPersist && deferredWorkingData
                     ? { data: JSON.parse(JSON.stringify(deferredWorkingData)), error: null }
-                    : buildBatchMergeBase_ACU(bucket.batchNumber);
+                    : await buildBatchMergeBase_ACU(bucket.batchNumber, { maxMessageIndex: bucketFirstMessageIndex - 1 });
                 if (!baseResult.data) {
                     bucket.plannedJobs.forEach(job => failedGroups.add(job.group.key));
                     firstError = firstError || baseResult.error || '无法构建合并基底，操作已终止。';
@@ -34028,7 +34115,7 @@ $CONTENT
                 const lastMessageIndexOfBatch = batchIndices[batchIndices.length - 1];
                 const finalSaveTargetIndex = lastMessageIndexOfBatch;
                 // 构建合并基底
-                const baseResult = buildBatchMergeBase_ACU(batchNumber);
+                const baseResult = await buildBatchMergeBase_ACU(batchNumber, { maxMessageIndex: firstMessageIndexOfBatch - 1 });
                 if (!baseResult.data) {
                     return { success: false, failedBatch: batchNumber, error: baseResult.error || '无法构建合并基底，操作已终止。' };
                 }
@@ -34160,7 +34247,7 @@ $CONTENT
             let manualRefillTargetIndex = contextScopeIndices[contextScopeIndices.length - 1];
             let manualRefillProgress;
             if (manualRefillEnabled) {
-                const latestBaseResult = buildBatchMergeBase_ACU(0);
+                const latestBaseResult = await buildBatchMergeBase_ACU(0);
                 if (!latestBaseResult.data) {
                     return { success: false, error: latestBaseResult.error || '无法构建当前表格快照，操作已终止。' };
                 }
@@ -34464,7 +34551,10 @@ $CONTENT
             }
             // UI：根据返回值显示结果
             if (result.failedGroups > 0) {
-                showToastr_ACU('warning', `并发分组更新有 ${result.failedGroups} 组失败，请查看日志。`);
+                const firstError = Array.isArray(result.errors) && result.errors.length > 0 ? result.errors[0] : '';
+                showToastr_ACU('warning', firstError
+                    ? `并发分组更新有 ${result.failedGroups} 组失败：${firstError}`
+                    : `并发分组更新有 ${result.failedGroups} 组失败，请查看日志。`);
             }
             if (result.autoMergeTriggered && result.autoMergeSuccess) {
                 showToastr_ACU('success', '自动合并纪要完成！');
