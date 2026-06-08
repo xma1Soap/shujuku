@@ -7458,7 +7458,7 @@ $CONTENT
          *
          * @param data 完整的表格数据对象（通常来自 mergeAllIndependentTables_ACU 的结果）
          */
-        loadFromTableData(data) {
+        loadFromTableData(data, options = {}) {
             if (!data || typeof data !== 'object')
                 return;
             if (!this.engine.isReady) {
@@ -7477,8 +7477,11 @@ $CONTENT
                     this._loadSheet(key, sheet);
                 }
                 catch (e) {
-                    // 单张表加载失败不影响其他表
-                    logError_ACU(`[SyncBridge] 加载表 ${key} (${sheet.name}) 失败:`, e?.message || e);
+                    const message = `[SyncBridge] 加载表 ${key} (${sheet.name}) 失败: ${e?.message || e}`;
+                    logError_ACU(message);
+                    if (options.strict) {
+                        throw new Error(message);
+                    }
                 }
             }
         }
@@ -7747,7 +7750,7 @@ $CONTENT
         if (runtime.loaded)
             return;
         await runtime.engine.init();
-        runtime.syncBridge.loadFromTableData(state);
+        runtime.syncBridge.loadFromTableData(state, { strict: true });
         runtime.loaded = true;
     }
     function exportSqlReplayRuntime_ACU(runtime, state) {
@@ -11854,7 +11857,7 @@ $CONTENT
                     const runtimeSeedSource = mergedData || currentJsonTableData_ACU || null;
                     const runtimeSeedData = this._buildInitialRuntimeTableData_ACU(runtimeSeedSource);
                     if (runtimeSeedData) {
-                        this.syncBridge.loadFromTableData(runtimeSeedData);
+                        this.syncBridge.loadFromTableData(runtimeSeedData, { strict: true });
                         _set_currentJsonTableData_ACU(runtimeSeedData);
                         this._buildNameMapper(runtimeSeedData);
                         this._initialized = true;
@@ -11871,7 +11874,7 @@ $CONTENT
                     return { loaded: false, source: 'empty' };
                 }
                 // 将 JSON 数据加载到 SQLite
-                this.syncBridge.loadFromTableData(mergedData);
+                this.syncBridge.loadFromTableData(mergedData, { strict: true });
                 // 更新全局 JSON 视图
                 _set_currentJsonTableData_ACU(mergedData);
                 // 从所有表的 DDL 构建中英文名称映射器
@@ -11903,7 +11906,7 @@ $CONTENT
                 this.engine = new SqliteEngine();
                 this.syncBridge = new SyncBridge(this.engine);
                 await this.engine.init();
-                this.syncBridge.loadFromTableData(cloned);
+                this.syncBridge.loadFromTableData(cloned, { strict: true });
                 _set_currentJsonTableData_ACU(cloned);
                 this._buildNameMapper(cloned);
                 this._initialized = true;
@@ -12273,7 +12276,7 @@ $CONTENT
                 }
                 partialData[key] = sheetCopy;
             }
-            this.syncBridge.loadFromTableData(partialData);
+            this.syncBridge.loadFromTableData(partialData, { strict: true });
             // 合并新建的表到当前 JSON 视图
             if (currentJsonTableData_ACU) {
                 for (const [key, sheet] of Object.entries(missingSheets)) {
@@ -12339,7 +12342,7 @@ $CONTENT
             const normalizedSql = normalizeStatementValues(normalizeSqlStructure(sql));
             const snapshotCopy = JSON.parse(JSON.stringify(tableData || {}));
             await engine.init();
-            syncBridge.loadFromTableData(snapshotCopy);
+            syncBridge.loadFromTableData(snapshotCopy, { strict: true });
             const result = engine.run(normalizedSql, params);
             const workingData = syncBridge.exportToTableData(resolveSnapshotMate_ACU(snapshotCopy));
             const modifiedTableNames = extractTableNamesFromStatements([normalizedSql]);
@@ -12382,7 +12385,7 @@ $CONTENT
             const statements = rawStatements.map(stmt => normalizeStatementValues(normalizeSqlStructure(stmt)));
             const snapshotCopy = JSON.parse(JSON.stringify(tableData || {}));
             await engine.init();
-            syncBridge.loadFromTableData(snapshotCopy);
+            syncBridge.loadFromTableData(snapshotCopy, { strict: true });
             engine.runBatch(statements);
             const workingData = syncBridge.exportToTableData(resolveSnapshotMate_ACU(snapshotCopy));
             const modifiedTableNames = extractTableNamesFromStatements(statements);
@@ -32919,6 +32922,21 @@ $CONTENT
             return fallback;
         return null;
     }
+    async function resetSqliteRuntimeFromSnapshot_ACU(snapshotData, reason) {
+        if (!snapshotData || typeof snapshotData !== 'object') {
+            return { success: false, error: `${reason}: 缺少可用于初始化 SQLite 运行时的快照。` };
+        }
+        const provider = await ensureStorageProviderReady_ACU();
+        if (typeof provider.replaceAllData !== 'function') {
+            return { success: false, error: `${reason}: 当前存储 provider 不支持运行时全量替换。` };
+        }
+        const replaceResult = await provider.replaceAllData(snapshotData);
+        if (!replaceResult.success) {
+            return { success: false, error: replaceResult.error || `${reason}: SQLite 运行时初始化失败。` };
+        }
+        const runtimeData = provider.getCurrentData();
+        return { success: true, data: runtimeData || JSON.parse(JSON.stringify(snapshotData)) };
+    }
     function mergeGuideStructureIntoBaseData_ACU(data) {
         const base = cloneTableDataSnapshot_ACU(data) || {};
         const batchIsoKey = getCurrentIsolationKey_ACU();
@@ -33248,14 +33266,8 @@ $CONTENT
         }
         return { workingTableData, initializedSheetKeys };
     }
-    async function applyUnifiedGroupFillResponses_ACU(responses, baseSnapshot, options) {
-        if (!Array.isArray(responses) || responses.length === 0) {
-            return { success: false, modifiedKeys: [], error: '统一提交失败：responses 为空。' };
-        }
-        if (!baseSnapshot || typeof baseSnapshot !== 'object') {
-            return { success: false, modifiedKeys: [], error: '统一提交失败：baseSnapshot 无效。' };
-        }
-        const sortedResponses = [...responses].sort((a, b) => {
+    function sortGroupFillResponses_ACU(responses) {
+        return [...responses].sort((a, b) => {
             const jobA = a.job;
             const jobB = b.job;
             return (jobA?.saveTargetIndex || 0) - (jobB?.saveTargetIndex || 0)
@@ -33263,6 +33275,75 @@ $CONTENT
                 || (jobA?.groupId || 0) - (jobB?.groupId || 0)
                 || String(jobA?.groupKey || '').localeCompare(String(jobB?.groupKey || ''));
         });
+    }
+    async function applySqlResponsesToCurrentRuntime_ACU(responses, baseSnapshot, updateMode) {
+        if (!Array.isArray(responses) || responses.length === 0) {
+            return { success: false, modifiedKeys: [], error: 'SQLite 运行时提交失败：responses 为空。' };
+        }
+        const sortedResponses = sortGroupFillResponses_ACU(responses);
+        const sqlTexts = [];
+        for (const response of sortedResponses) {
+            if (!response.success || !response.aiResponse || response.tableEditText === undefined || response.tableEditText === null || !response.job) {
+                return { success: false, modifiedKeys: [], error: 'SQLite 运行时提交失败：存在未完成或无效的 group 响应。' };
+            }
+            if (typeof response.tableEditText !== 'string' || !isSqlContent(response.tableEditText)) {
+                return { success: false, modifiedKeys: [], error: `SQLite 运行时提交失败：group ${response.job.groupKey} 未返回 SQL tableEdit。` };
+            }
+            const touchedKeys = getTouchedSheetKeysFromSqlText_ACU(response.tableEditText, baseSnapshot);
+            if (Array.isArray(response.job.targetSheetKeys) && response.job.targetSheetKeys.length > 0) {
+                const allowedSheetKeys = new Set(response.job.targetSheetKeys);
+                const unauthorizedKeys = touchedKeys.filter((sheetKey) => !allowedSheetKeys.has(sheetKey));
+                if (unauthorizedKeys.length > 0) {
+                    return {
+                        success: false,
+                        modifiedKeys: [],
+                        error: `SQLite 运行时提交失败：group ${response.job.groupKey} 越权修改了非目标表 (${unauthorizedKeys.join(', ')})。`,
+                    };
+                }
+            }
+            sqlTexts.push(response.tableEditText);
+        }
+        const provider = await ensureStorageProviderReady_ACU();
+        const rollbackSnapshot = createRuntimeRollbackSnapshot_ACU(provider);
+        try {
+            const parseResult = typeof provider.applyEditsBatch === 'function'
+                ? provider.applyEditsBatch(sqlTexts, updateMode)
+                : provider.applyEdits(sqlTexts.join('\n'), updateMode);
+            if (!parseResult?.success) {
+                await restoreRuntimeRollbackSnapshot_ACU(provider, rollbackSnapshot, 'manual_refill_sql_runtime_apply_failed');
+                return { success: false, modifiedKeys: [], error: parseResult?.error || 'SQLite 运行时 SQL 执行失败。' };
+            }
+            const runtimeData = provider.getCurrentData();
+            if (!runtimeData) {
+                await restoreRuntimeRollbackSnapshot_ACU(provider, rollbackSnapshot, 'manual_refill_sql_runtime_export_failed');
+                return { success: false, modifiedKeys: [], error: 'SQLite 运行时提交失败：无法导出运行时数据。' };
+            }
+            const modifiedKeys = Array.isArray(parseResult.modifiedKeys)
+                ? [...new Set(parseResult.modifiedKeys.filter((key) => typeof key === 'string'))].sort()
+                : [];
+            return { success: true, modifiedKeys, tableData: runtimeData };
+        }
+        catch (error) {
+            await restoreRuntimeRollbackSnapshot_ACU(provider, rollbackSnapshot, 'manual_refill_sql_runtime_exception');
+            const rawErrorMessage = error?.message || String(error);
+            const failedGroupKey = findSqlFailureGroupKey_ACU(sqlTexts, sortedResponses, rawErrorMessage);
+            return {
+                success: false,
+                modifiedKeys: [],
+                error: failedGroupKey
+                    ? `SQLite 运行时提交失败：group ${failedGroupKey} SQL 执行失败。${rawErrorMessage}`
+                    : `SQLite 运行时提交失败：SQL 执行失败。${rawErrorMessage}`,
+            };
+        }
+    }
+    async function applyUnifiedGroupFillResponses_ACU(responses, baseSnapshot, options) {
+        if (!Array.isArray(responses) || responses.length === 0) {
+            return { success: false, modifiedKeys: [], error: '统一提交失败：responses 为空。' };
+        }
+        if (!baseSnapshot || typeof baseSnapshot !== 'object') {
+            return { success: false, modifiedKeys: [], error: '统一提交失败：baseSnapshot 无效。' };
+        }
+        const sortedResponses = sortGroupFillResponses_ACU(responses);
         const seenTargetSheetKeys = new Set();
         const allTargetSheetKeySet = new Set();
         for (const response of sortedResponses) {
@@ -33535,6 +33616,15 @@ $CONTENT
         let deferredCheckpointData = options.checkpointBaseData
             ? JSON.parse(JSON.stringify(options.checkpointBaseData))
             : (deferredWorkingData ? JSON.parse(JSON.stringify(deferredWorkingData)) : null);
+        const useDeferredSqliteRuntime = options.deferPersist === true && isSqliteMode();
+        if (useDeferredSqliteRuntime) {
+            const initResult = await resetSqliteRuntimeFromSnapshot_ACU(deferredWorkingData, 'manual_refill_sql_runtime_init');
+            if (!initResult.success) {
+                return { success: false, failedGroups: groups.map(group => group.key), error: initResult.error || '手动重填 SQLite 运行时初始化失败。' };
+            }
+            deferredWorkingData = JSON.parse(JSON.stringify(initResult.data || deferredWorkingData));
+            deferredCheckpointData = deferredCheckpointData || JSON.parse(JSON.stringify(deferredWorkingData));
+        }
         const emitBucketProgress = (bucketIndex, event) => {
             options.onProgress?.({
                 ...event,
@@ -33630,14 +33720,16 @@ $CONTENT
                     break;
                 }
                 emitBucketProgress(bucketIndex, { phase: 'saving' });
-                const applyResult = await applyUnifiedGroupFillResponses_ACU(responses, baseSnapshot, {
-                    saveTargetIndex: bucket.saveTargetIndex,
-                    updateMode: bucket.updateMode,
-                    isImportMode: options.isImportMode === true,
-                    baseRevision,
-                    deferPersist: options.deferPersist === true,
-                    forceSnapshotApply: options.forceSnapshotApply === true,
-                });
+                const applyResult = useDeferredSqliteRuntime
+                    ? await applySqlResponsesToCurrentRuntime_ACU(responses, baseSnapshot, bucket.updateMode)
+                    : await applyUnifiedGroupFillResponses_ACU(responses, baseSnapshot, {
+                        saveTargetIndex: bucket.saveTargetIndex,
+                        updateMode: bucket.updateMode,
+                        isImportMode: options.isImportMode === true,
+                        baseRevision,
+                        deferPersist: options.deferPersist === true,
+                        forceSnapshotApply: options.forceSnapshotApply === true,
+                    });
                 if (applyResult.success) {
                     if (options.deferPersist && applyResult.tableData) {
                         deferredWorkingData = JSON.parse(JSON.stringify(applyResult.tableData));
