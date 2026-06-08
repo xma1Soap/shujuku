@@ -8194,6 +8194,7 @@ $CONTENT
                 data: afterData,
                 scheduleSummary: collectScheduleSummaryFromFramesV2_ACU(chat, isolationKey, { maxMessageIndex: target.index }),
                 event: checkpointEvent,
+                ...(options.manualRefillProgress ? { manualRefillProgress: deepClone_ACU$2(options.manualRefillProgress) } : {}),
             };
             frame.headRevision = checkpointRevision;
             frame.logEntries = [];
@@ -8248,11 +8249,220 @@ $CONTENT
         return options.transactionContext.runCommit(() => persistTableMutationLogV2Core_ACU(options), options.revisionWriteSet);
     }
 
+    function deepClone_ACU$1(value) {
+        return JSON.parse(JSON.stringify(value));
+    }
+    function sheetKeysOfData_ACU(data) {
+        if (!data || typeof data !== 'object')
+            return [];
+        return Object.keys(data).filter(key => key.startsWith('sheet_') && Boolean(data[key]));
+    }
+    function countAiFloor_ACU(chat, messageIndex) {
+        let count = 0;
+        for (let i = 0; i <= messageIndex && i < chat.length; i += 1) {
+            if (chat[i] && !chat[i].is_user)
+                count += 1;
+        }
+        return count;
+    }
+    function findLatestAiMessage_ACU(chat) {
+        for (let i = chat.length - 1; i >= 0; i -= 1) {
+            if (chat[i] && !chat[i].is_user)
+                return { message: chat[i], index: i };
+        }
+        return null;
+    }
+    function noteFilled_ACU(summary, sheetKey, aiFloor) {
+        if (!summary[sheetKey])
+            summary[sheetKey] = {};
+        summary[sheetKey].lastFilledAiFloor = Math.max(summary[sheetKey].lastFilledAiFloor || 0, aiFloor);
+    }
+    function noteChanged_ACU(summary, sheetKey, aiFloor) {
+        if (!summary[sheetKey])
+            summary[sheetKey] = {};
+        summary[sheetKey].lastChangedAiFloor = Math.max(summary[sheetKey].lastChangedAiFloor || 0, aiFloor);
+    }
+    function noteFilledAndChanged_ACU(summary, sheetKey, aiFloor) {
+        noteFilled_ACU(summary, sheetKey, aiFloor);
+        noteChanged_ACU(summary, sheetKey, aiFloor);
+    }
+    function normalizeSheetKeys_ACU$1(value, allowedSheetKeys) {
+        if (!Array.isArray(value))
+            return [];
+        return [...new Set(value.filter((item) => typeof item === 'string' && allowedSheetKeys.has(item)))];
+    }
+    function collectContainerSheetKeys_ACU(container, allowedSheetKeys) {
+        if (!container || typeof container !== 'object' || Array.isArray(container))
+            return [];
+        return Object.keys(container).filter(key => allowedSheetKeys.has(key));
+    }
+    function applyLegacyTracking_ACU(summary, aiFloor, allowedSheetKeys, options) {
+        const dataKeys = normalizeSheetKeys_ACU$1(options.dataKeys || [], allowedSheetKeys);
+        const deltaKeys = normalizeSheetKeys_ACU$1(options.deltaKeys || [], allowedSheetKeys);
+        const modifiedKeys = normalizeSheetKeys_ACU$1(options.modifiedKeys || [], allowedSheetKeys);
+        const updateGroupKeys = normalizeSheetKeys_ACU$1(options.updateGroupKeys || [], allowedSheetKeys);
+        updateGroupKeys.forEach(sheetKey => noteFilled_ACU(summary, sheetKey, aiFloor));
+        modifiedKeys.forEach(sheetKey => noteFilledAndChanged_ACU(summary, sheetKey, aiFloor));
+        deltaKeys.forEach(sheetKey => noteFilledAndChanged_ACU(summary, sheetKey, aiFloor));
+        if (updateGroupKeys.length === 0 && modifiedKeys.length === 0 && deltaKeys.length === 0) {
+            dataKeys.forEach(sheetKey => noteFilledAndChanged_ACU(summary, sheetKey, aiFloor));
+        }
+    }
+    function collectLegacyScheduleSummaryForMigration_ACU(chat, isolationKey, isolationConfig, data) {
+        if (!Array.isArray(chat) || chat.length === 0)
+            return {};
+        const allowedSheetKeys = new Set(sheetKeysOfData_ACU(data));
+        if (allowedSheetKeys.size === 0)
+            return {};
+        const summary = {};
+        for (let i = 0; i < chat.length; i += 1) {
+            const message = chat[i];
+            if (!message || message.is_user)
+                continue;
+            const aiFloor = countAiFloor_ACU(chat, i);
+            const tagData = readIsolatedTagData_ACU(message, isolationKey);
+            if (tagData && !isV2TagData_ACU(tagData)) {
+                applyLegacyTracking_ACU(summary, aiFloor, allowedSheetKeys, {
+                    dataKeys: collectContainerSheetKeys_ACU(tagData.independentData, allowedSheetKeys),
+                    deltaKeys: collectContainerSheetKeys_ACU(tagData.incrementalData, allowedSheetKeys),
+                    modifiedKeys: tagData.modifiedKeys,
+                    updateGroupKeys: tagData.updateGroupKeys,
+                });
+            }
+            if (isLegacyMatchForIsolation_ACU(message, isolationConfig)) {
+                applyLegacyTracking_ACU(summary, aiFloor, allowedSheetKeys, {
+                    dataKeys: [
+                        ...collectContainerSheetKeys_ACU(readLegacyIndependentData_ACU(message), allowedSheetKeys),
+                        ...collectContainerSheetKeys_ACU(readLegacyStandardData_ACU(message), allowedSheetKeys),
+                        ...collectContainerSheetKeys_ACU(readLegacySummaryData_ACU(message), allowedSheetKeys),
+                    ],
+                    modifiedKeys: readModifiedKeys_ACU(message),
+                    updateGroupKeys: readUpdateGroupKeys_ACU(message),
+                });
+            }
+        }
+        return summary;
+    }
+    function removeLegacyIsolatedSlot_ACU(message, isolationKey) {
+        const isolatedData = cloneIsolatedData_ACU(message);
+        if (!isolatedData || typeof isolatedData !== 'object' || !Object.prototype.hasOwnProperty.call(isolatedData, isolationKey))
+            return;
+        if (isV2TagData_ACU(isolatedData[isolationKey])) {
+            message.TavernDB_ACU_IsolatedData = isolatedData;
+            return;
+        }
+        delete isolatedData[isolationKey];
+        if (Object.keys(isolatedData).length === 0) {
+            delete message.TavernDB_ACU_IsolatedData;
+        }
+        else {
+            message.TavernDB_ACU_IsolatedData = isolatedData;
+        }
+    }
+    function removeLegacyTopLevelFields_ACU(message, isolationConfig) {
+        if (!isLegacyMatchForIsolation_ACU(message, isolationConfig))
+            return;
+        delete message.TavernDB_ACU_IndependentData;
+        delete message.TavernDB_ACU_Data;
+        delete message.TavernDB_ACU_SummaryData;
+        delete message.TavernDB_ACU_ModifiedKeys;
+        delete message.TavernDB_ACU_UpdateGroupKeys;
+        delete message.TavernDB_ACU_Identity;
+    }
+    function cleanupLegacyFieldsAfterV2Write_ACU(chat, isolationKey, isolationConfig) {
+        for (const message of chat) {
+            if (!message)
+                continue;
+            removeLegacyIsolatedSlot_ACU(message, isolationKey);
+            removeLegacyTopLevelFields_ACU(message, isolationConfig);
+        }
+    }
+    function buildMigrationRevision_ACU() {
+        return `checkpoint:migration:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`;
+    }
+    async function migrateLegacyStorageToV2OnLoad_ACU(options) {
+        const chat = getChatArray_ACU();
+        if (!Array.isArray(chat) || chat.length === 0) {
+            return { migrated: false, error: 'chat history is empty' };
+        }
+        const sheetKeys = sheetKeysOfData_ACU(options.data);
+        if (sheetKeys.length === 0) {
+            return { migrated: false, error: 'legacy migration requires non-empty merged table data' };
+        }
+        const strategy = resolveTableStorageStrategy_ACU(chat, options.isolationKey, options.isolationConfig);
+        if (strategy.mode !== 'legacy-v1') {
+            return { migrated: false };
+        }
+        const target = findLatestAiMessage_ACU(chat);
+        if (!target) {
+            return { migrated: false, error: 'no AI message found for legacy migration' };
+        }
+        const existingTargetTagData = readIsolatedTagData_ACU(target.message, options.isolationKey);
+        const scheduleSummary = collectLegacyScheduleSummaryForMigration_ACU(chat, options.isolationKey, options.isolationConfig, options.data);
+        const revision = buildMigrationRevision_ACU();
+        const frame = {
+            version: 2,
+            headRevision: revision,
+            checkpoint: {
+                kind: 'full',
+                createdAt: Date.now(),
+                reason: 'migration',
+                data: deepClone_ACU$1(options.data),
+                scheduleSummary,
+            },
+            logEntries: [],
+        };
+        const isolatedData = cloneIsolatedData_ACU(target.message);
+        isolatedData[options.isolationKey] = {
+            ...(existingTargetTagData?.summaryVectorIndexState !== undefined ? { summaryVectorIndexState: existingTargetTagData.summaryVectorIndexState } : {}),
+            ...(existingTargetTagData?.summaryVectorIndexManifest !== undefined ? { summaryVectorIndexManifest: existingTargetTagData.summaryVectorIndexManifest } : {}),
+            storageFrame: frame,
+            _acu_storage_version: 2,
+        };
+        target.message.TavernDB_ACU_IsolatedData = isolatedData;
+        cleanupLegacyFieldsAfterV2Write_ACU(chat, options.isolationKey, options.isolationConfig);
+        await saveChatToHost_ACU();
+        logDebug_ACU(`[V2 Migration] legacy-v1 migrated to V2 checkpoint: messageIndex=${target.index}, isolationKey=[${options.isolationKey || '无标签'}], sheets=${sheetKeys.length}`);
+        return { migrated: true, messageIndex: target.index };
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // service/table/table-service.ts — 表格数据操作 service 层
     // 从 data/repositories/table-repo.ts 迁入（消除 data 层越权）
     // ═══════════════════════════════════════════════════════════════
     const TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU = 'Table persistence requires table update commit model; direct unsafe writes are not allowed.';
+    async function ensureLegacyStorageMigratedBeforeWrite_ACU(reason = 'table_write') {
+        const chat = getChatArray_ACU();
+        if (!Array.isArray(chat) || chat.length === 0)
+            return { success: true, migrated: false };
+        const isolationKey = getCurrentIsolationKey_ACU();
+        const isolationConfig = {
+            enabled: settings_ACU.dataIsolationEnabled,
+            code: settings_ACU.dataIsolationCode,
+        };
+        const strategy = resolveTableStorageStrategy_ACU(chat, isolationKey, isolationConfig);
+        if (strategy.mode !== 'legacy-v1')
+            return { success: true, migrated: false };
+        logWarn_ACU(`[LegacyMigrationGate] ${reason}: detected legacy-v1 before write, migrating first. reason=${strategy.reason}`);
+        const mergedLegacyData = await mergeAllIndependentTablesLegacyV1_ACU();
+        if (!mergedLegacyData || !Object.keys(mergedLegacyData).some(k => k.startsWith('sheet_'))) {
+            return { success: false, error: '旧存储迁移失败：无法从 legacy-v1 合并出有效表格数据。' };
+        }
+        const migrationResult = await migrateLegacyStorageToV2OnLoad_ACU({
+            data: mergedLegacyData,
+            isolationKey,
+            isolationConfig,
+        });
+        if (!migrationResult.migrated) {
+            return { success: false, error: `旧存储迁移到 V2 失败: ${migrationResult.error || '未执行迁移'}` };
+        }
+        const postStrategy = resolveTableStorageStrategy_ACU(chat, isolationKey, isolationConfig);
+        if (postStrategy.mode === 'legacy-v1') {
+            return { success: false, error: `旧存储迁移后仍检测到 legacy-v1: ${postStrategy.reason}` };
+        }
+        _set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(mergedLegacyData)));
+        return { success: true, migrated: true, data: mergedLegacyData };
+    }
     async function persistTablesToChatMessage_ACU(options = {}) {
         if (!options.transactionContext || options.assumeCommitLock !== true) {
             logError_ACU(TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU);
@@ -8261,7 +8471,7 @@ $CONTENT
         return persistTablesToChatMessageWithLockOption_ACU(options);
     }
     async function persistTablesToChatMessageWithLockOption_ACU(options = {}) {
-        const { targetMessageIndex = -1, targetSheetKeys = null, updateGroupKeys = null, trackingSheetKeys, tableData: explicitTableData, trackAsUpdate = true, source, requestId, batchId, operations, revisionWriteSet, assumeCommitLock, transactionContext, } = options;
+        const { targetMessageIndex = -1, targetSheetKeys = null, updateGroupKeys = null, trackingSheetKeys, tableData: explicitTableData, trackAsUpdate = true, source, requestId, batchId, operations, revisionWriteSet, forceCheckpoint, checkpointReason, manualRefillProgress, assumeCommitLock, transactionContext, } = options;
         const effectiveTableData = explicitTableData !== undefined ? explicitTableData : currentJsonTableData_ACU;
         if (!effectiveTableData) {
             logError_ACU('Save aborted: currentJsonTableData_ACU is null.');
@@ -8274,14 +8484,26 @@ $CONTENT
                 logError_ACU('Save failed: Chat history is empty.');
                 return { saved: false, error: 'chat history is empty' };
             }
-            const strategy = resolveTableStorageStrategy_ACU(chat, currentIsolationKey, {
+            let strategy = resolveTableStorageStrategy_ACU(chat, currentIsolationKey, {
                 enabled: settings_ACU.dataIsolationEnabled,
                 code: settings_ACU.dataIsolationCode,
             });
             if (strategy.mode === 'legacy-v1') {
-                const message = 'legacy-v1 table storage must be migrated during database load before any write; write-time fallback is not allowed.';
-                logError_ACU(message);
-                return { saved: false, error: message };
+                const migration = await ensureLegacyStorageMigratedBeforeWrite_ACU('persistTablesToChatMessage');
+                if (!migration.success) {
+                    const message = migration.error || 'legacy-v1 table storage migration failed before write.';
+                    logError_ACU(message);
+                    return { saved: false, error: message };
+                }
+                strategy = resolveTableStorageStrategy_ACU(chat, currentIsolationKey, {
+                    enabled: settings_ACU.dataIsolationEnabled,
+                    code: settings_ACU.dataIsolationCode,
+                });
+                if (strategy.mode === 'legacy-v1') {
+                    const message = `legacy-v1 table storage still detected after migration: ${strategy.reason}`;
+                    logError_ACU(message);
+                    return { saved: false, error: message };
+                }
             }
             let keysToSave = Array.isArray(targetSheetKeys)
                 ? targetSheetKeys.filter((sheetKey) => typeof sheetKey === 'string' && sheetKey.length > 0)
@@ -8322,8 +8544,9 @@ $CONTENT
                     groupKeys: metadataOnlyUpdateGroupKeys,
                     requestId,
                     batchId,
-                    forceCheckpoint: strategy.mode === 'empty',
-                    checkpointReason: strategy.mode === 'empty' ? 'init' : undefined,
+                    forceCheckpoint: forceCheckpoint === true || strategy.mode === 'empty',
+                    checkpointReason: checkpointReason || (strategy.mode === 'empty' ? 'init' : undefined),
+                    manualRefillProgress,
                     isolationKey: currentIsolationKey,
                     revisionWriteSet,
                     assumeCommitLock,
@@ -10190,183 +10413,6 @@ $CONTENT
         return { jsonData, fromPresetName };
     }
 
-    function deepClone_ACU$1(value) {
-        return JSON.parse(JSON.stringify(value));
-    }
-    function sheetKeysOfData_ACU(data) {
-        if (!data || typeof data !== 'object')
-            return [];
-        return Object.keys(data).filter(key => key.startsWith('sheet_') && Boolean(data[key]));
-    }
-    function countAiFloor_ACU(chat, messageIndex) {
-        let count = 0;
-        for (let i = 0; i <= messageIndex && i < chat.length; i += 1) {
-            if (chat[i] && !chat[i].is_user)
-                count += 1;
-        }
-        return count;
-    }
-    function findLatestAiMessage_ACU(chat) {
-        for (let i = chat.length - 1; i >= 0; i -= 1) {
-            if (chat[i] && !chat[i].is_user)
-                return { message: chat[i], index: i };
-        }
-        return null;
-    }
-    function noteFilled_ACU(summary, sheetKey, aiFloor) {
-        if (!summary[sheetKey])
-            summary[sheetKey] = {};
-        summary[sheetKey].lastFilledAiFloor = Math.max(summary[sheetKey].lastFilledAiFloor || 0, aiFloor);
-    }
-    function noteChanged_ACU(summary, sheetKey, aiFloor) {
-        if (!summary[sheetKey])
-            summary[sheetKey] = {};
-        summary[sheetKey].lastChangedAiFloor = Math.max(summary[sheetKey].lastChangedAiFloor || 0, aiFloor);
-    }
-    function noteFilledAndChanged_ACU(summary, sheetKey, aiFloor) {
-        noteFilled_ACU(summary, sheetKey, aiFloor);
-        noteChanged_ACU(summary, sheetKey, aiFloor);
-    }
-    function normalizeSheetKeys_ACU$1(value, allowedSheetKeys) {
-        if (!Array.isArray(value))
-            return [];
-        return [...new Set(value.filter((item) => typeof item === 'string' && allowedSheetKeys.has(item)))];
-    }
-    function collectContainerSheetKeys_ACU(container, allowedSheetKeys) {
-        if (!container || typeof container !== 'object' || Array.isArray(container))
-            return [];
-        return Object.keys(container).filter(key => allowedSheetKeys.has(key));
-    }
-    function applyLegacyTracking_ACU(summary, aiFloor, allowedSheetKeys, options) {
-        const dataKeys = normalizeSheetKeys_ACU$1(options.dataKeys || [], allowedSheetKeys);
-        const deltaKeys = normalizeSheetKeys_ACU$1(options.deltaKeys || [], allowedSheetKeys);
-        const modifiedKeys = normalizeSheetKeys_ACU$1(options.modifiedKeys || [], allowedSheetKeys);
-        const updateGroupKeys = normalizeSheetKeys_ACU$1(options.updateGroupKeys || [], allowedSheetKeys);
-        updateGroupKeys.forEach(sheetKey => noteFilled_ACU(summary, sheetKey, aiFloor));
-        modifiedKeys.forEach(sheetKey => noteFilledAndChanged_ACU(summary, sheetKey, aiFloor));
-        deltaKeys.forEach(sheetKey => noteFilledAndChanged_ACU(summary, sheetKey, aiFloor));
-        if (updateGroupKeys.length === 0 && modifiedKeys.length === 0 && deltaKeys.length === 0) {
-            dataKeys.forEach(sheetKey => noteFilledAndChanged_ACU(summary, sheetKey, aiFloor));
-        }
-    }
-    function collectLegacyScheduleSummaryForMigration_ACU(chat, isolationKey, isolationConfig, data) {
-        if (!Array.isArray(chat) || chat.length === 0)
-            return {};
-        const allowedSheetKeys = new Set(sheetKeysOfData_ACU(data));
-        if (allowedSheetKeys.size === 0)
-            return {};
-        const summary = {};
-        for (let i = 0; i < chat.length; i += 1) {
-            const message = chat[i];
-            if (!message || message.is_user)
-                continue;
-            const aiFloor = countAiFloor_ACU(chat, i);
-            const tagData = readIsolatedTagData_ACU(message, isolationKey);
-            if (tagData && !isV2TagData_ACU(tagData)) {
-                applyLegacyTracking_ACU(summary, aiFloor, allowedSheetKeys, {
-                    dataKeys: collectContainerSheetKeys_ACU(tagData.independentData, allowedSheetKeys),
-                    deltaKeys: collectContainerSheetKeys_ACU(tagData.incrementalData, allowedSheetKeys),
-                    modifiedKeys: tagData.modifiedKeys,
-                    updateGroupKeys: tagData.updateGroupKeys,
-                });
-            }
-            if (isLegacyMatchForIsolation_ACU(message, isolationConfig)) {
-                applyLegacyTracking_ACU(summary, aiFloor, allowedSheetKeys, {
-                    dataKeys: [
-                        ...collectContainerSheetKeys_ACU(readLegacyIndependentData_ACU(message), allowedSheetKeys),
-                        ...collectContainerSheetKeys_ACU(readLegacyStandardData_ACU(message), allowedSheetKeys),
-                        ...collectContainerSheetKeys_ACU(readLegacySummaryData_ACU(message), allowedSheetKeys),
-                    ],
-                    modifiedKeys: readModifiedKeys_ACU(message),
-                    updateGroupKeys: readUpdateGroupKeys_ACU(message),
-                });
-            }
-        }
-        return summary;
-    }
-    function removeLegacyIsolatedSlot_ACU(message, isolationKey) {
-        const isolatedData = cloneIsolatedData_ACU(message);
-        if (!isolatedData || typeof isolatedData !== 'object' || !Object.prototype.hasOwnProperty.call(isolatedData, isolationKey))
-            return;
-        if (isV2TagData_ACU(isolatedData[isolationKey])) {
-            message.TavernDB_ACU_IsolatedData = isolatedData;
-            return;
-        }
-        delete isolatedData[isolationKey];
-        if (Object.keys(isolatedData).length === 0) {
-            delete message.TavernDB_ACU_IsolatedData;
-        }
-        else {
-            message.TavernDB_ACU_IsolatedData = isolatedData;
-        }
-    }
-    function removeLegacyTopLevelFields_ACU(message, isolationConfig) {
-        if (!isLegacyMatchForIsolation_ACU(message, isolationConfig))
-            return;
-        delete message.TavernDB_ACU_IndependentData;
-        delete message.TavernDB_ACU_Data;
-        delete message.TavernDB_ACU_SummaryData;
-        delete message.TavernDB_ACU_ModifiedKeys;
-        delete message.TavernDB_ACU_UpdateGroupKeys;
-        delete message.TavernDB_ACU_Identity;
-    }
-    function cleanupLegacyFieldsAfterV2Write_ACU(chat, isolationKey, isolationConfig) {
-        for (const message of chat) {
-            if (!message)
-                continue;
-            removeLegacyIsolatedSlot_ACU(message, isolationKey);
-            removeLegacyTopLevelFields_ACU(message, isolationConfig);
-        }
-    }
-    function buildMigrationRevision_ACU() {
-        return `checkpoint:migration:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`;
-    }
-    async function migrateLegacyStorageToV2OnLoad_ACU(options) {
-        const chat = getChatArray_ACU();
-        if (!Array.isArray(chat) || chat.length === 0) {
-            return { migrated: false, error: 'chat history is empty' };
-        }
-        const sheetKeys = sheetKeysOfData_ACU(options.data);
-        if (sheetKeys.length === 0) {
-            return { migrated: false, error: 'legacy migration requires non-empty merged table data' };
-        }
-        const strategy = resolveTableStorageStrategy_ACU(chat, options.isolationKey, options.isolationConfig);
-        if (strategy.mode !== 'legacy-v1') {
-            return { migrated: false };
-        }
-        const target = findLatestAiMessage_ACU(chat);
-        if (!target) {
-            return { migrated: false, error: 'no AI message found for legacy migration' };
-        }
-        const existingTargetTagData = readIsolatedTagData_ACU(target.message, options.isolationKey);
-        const scheduleSummary = collectLegacyScheduleSummaryForMigration_ACU(chat, options.isolationKey, options.isolationConfig, options.data);
-        const revision = buildMigrationRevision_ACU();
-        const frame = {
-            version: 2,
-            headRevision: revision,
-            checkpoint: {
-                kind: 'full',
-                createdAt: Date.now(),
-                reason: 'migration',
-                data: deepClone_ACU$1(options.data),
-                scheduleSummary,
-            },
-            logEntries: [],
-        };
-        const isolatedData = cloneIsolatedData_ACU(target.message);
-        isolatedData[options.isolationKey] = {
-            ...(existingTargetTagData?.summaryVectorIndexState !== undefined ? { summaryVectorIndexState: existingTargetTagData.summaryVectorIndexState } : {}),
-            ...(existingTargetTagData?.summaryVectorIndexManifest !== undefined ? { summaryVectorIndexManifest: existingTargetTagData.summaryVectorIndexManifest } : {}),
-            storageFrame: frame,
-            _acu_storage_version: 2,
-        };
-        target.message.TavernDB_ACU_IsolatedData = isolatedData;
-        cleanupLegacyFieldsAfterV2Write_ACU(chat, options.isolationKey, options.isolationConfig);
-        await saveChatToHost_ACU();
-        logDebug_ACU(`[V2 Migration] legacy-v1 migrated to V2 checkpoint: messageIndex=${target.index}, isolationKey=[${options.isolationKey || '无标签'}], sheets=${sheetKeys.length}`);
-        return { migrated: true, messageIndex: target.index };
-    }
-
     class ReadWriteLock_ACU {
         constructor() {
             this.activeReaders = 0;
@@ -11105,6 +11151,13 @@ $CONTENT
             if (!migrationResult.migrated) {
                 throw new Error(`旧存储迁移到 V2 失败: ${migrationResult.error || '未执行迁移'}`);
             }
+            const postStrategy = resolveTableStorageStrategy_ACU(chat, currentIsolationKey, {
+                enabled: settings_ACU.dataIsolationEnabled,
+                code: settings_ACU.dataIsolationCode,
+            });
+            if (postStrategy.mode !== 'v2') {
+                throw new Error(`旧存储迁移后二次校验失败：当前模式=${postStrategy.mode}${postStrategy.mode === 'legacy-v1' ? `，reason=${postStrategy.reason}` : ''}`);
+            }
             return mergedLegacyData;
         }
         return mergeAllIndependentTablesLegacyV1_ACU();
@@ -11257,6 +11310,15 @@ $CONTENT
             logWarn_ACU('[InitialCheckpoint] 聊天记录为空，无法写入初始化数据');
             return false;
         }
+        const isolationKey = getCurrentIsolationKey_ACU();
+        const preStrategy = resolveTableStorageStrategy_ACU(chat, isolationKey, {
+            enabled: settings_ACU.dataIsolationEnabled,
+            code: settings_ACU.dataIsolationCode,
+        });
+        if (preStrategy.mode === 'legacy-v1') {
+            logWarn_ACU(`[InitialCheckpoint] 检测到旧存储，禁止写入 init checkpoint，等待迁移流程处理。reason=${preStrategy.reason}`);
+            return false;
+        }
         const firstAiIndex = chat.findIndex(m => m && !m.is_user);
         if (firstAiIndex === -1) {
             logWarn_ACU('[InitialCheckpoint] 找不到第一楼AI消息');
@@ -11288,7 +11350,6 @@ $CONTENT
         const baseData = buildTemplateBaseStateDataForLocalStorage_ACU(templateObj);
         if (!baseData)
             return false;
-        const isolationKey = getCurrentIsolationKey_ACU();
         firstMsg._acu_local_template_base_state_seeded = GREETING_LOCAL_BASE_STATE_MARKER_ACU;
         _set_suppressWorldbookInjectionInGreeting_ACU(false);
         const guideData = buildChatSheetGuideDataFromTemplateObj_ACU(templateObj, { stripSeedRows: false });
@@ -19718,6 +19779,13 @@ $CONTENT
     }
     async function runTableUpdateCommit_ACU(options, apply) {
         try {
+            const migration = await ensureLegacyStorageMigratedBeforeWrite_ACU(options.reason);
+            if (!migration.success) {
+                return { success: false, error: migration.error || '旧存储迁移失败，已阻止本次写入。' };
+            }
+            if (migration.migrated) {
+                await reloadStorageProvider();
+            }
             return await runTableWriteTransaction_ACU({
                 source: options.source,
                 reason: options.reason,
@@ -19750,6 +19818,9 @@ $CONTENT
                             source: options.source,
                             operations,
                             revisionWriteSet,
+                            forceCheckpoint: persistOptions.forceCheckpoint,
+                            checkpointReason: persistOptions.checkpointReason,
+                            manualRefillProgress: persistOptions.manualRefillProgress,
                             assumeCommitLock: true,
                             transactionContext,
                         });
@@ -32736,6 +32807,35 @@ $CONTENT
             ? normalized.map(sheetKey => ({ kind: 'sheet', sheetKey }))
             : [{ kind: 'all' }];
     }
+    function getManualRefillProgressAtMessage_ACU(chat, messageIndex) {
+        const msg = Array.isArray(chat) ? chat[messageIndex] : null;
+        if (!msg || msg.is_user)
+            return null;
+        const tagData = readIsolatedTagData_ACU(msg, getCurrentIsolationKey_ACU());
+        if (!isV2TagData_ACU(tagData))
+            return null;
+        const progress = tagData.storageFrame?.checkpoint?.manualRefillProgress;
+        return progress?.kind === 'manual_refill' ? progress : null;
+    }
+    function arraysEqualUnordered_ACU(a, b) {
+        const aa = [...new Set(a)].sort();
+        const bb = [...new Set(b)].sort();
+        return aa.length === bb.length && aa.every((value, index) => value === bb[index]);
+    }
+    function manualRefillProgressMatches_ACU(progress, selectedSheetKeys, contextMessageIndices, targetMessageIndex) {
+        if (!progress || progress.status !== 'in_progress')
+            return false;
+        if (progress.targetMessageIndex !== targetMessageIndex)
+            return false;
+        if (!arraysEqualUnordered_ACU(progress.selectedSheetKeys || [], selectedSheetKeys))
+            return false;
+        const currentStart = contextMessageIndices[0];
+        const originalStart = Number(progress.originalStartMessageIndex);
+        if (!Number.isFinite(currentStart) || !Number.isFinite(originalStart))
+            return false;
+        // 允许用户调整上下文层数和批大小；只要当前请求没有扩展到上次重填起点之前，就按已完成楼层续跑。
+        return currentStart >= originalStart;
+    }
     function buildSqlBatchOperationsFromText_ACU(sqlText) {
         const statements = normalizeSqlStatementsForRuntimeLog_ACU(sqlText);
         return statements.length > 0 ? [{ kind: 'sql_batch', statements }] : [];
@@ -32819,6 +32919,47 @@ $CONTENT
             logError_ACU(`[Batch ${batchNumber}] Failed to build merge base from guide/template.`, e);
             return { data: null, error: '无法构建合并基底，操作已终止。' };
         }
+    }
+    function buildSchemaOnlyRefillBase_ACU() {
+        const batchIsoKey = getCurrentIsolationKey_ACU();
+        const sheetGuideForBatch = getChatSheetGuideDataForIsolationKey_ACU(batchIsoKey);
+        if (sheetGuideForBatch && typeof sheetGuideForBatch === 'object' && Object.keys(sheetGuideForBatch).some(k => k.startsWith('sheet_'))) {
+            return buildGuidedBaseDataFromSheetGuide_ACU(sheetGuideForBatch);
+        }
+        return parseTableTemplateJson_ACU({ stripSeedRows: true }) || {};
+    }
+    async function buildManualRefillInitialData_ACU(chatHistory, firstMessageIndexOfRange, selectedSheetKeys, latestState) {
+        const finalBase = JSON.parse(JSON.stringify(latestState || {}));
+        const zeroBase = buildSchemaOnlyRefillBase_ACU();
+        let refillBase = null;
+        if (firstMessageIndexOfRange > 0) {
+            try {
+                refillBase = await loadTableStateFromFramesV2_ACU(chatHistory, getCurrentIsolationKey_ACU(), {
+                    maxMessageIndex: firstMessageIndexOfRange - 1,
+                });
+            }
+            catch (error) {
+                logWarn_ACU('[Manual Refill] 重放重填起点之前的数据失败，将从零开始重填选中表。', error);
+                refillBase = null;
+            }
+        }
+        if (!refillBase) {
+            logWarn_ACU('[Manual Refill] 重填范围前找不到可用 checkpoint，选中表将从零基底开始重填。');
+            refillBase = zeroBase;
+        }
+        if (!finalBase.mate && (latestState?.mate || refillBase?.mate || zeroBase?.mate)) {
+            finalBase.mate = JSON.parse(JSON.stringify(latestState?.mate || refillBase?.mate || zeroBase?.mate));
+        }
+        for (const sheetKey of selectedSheetKeys) {
+            const sourceSheet = refillBase?.[sheetKey] || zeroBase?.[sheetKey] || latestState?.[sheetKey];
+            if (sourceSheet) {
+                finalBase[sheetKey] = JSON.parse(JSON.stringify(sourceSheet));
+                if (Array.isArray(finalBase[sheetKey]?.content)) {
+                    finalBase[sheetKey].content = ensureStableRowIdsForSheetContent_ACU(finalBase[sheetKey].content);
+                }
+            }
+        }
+        return finalBase;
     }
     /**
      * 确定更新模式
@@ -33051,6 +33192,8 @@ $CONTENT
             }
         }
         const allResponsesAreRuntimeSql = isSqliteMode()
+            && !options.deferPersist
+            && !options.forceSnapshotApply
             && sortedResponses.every(response => typeof response.tableEditText === 'string' && isSqlContent(response.tableEditText));
         if (allResponsesAreRuntimeSql) {
             const operations = [];
@@ -33148,7 +33291,7 @@ $CONTENT
             if (!options.isImportMode && commitResult.tableData) {
                 await updateReadableLorebookEntry_ACU(true, false, null, commitResult.tableData);
             }
-            return { success: true, modifiedKeys: commitResult.value.modifiedKeys };
+            return { success: true, modifiedKeys: commitResult.value.modifiedKeys, tableData: commitResult.tableData };
         }
         const sqlInitialization = isSqliteMode()
             ? buildSqlInitializationBase_ACU(baseSnapshot, [...allTargetSheetKeySet])
@@ -33206,6 +33349,9 @@ $CONTENT
         }
         applySpecialIndexSequenceToSummaryTables_ACU(workingTableData);
         const modifiedKeys = [...modifiedKeySet].sort();
+        if (options.deferPersist) {
+            return { success: true, modifiedKeys, tableData: workingTableData };
+        }
         if (!options.isImportMode) {
             const isFirstTimeInit = await checkIfFirstTimeInit_ACU();
             const allUnifiedSheetKeys = getSortedSheetKeys_ACU(workingTableData);
@@ -33245,11 +33391,18 @@ $CONTENT
                 await enqueueSummaryVectorIndexFlush_ACU({ targetMessageIndex: options.saveTargetIndex, mode: 'sync', reason: 'unified_group_fill_complete' });
             }
         }
-        return { success: true, modifiedKeys };
+        return { success: true, modifiedKeys, tableData: workingTableData };
     }
     async function processGroupedRuntimeChunk_ACU(groups, mode, options = {}) {
         if (!Array.isArray(groups) || groups.length === 0) {
             return { success: true, failedGroups: [] };
+        }
+        const migration = await ensureLegacyStorageMigratedBeforeWrite_ACU('processGroupedRuntimeChunk');
+        if (!migration.success) {
+            return { success: false, failedGroups: groups.map(group => group.key), error: migration.error || '旧存储迁移失败，已阻止本次填表。' };
+        }
+        if (migration.migrated) {
+            await reloadStorageProvider();
         }
         const templateForLookup = parseTableTemplateJson_ACU({ stripSeedRows: true });
         const failedGroups = new Set();
@@ -33292,6 +33445,10 @@ $CONTENT
             }
         }
         const orderedBuckets = [...transactionBuckets.values()].sort((a, b) => a.saveTargetIndex - b.saveTargetIndex || a.batchNumber - b.batchNumber);
+        let deferredWorkingData = options.initialData ? JSON.parse(JSON.stringify(options.initialData)) : null;
+        let deferredCheckpointData = options.checkpointBaseData
+            ? JSON.parse(JSON.stringify(options.checkpointBaseData))
+            : (deferredWorkingData ? JSON.parse(JSON.stringify(deferredWorkingData)) : null);
         const emitBucketProgress = (bucketIndex, event) => {
             options.onProgress?.({
                 ...event,
@@ -33306,7 +33463,9 @@ $CONTENT
             let bucketSucceeded = false;
             for (let bucketAttempt = 1; bucketAttempt <= maxBucketRetries; bucketAttempt++) {
                 const chatHistory = getChatArray_ACU();
-                const baseResult = buildBatchMergeBase_ACU(bucket.batchNumber);
+                const baseResult = options.deferPersist && deferredWorkingData
+                    ? { data: JSON.parse(JSON.stringify(deferredWorkingData)), error: null }
+                    : buildBatchMergeBase_ACU(bucket.batchNumber);
                 if (!baseResult.data) {
                     bucket.plannedJobs.forEach(job => failedGroups.add(job.group.key));
                     firstError = firstError || baseResult.error || '无法构建合并基底，操作已终止。';
@@ -33389,8 +33548,80 @@ $CONTENT
                     updateMode: bucket.updateMode,
                     isImportMode: options.isImportMode === true,
                     baseRevision,
+                    deferPersist: options.deferPersist === true,
+                    forceSnapshotApply: options.forceSnapshotApply === true,
                 });
                 if (applyResult.success) {
+                    if (options.deferPersist && applyResult.tableData) {
+                        deferredWorkingData = JSON.parse(JSON.stringify(applyResult.tableData));
+                        deferredCheckpointData = deferredCheckpointData || JSON.parse(JSON.stringify(deferredWorkingData));
+                        const checkpointSheetKeys = bucketSheetKeys.filter(sheetKey => Boolean(deferredWorkingData?.[sheetKey]));
+                        for (const sheetKey of checkpointSheetKeys) {
+                            deferredCheckpointData[sheetKey] = JSON.parse(JSON.stringify(deferredWorkingData[sheetKey]));
+                        }
+                        _set_currentJsonTableData_ACU(deferredCheckpointData);
+                        const checkpointTargetIndex = Number.isInteger(options.checkpointTargetIndex) ? options.checkpointTargetIndex : bucket.saveTargetIndex;
+                        const revisionWriteSet = checkpointSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
+                        const maxPlannedMessageIndex = Math.max(...jobs.map(job => job.saveTargetIndex));
+                        const progressStatus = maxPlannedMessageIndex >= checkpointTargetIndex ? 'complete' : 'in_progress';
+                        const progress = options.manualRefillProgress
+                            ? {
+                                ...options.manualRefillProgress,
+                                status: progressStatus,
+                                completedUntilMessageIndex: Math.max(options.manualRefillProgress.completedUntilMessageIndex, maxPlannedMessageIndex),
+                                updatedAt: Date.now(),
+                            }
+                            : undefined;
+                        const checkpointCommit = await runTableUpdateCommit_ACU({
+                            source: 'group_fill',
+                            reason: 'manual_refill_progress_checkpoint',
+                            isolationKey: getCurrentIsolationKey_ACU(),
+                            writeSet: buildWriteSetForSheetKeys_ACU(checkpointSheetKeys, deferredCheckpointData),
+                            revisionWriteSet,
+                            initialData: deferredCheckpointData,
+                            targetMessageIndex: checkpointTargetIndex,
+                            targetSheetKeys: getSortedSheetKeys_ACU(deferredCheckpointData),
+                            updateGroupKeys: checkpointSheetKeys,
+                            trackingSheetKeys: checkpointSheetKeys,
+                            trackAsUpdate: true,
+                        }, () => ({
+                            success: true,
+                            value: { modifiedKeys: checkpointSheetKeys },
+                            tableData: deferredCheckpointData,
+                            persist: {
+                                targetMessageIndex: checkpointTargetIndex,
+                                targetSheetKeys: getSortedSheetKeys_ACU(deferredCheckpointData),
+                                updateGroupKeys: checkpointSheetKeys,
+                                trackingSheetKeys: checkpointSheetKeys,
+                                trackAsUpdate: true,
+                                forceCheckpoint: true,
+                                checkpointReason: 'manual',
+                                manualRefillProgress: progress,
+                                revisionWriteSet,
+                            },
+                        }));
+                        if (!checkpointCommit.success) {
+                            jobs.forEach(job => failedGroups.add(job.groupKey));
+                            firstError = firstError || checkpointCommit.error || '手动重填进度 checkpoint 保存失败。';
+                            break;
+                        }
+                        if (checkpointCommit.tableData) {
+                            deferredCheckpointData = JSON.parse(JSON.stringify(checkpointCommit.tableData));
+                            _set_currentJsonTableData_ACU(deferredCheckpointData);
+                            if (isSqliteMode()) {
+                                try {
+                                    await reloadStorageProvider();
+                                }
+                                catch (reloadError) {
+                                    logWarn_ACU(`[Manual Refill] SQLite provider 重建失败: ${reloadError?.message || reloadError}`);
+                                }
+                            }
+                            await updateReadableLorebookEntry_ACU(true, false, null, deferredCheckpointData);
+                        }
+                        if (getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
+                            await enqueueSummaryVectorIndexFlush_ACU({ targetMessageIndex: checkpointTargetIndex, mode: 'sync', reason: 'manual_refill_progress' });
+                        }
+                    }
                     emitBucketProgress(bucketIndex, { phase: 'complete' });
                     bucketSucceeded = true;
                     break;
@@ -33409,13 +33640,13 @@ $CONTENT
                     });
                 }
             }
-            if (!bucketSucceeded && firstError && options.abortController?.signal.aborted) {
+            if (!bucketSucceeded && (failedGroups.size > 0 || firstError || options.abortController?.signal.aborted)) {
                 break;
             }
         }
         return failedGroups.size > 0
-            ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。' }
-            : { success: true, failedGroups: [] };
+            ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', tableData: deferredWorkingData || undefined, checkpointData: deferredCheckpointData || undefined }
+            : { success: true, failedGroups: [], tableData: deferredWorkingData || undefined, checkpointData: deferredCheckpointData || undefined };
     }
     /**
      * 执行单次卡片更新的核心逻辑（AI调用 + 重试 + 解析 + 保存）
@@ -33770,6 +34001,13 @@ $CONTENT
             return { success: true };
         }
         const { targetSheetKeys, batchSize: specificBatchSize, requestOptions } = options;
+        const migration = await ensureLegacyStorageMigratedBeforeWrite_ACU('processUpdatesBatch');
+        if (!migration.success) {
+            return { success: false, error: migration.error || '旧存储迁移失败，已阻止本次填表。' };
+        }
+        if (migration.migrated) {
+            await reloadStorageProvider();
+        }
         _set_wasStoppedByUser_ACU$1(false);
         _set_isAutoUpdatingCard_ACU$1(true);
         try {
@@ -33855,10 +34093,7 @@ $CONTENT
      * @param processBatch 批处理执行回调
      * @param refreshData 数据刷新回调
      * @param options 可选参数：
-     *   - clearBeforeUpdate: 是否在手动填表前先清空目标楼层的表格数据（默认 false）。
-     *     由 presentation 层根据用户确认框结果传入。当设为 true 时，
-     *     会先计算所有 update group 的目标保存楼层，去重后逐个清空当前隔离标签的表格数据，
-     *     再刷新内存状态，最后执行新的手动填表。
+     *   - clearBeforeUpdate: 兼容旧调用名；现在表示启用事务式手动重填，不会预先清空聊天记录。
      */
     async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData, options = {}) {
         try {
@@ -33919,51 +34154,55 @@ $CONTENT
                 updateGroups[groupKey].sheetKeys.push(sheetKey);
             });
             const groupKeys = Object.keys(updateGroups);
-            // ── 手动填表前预清空目标楼层的表格数据 ──
-            // 当 clearBeforeUpdate 为 true 时（用户已在 presentation 层确认），
-            // 先计算每个 update group 的最终保存楼层（每批最后一条 AI 消息的物理索引），
-            // 去重后逐个清空当前隔离标签下的表格数据，再刷新内存状态。
-            // 这样可以防止 SQL 严格填表逻辑因目标楼层上的旧数据残留导致写入失败。
-            if (options.clearBeforeUpdate) {
-                const targetFloorSet = new Set();
-                const targetSheetKeySet = new Set();
-                for (const gKey of groupKeys) {
-                    const group = updateGroups[gKey];
-                    (group.sheetKeys || []).forEach((sheetKey) => targetSheetKeySet.add(sheetKey));
-                    // 每个 group 的 indices 按 batchSize 分批，每批的最后一条就是该批的 finalSaveTargetIndex。
-                    // 这里简化处理：取该 group 的 indices 列表中最后一个 index 作为最终保存目标。
-                    // （同一个 group 内所有 batch 的 contextScopeIndices 是相同的，
-                    //   processUpdatesBatch 会按 batchSize 切分后取每批最后一个作为保存目标，
-                    //   但对于"清空目标楼层"来说，只需要清空 indices 中涉及的最后几个楼层即可。
-                    //   考虑到 batch 切分逻辑较复杂，这里保守地清空所有 contextScopeIndices 涉及的楼层。）
-                    if (group.indices && group.indices.length > 0) {
-                        // 取该 group 上下文范围内的最后 batchSize 个楼层作为清空目标
-                        // 因为 processUpdatesBatch 会把 indices 按 batchSize 切分，
-                        // 每批保存到该批最后一条消息。所以只需要清空 indices 列表中的楼层。
-                        group.indices.forEach((idx) => targetFloorSet.add(idx));
+            const manualRefillEnabled = options.clearBeforeUpdate === true;
+            let manualRefillInitialData = null;
+            let manualRefillCheckpointData = null;
+            let manualRefillTargetIndex = contextScopeIndices[contextScopeIndices.length - 1];
+            let manualRefillProgress;
+            if (manualRefillEnabled) {
+                const latestBaseResult = buildBatchMergeBase_ACU(0);
+                if (!latestBaseResult.data) {
+                    return { success: false, error: latestBaseResult.error || '无法构建当前表格快照，操作已终止。' };
+                }
+                const existingProgress = getManualRefillProgressAtMessage_ACU(getChatArray_ACU() || [], manualRefillTargetIndex);
+                const matchedProgress = manualRefillProgressMatches_ACU(existingProgress, targetKeys, contextScopeIndices, manualRefillTargetIndex)
+                    ? existingProgress
+                    : null;
+                if (matchedProgress) {
+                    manualRefillCheckpointData = JSON.parse(JSON.stringify(latestBaseResult.data));
+                    manualRefillInitialData = JSON.parse(JSON.stringify(latestBaseResult.data));
+                    logDebug_ACU(`[Manual Refill] 检测到未完成重填进度，将从消息索引 ${matchedProgress.completedUntilMessageIndex + 1} 继续。`);
+                }
+                else {
+                    manualRefillCheckpointData = JSON.parse(JSON.stringify(latestBaseResult.data));
+                    manualRefillInitialData = await buildManualRefillInitialData_ACU(getChatArray_ACU() || [], contextScopeIndices[0], targetKeys, latestBaseResult.data);
+                }
+                const pendingStartIndex = matchedProgress ? matchedProgress.completedUntilMessageIndex + 1 : contextScopeIndices[0];
+                const pendingContextScopeIndices = contextScopeIndices.filter(index => index >= pendingStartIndex);
+                if (matchedProgress && pendingContextScopeIndices.length === 0) {
+                    logDebug_ACU('[Manual Refill] 已存在完整的重填进度，无需继续处理。');
+                    return { success: true };
+                }
+                manualRefillProgress = matchedProgress
+                    ? { ...matchedProgress, batchSize: uiBatchSize, contextMessageIndices: contextScopeIndices.slice(), updatedAt: Date.now() }
+                    : {
+                        kind: 'manual_refill',
+                        status: 'in_progress',
+                        selectedSheetKeys: [...new Set(targetKeys)].sort(),
+                        contextMessageIndices: contextScopeIndices.slice(),
+                        originalStartMessageIndex: contextScopeIndices[0],
+                        targetMessageIndex: manualRefillTargetIndex,
+                        batchSize: uiBatchSize,
+                        completedUntilMessageIndex: contextScopeIndices[0] - 1,
+                        updatedAt: Date.now(),
+                    };
+                if (matchedProgress) {
+                    for (const gKey of Object.keys(updateGroups)) {
+                        updateGroups[gKey].indices = pendingContextScopeIndices;
                     }
                 }
-                const targetFloors = Array.from(targetFloorSet);
-                const targetSheetKeysForClear = Array.from(targetSheetKeySet);
-                if (targetFloors.length > 0) {
-                    logDebug_ACU(`[Manual Update] 预清空目标楼层: ${targetFloors.join(', ')} (共 ${targetFloors.length} 层)`);
-                    const clearedCount = await clearTableDataAtFloors_ACU(targetFloors, targetSheetKeysForClear);
-                    logDebug_ACU(`[Manual Update] 预清空完成: ${clearedCount} 层已清空`);
-                    // 清空后必须刷新内存数据，确保后续填表基于干净状态
-                    await loadAllChatMessages_ACU();
-                    // [关键] 重建 Storage Provider（尤其是 SQLite 模式）
-                    // 只清空聊天消息字段是不够的——SQLite 引擎在内存中持有独立的数据库实例，
-                    // 必须先 dispose 旧引擎、创建新引擎、从已清空的聊天消息重新 loadFromChat，
-                    // 否则后续 applyEdits 仍会在旧内存数据库上执行 SQL，
-                    // 导致 UNIQUE constraint 等冲突。
-                    try {
-                        await reloadStorageProvider();
-                    }
-                    catch (reloadError) {
-                        logWarn_ACU(`[Manual Update] reloadStorageProvider 失败: ${reloadError?.message}，继续使用当前 provider`);
-                    }
-                    await refreshData();
-                }
+                _set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(manualRefillInitialData)));
+                logDebug_ACU(`[Manual Refill] 已构建事务式重填基底，选中 ${targetKeys.length} 张表，范围 ${pendingContextScopeIndices[0] ?? contextScopeIndices[0]}..${manualRefillTargetIndex}。`);
             }
             _set_isAutoUpdatingCard_ACU$1(true);
             const maxConcurrentGroups = Math.max(1, Number(settings_ACU.maxConcurrentGroups) || 1);
@@ -33992,7 +34231,19 @@ $CONTENT
                 });
                 const chunkResult = await processGroupedRuntimeChunk_ACU(groupedChunk, 'manual_independent', {
                     onProgress: options.onProgress,
+                    deferPersist: manualRefillEnabled,
+                    forceSnapshotApply: manualRefillEnabled,
+                    initialData: manualRefillInitialData,
+                    checkpointTargetIndex: manualRefillTargetIndex,
+                    checkpointBaseData: manualRefillCheckpointData,
+                    manualRefillProgress,
                 });
+                if (manualRefillEnabled && chunkResult.tableData) {
+                    manualRefillInitialData = JSON.parse(JSON.stringify(chunkResult.tableData));
+                }
+                if (manualRefillEnabled && chunkResult.checkpointData) {
+                    manualRefillCheckpointData = JSON.parse(JSON.stringify(chunkResult.checkpointData));
+                }
                 if (!chunkResult.success) {
                     chunkResult.failedGroups.forEach(key => {
                         failedGroups.push({ key, error: chunkResult.error || '手动更新失败或被终止。' });
@@ -37153,6 +37404,7 @@ $CONTENT
         switch (event.phase) {
             case 'complete':
                 updateStatusDisplay();
+                notifyTableUpdate();
                 break;
             case 'retry':
                 showToastr_ACU('warning', message, { timeOut: 5000 });
@@ -37262,18 +37514,17 @@ $CONTENT
                 showToastr_ACU('warning', '未选择需要更新的表格。');
                 return;
             }
-            // 弹出确认框：告知用户将先清除对应楼层中本次选中表格的数据，再执行新的手动填表
-            // 这是防止 SQL 严格填表逻辑因旧数据残留导致写入失败的关键步骤
+            // 弹出确认框：手动填表将使用事务式重填，失败不会改动聊天记录中的旧数据
             const confirmed = await showCustomConfirm_ACU('手动填表确认', '即将执行手动填表。\n\n' +
-                '为确保填表成功，系统将先清除本次涉及楼层中当前选中表格的数据，再进行新的数据填写。\n' +
-                '（此操作可防止 SQL 严格填表逻辑因旧数据残留导致写入失败）\n\n' +
-                '如果不想清空旧数据，可以选择取消。', { confirmLabel: '确认并继续', cancelLabel: '取消' });
+                '系统会在内存中按当前上下文和批处理设置重填当前选中的表，全部成功后才写入新的完整 checkpoint。\n' +
+                '如果重填起点之前找不到可回放的 checkpoint，选中表会从空白结构开始重填；未选中的表会保持当前最新数据。\n\n' +
+                '失败或终止时不会清空聊天记录中的旧表格数据。', { confirmLabel: '确认并继续', cancelLabel: '取消' });
             if (!confirmed) {
                 logDebug_ACU('[更新流程] 用户取消了手动填表确认框');
                 showToastr_ACU('info', '已取消手动填表。');
                 return;
             }
-            // 调用 service 层，传入 clearBeforeUpdate: true（用户已确认清空）
+            // 调用 service 层，启用事务式手动重填（兼容沿用 clearBeforeUpdate 参数名）
             _set_wasStoppedByUser_ACU$1(false);
             notifyTableFillStart();
             const stopButtonId = `acu-stop-manual-update-btn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -83814,12 +84065,13 @@ Expected function or array of functions, received type ${typeof value}.`
             }
             const confirmed = await dialogStore.confirm({
                 title: '执行手动填表',
-                message: '即将执行手动填表。\n\n为确保填表成功，系统将先清除本次涉及楼层中当前选中表格的数据，再进行新的数据填写。\n此操作可防止 SQL 严格填表逻辑因旧数据残留导致写入失败。\n\n如果不想清空旧数据，可以选择取消。',
+                message: '即将执行手动填表。\n\n系统会在内存中按当前上下文和批处理设置重填当前选中的表，全部成功后才写入新的完整 checkpoint。\n如果重填起点之前找不到可回放的 checkpoint，选中表会从空白结构开始重填；未选中的表会保持当前最新数据。\n\n失败或终止时不会清空聊天记录中的旧表格数据。',
                 confirmLabel: '确认并继续',
                 cancelLabel: '取消',
             });
             if (!confirmed)
                 return;
+            // 兼容沿用 clearBeforeUpdate 参数名；service 层实际执行事务式重填，不会预清空聊天记录。
             const clearBeforeUpdate = true;
             manualUpdateBusy.value = true;
             progressToastId = null;
@@ -83831,6 +84083,13 @@ Expected function or array of functions, received type ${typeof value}.`
                 _set_manualExtraHint_ACU$1(`以下为用户的额外填表要求,请严格遵守:\n${extra}`);
             const handleProgress = (event) => {
                 notifyProgress(progressLabel$1(event));
+                if (event.phase === 'complete') {
+                    try {
+                        topLevelWindow_ACU.AutoCardUpdaterAPI?._notifyTableUpdate?.();
+                    }
+                    catch (_) { }
+                    refreshTick.value++;
+                }
             };
             const runProcessBatch = (indices, mode, options) => processUpdatesBatch_ACU(indices, mode, options, (messagesToUse, saveTargetIndex, updateMode, isSilentMode, targetSheetKeys, requestOptions, progressContext) => executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, false, updateMode, isSilentMode, targetSheetKeys, requestOptions, new AbortController(), progressContext, handleProgress));
             try {
