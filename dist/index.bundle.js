@@ -7823,13 +7823,73 @@ $CONTENT
             return null;
         }
     }
+    function extractTableEditDslCommands_ACU(text) {
+        const cleaned = String(text || '').replace(/<!--|-->/g, '');
+        const commands = [];
+        const commandPattern = /(?:insertRow|updateRow|deleteRow)\s*\(/g;
+        let searchStart = 0;
+        while (searchStart < cleaned.length) {
+            commandPattern.lastIndex = searchStart;
+            const match = commandPattern.exec(cleaned);
+            if (!match)
+                break;
+            const commandStart = match.index;
+            const openParenIndex = cleaned.indexOf('(', commandStart);
+            if (openParenIndex === -1)
+                break;
+            let depth = 0;
+            let inString = false;
+            let stringChar = '';
+            let escaped = false;
+            let commandEnd = -1;
+            for (let i = openParenIndex; i < cleaned.length; i += 1) {
+                const char = cleaned[i];
+                if (inString) {
+                    if (escaped) {
+                        escaped = false;
+                    }
+                    else if (char === '\\') {
+                        escaped = true;
+                    }
+                    else if (char === stringChar) {
+                        inString = false;
+                    }
+                    continue;
+                }
+                if (char === '"' || char === "'") {
+                    inString = true;
+                    stringChar = char;
+                    continue;
+                }
+                if (char === '(') {
+                    depth += 1;
+                }
+                else if (char === ')') {
+                    depth -= 1;
+                    if (depth === 0) {
+                        commandEnd = i + 1;
+                        break;
+                    }
+                }
+            }
+            if (commandEnd === -1)
+                break;
+            const command = cleaned.slice(commandStart, commandEnd).trim().replace(/;$/, '');
+            if (command)
+                commands.push(command);
+            searchStart = commandEnd;
+        }
+        return commands;
+    }
+    function resolveDslReplaySheetKeys_ACU(state) {
+        const sortedKeys = getSortedSheetKeys_ACU(state);
+        if (Array.isArray(sortedKeys) && sortedKeys.length > 0)
+            return sortedKeys;
+        return Object.keys(state).filter(k => k.startsWith('sheet_'));
+    }
     function applyTableEditDslOperationV2_ACU(state, text) {
-        const sheetKeys = Object.keys(state).filter(k => k.startsWith('sheet_')).sort();
-        const commands = String(text || '')
-            .replace(/<!--|-->/g, '')
-            .split(/;\s*(?=(?:insertRow|updateRow|deleteRow)\s*\()/g)
-            .map(item => item.trim().replace(/;$/, ''))
-            .filter(Boolean);
+        const sheetKeys = resolveDslReplaySheetKeys_ACU(state);
+        const commands = extractTableEditDslCommands_ACU(text);
         for (const commandLine of commands) {
             const match = commandLine.match(/^(insertRow|deleteRow|updateRow)\s*\((.*)\)$/);
             if (!match)
