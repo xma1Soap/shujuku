@@ -7990,12 +7990,14 @@ $CONTENT
         const frameRefs = getV2FrameRefs_ACU(chat, isolationKey)
             .filter(ref => options.maxMessageIndex === undefined || ref.messageIndex <= options.maxMessageIndex);
         const checkpointRef = [...frameRefs].reverse().find(ref => ref.frame.checkpoint?.kind === 'full');
-        if (!checkpointRef || !checkpointRef.frame.checkpoint)
-            return {};
-        const summary = deepClone_ACU$3(checkpointRef.frame.checkpoint.scheduleSummary || {});
-        applyEventToScheduleSummary_ACU(summary, checkpointRef.frame.checkpoint.event, checkpointRef.aiFloor);
+        const summary = checkpointRef?.frame.checkpoint
+            ? deepClone_ACU$3(checkpointRef.frame.checkpoint.scheduleSummary || {})
+            : {};
+        if (checkpointRef?.frame.checkpoint) {
+            applyEventToScheduleSummary_ACU(summary, checkpointRef.frame.checkpoint.event, checkpointRef.aiFloor);
+        }
         for (const ref of frameRefs) {
-            if (ref.messageIndex < checkpointRef.messageIndex)
+            if (checkpointRef && ref.messageIndex < checkpointRef.messageIndex)
                 continue;
             const entries = [...(ref.frame.logEntries || [])].sort((a, b) => a.seq - b.seq);
             for (const entry of entries) {
@@ -8012,22 +8014,23 @@ $CONTENT
         const frameRefs = getV2FrameRefs_ACU(chat, isolationKey)
             .filter(ref => options.maxMessageIndex === undefined || ref.messageIndex <= options.maxMessageIndex);
         const checkpointRef = [...frameRefs].reverse().find(ref => ref.frame.checkpoint?.kind === 'full');
-        if (!checkpointRef || !checkpointRef.frame.checkpoint) {
-            logWarn_ACU('[V2 Replay] 未找到 full checkpoint，无法恢复 V2 表格数据。');
+        if (!checkpointRef?.frame.checkpoint) {
+            logWarn_ACU('[V2 Replay] 未找到 full checkpoint，拒绝从 log-only/data_replace 恢复不完整 V2 表格数据。');
             return null;
         }
         const checkpoint = checkpointRef.frame.checkpoint;
         const state = deepClone_ACU$3(checkpoint.data);
+        const replayStartMessageIndex = checkpointRef.messageIndex;
+        replayCheckpointSchedule_ACU(checkpoint, checkpointRef.aiFloor);
         const runtime = {
             engine: new SqliteEngine(),
             syncBridge: null,
             loaded: false,
         };
         runtime.syncBridge = new SyncBridge(runtime.engine);
-        replayCheckpointSchedule_ACU(checkpoint, checkpointRef.aiFloor);
         try {
             for (const ref of frameRefs) {
-                if (ref.messageIndex < checkpointRef.messageIndex)
+                if (ref.messageIndex < replayStartMessageIndex)
                     continue;
                 const entries = [...(ref.frame.logEntries || [])].sort((a, b) => a.seq - b.seq);
                 for (const entry of entries) {
@@ -8122,6 +8125,12 @@ $CONTENT
         return chat.some(message => {
             const tagData = message?.TavernDB_ACU_IsolatedData?.[isolationKey];
             return isV2TagData_ACU(tagData) && tagData.storageFrame.checkpoint?.kind === 'full';
+        });
+    }
+    function hasAnyV2Frame_ACU(chat, isolationKey) {
+        return chat.some(message => {
+            const tagData = message?.TavernDB_ACU_IsolatedData?.[isolationKey];
+            return isV2TagData_ACU(tagData);
         });
     }
     function getLatestTableStorageHeadRevisionV2_ACU(chat, isolationKey) {
@@ -8230,6 +8239,7 @@ $CONTENT
             ? options.baseRevision
             : options.transactionContext?.baseRevision;
         const hasExistingCheckpoint = hasAnyV2Checkpoint_ACU(chat, isolationKey);
+        const hasExistingV2Frame = hasAnyV2Frame_ACU(chat, isolationKey);
         const hasMetadataOnlyFillEvent = filledSheetKeys.length > 0 || (Array.isArray(options.groupKeys) && options.groupKeys.length > 0);
         if (operations.length === 0 && !hasMetadataOnlyFillEvent && options.source !== 'import' && hasExistingCheckpoint) {
             return { saved: false, error: `V2 operation log requires explicit operations for source=${options.source}; snapshot diff fallback is not allowed.` };
@@ -8253,7 +8263,7 @@ $CONTENT
             frame.checkpoint = {
                 kind: 'full',
                 createdAt: now,
-                reason: options.checkpointReason || (!hasExistingCheckpoint ? 'init' : 'periodic'),
+                reason: options.checkpointReason || (!hasExistingCheckpoint ? (hasExistingV2Frame ? 'migration' : 'init') : 'periodic'),
                 data: afterData,
                 scheduleSummary: collectScheduleSummaryFromFramesV2_ACU(chat, isolationKey, { maxMessageIndex: target.index }),
                 event: checkpointEvent,
@@ -11305,7 +11315,7 @@ $CONTENT
             if (!message || message.is_user)
                 return false;
             const tagData = readIsolatedTagData_ACU(message, isolationKey);
-            if (isV2TagData_ACU(tagData) && tagData.storageFrame.checkpoint?.kind === 'full')
+            if (isV2TagData_ACU(tagData) && (tagData.storageFrame.checkpoint?.kind === 'full' || (tagData.storageFrame.logEntries || []).length > 0))
                 return true;
             if (tagData?.independentData && Object.keys(tagData.independentData).some(k => k.startsWith('sheet_')))
                 return true;
@@ -22692,9 +22702,11 @@ $CONTENT
             return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
         });
     }
-    function collectIsolationKeysWithV2Frames_ACU(chat) {
+    function collectIsolationKeysWithV2Frames_ACU(chat, options = {}) {
         const keys = new Set();
-        for (const msg of chat) {
+        const maxMessageIndex = Number.isInteger(options.maxMessageIndex) ? options.maxMessageIndex : Number.POSITIVE_INFINITY;
+        for (let i = 0; i < chat.length && i <= maxMessageIndex; i++) {
+            const msg = chat[i];
             if (!msg || msg.is_user)
                 continue;
             const isolatedData = msg.TavernDB_ACU_IsolatedData;
@@ -22708,21 +22720,53 @@ $CONTENT
         }
         return [...keys];
     }
-    async function writeV2BoundaryCheckpointBeforePurge_ACU(chat, anchorIndex) {
-        if (anchorIndex < 0 || !chat[anchorIndex] || chat[anchorIndex].is_user)
+    function hasV2FullCheckpointInRange_ACU(chat, isolationKey, startIndex, endIndex) {
+        if (!Array.isArray(chat) || startIndex > endIndex)
             return false;
+        const start = Math.max(0, startIndex);
+        const end = Math.min(chat.length - 1, endIndex);
+        for (let i = start; i <= end; i++) {
+            const msg = chat[i];
+            if (!msg || msg.is_user)
+                continue;
+            const tagData = msg.TavernDB_ACU_IsolatedData?.[isolationKey];
+            if (isV2TagData_ACU(tagData) && tagData.storageFrame.checkpoint?.kind === 'full') {
+                return true;
+            }
+        }
+        return false;
+    }
+    function selectRetainedCheckpointAnchorIndex_ACU(chat, retainedDataIndices) {
+        const retainedAiIndices = retainedDataIndices.filter((idx) => idx >= 1 && chat[idx] && !chat[idx].is_user);
+        if (retainedAiIndices.length === 0)
+            return undefined;
+        return retainedAiIndices[Math.floor(retainedAiIndices.length / 2)];
+    }
+    async function writeV2BoundaryCheckpointBeforePurge_ACU(chat, anchorIndex, options = {}) {
+        if (anchorIndex < 0 || !chat[anchorIndex] || chat[anchorIndex].is_user) {
+            throw new Error(`边界 checkpoint 写入失败：anchorIndex=${anchorIndex} 不是有效 AI 楼层。`);
+        }
         let changed = false;
         const isolationConfig = {
             enabled: settings_ACU.dataIsolationEnabled,
             code: settings_ACU.dataIsolationCode,
         };
-        for (const isolationKey of collectIsolationKeysWithV2Frames_ACU(chat)) {
+        const isolationKeys = collectIsolationKeysWithV2Frames_ACU(chat, { maxMessageIndex: anchorIndex });
+        const retainedStartIndex = Number.isInteger(options.retainedStartIndex) ? options.retainedStartIndex : undefined;
+        const retainedEndIndex = Number.isInteger(options.retainedEndIndex) ? options.retainedEndIndex : undefined;
+        for (const isolationKey of isolationKeys) {
             const strategy = resolveTableStorageStrategy_ACU(chat, isolationKey, isolationConfig);
             if (strategy.mode !== 'v2')
                 continue;
-            const data = await loadTableStateFromFramesV2_ACU(chat, isolationKey, { maxMessageIndex: anchorIndex });
-            if (!data)
+            if (retainedStartIndex !== undefined && retainedEndIndex !== undefined
+                && hasV2FullCheckpointInRange_ACU(chat, isolationKey, retainedStartIndex, retainedEndIndex)) {
+                logDebug_ACU(`[V2 Compaction] 保留窗口内已存在 isolationKey=[${isolationKey || '无标签'}] 的 full checkpoint，跳过重建。`);
                 continue;
+            }
+            const data = await loadTableStateFromFramesV2_ACU(chat, isolationKey, { maxMessageIndex: anchorIndex });
+            if (!data) {
+                throw new Error(`边界 checkpoint 写入失败：无法在 anchorIndex=${anchorIndex} 前恢复 isolationKey=[${isolationKey || '无标签'}] 的 V2 数据。`);
+            }
             const anchorMsg = chat[anchorIndex];
             if (!anchorMsg.TavernDB_ACU_IsolatedData || typeof anchorMsg.TavernDB_ACU_IsolatedData !== 'object' || Array.isArray(anchorMsg.TavernDB_ACU_IsolatedData)) {
                 anchorMsg.TavernDB_ACU_IsolatedData = {};
@@ -22919,11 +22963,14 @@ $CONTENT
             return;
         }
         logDebug_ACU(`[数据清理] 将清理 ${indicesToPurge.length} 层消息的本地数据（保留最近 ${retainCount} 层）...`);
-        // ── [V2 边界 checkpoint] 在删除旧 frame 前，先把恢复锚点压缩到边界保留楼层 ──
-        const anchorIndex = dataMessageIndices[cutoffIndex];
+        // ── [V2 边界 checkpoint] 删除旧 frame 前，保留窗口内已有 full checkpoint 就复用；没有才在窗口中间补一个 ──
+        const retainedDataIndices = dataMessageIndices.slice(cutoffIndex);
+        const retainedStartIndex = retainedDataIndices[0];
+        const retainedEndIndex = retainedDataIndices[retainedDataIndices.length - 1];
+        const anchorIndex = selectRetainedCheckpointAnchorIndex_ACU(chat, retainedDataIndices);
         if (anchorIndex !== undefined && anchorIndex >= 1 && chat[anchorIndex]) {
             try {
-                if (await writeV2BoundaryCheckpointBeforePurge_ACU(chat, anchorIndex)) {
+                if (await writeV2BoundaryCheckpointBeforePurge_ACU(chat, anchorIndex, { retainedStartIndex, retainedEndIndex })) {
                     await saveChatToHost_ACU();
                 }
             }
@@ -22932,8 +22979,12 @@ $CONTENT
                 return;
             }
         }
+        else if (collectIsolationKeysWithV2Frames_ACU(chat, { maxMessageIndex: indicesToPurge[indicesToPurge.length - 1] }).length > 0) {
+            logError_ACU('[V2 Compaction] 找不到可写入边界 checkpoint 的保留 AI 楼层，已中止本次清理以避免恢复链断裂。');
+            return;
+        }
         // ── [兜底快照] 在删除旧楼层之前，迁移冷表数据到边界保留楼层 ──
-        const retainedSet = new Set(dataMessageIndices.slice(cutoffIndex));
+        const retainedSet = new Set(retainedDataIndices);
         // 确认边界楼层有效且不是 chat[0]
         if (anchorIndex !== undefined && anchorIndex >= 1 && chat[anchorIndex]) {
             const dataIsolationEnabled = settings_ACU.dataIsolationEnabled || false;
@@ -33103,7 +33154,7 @@ $CONTENT
                 });
             }
             catch (error) {
-                logWarn_ACU('[Manual Refill] 重放重填起点之前的数据失败，将从零开始重填选中表。', error);
+                logWarn_ACU('[Manual Refill] 重放重填起点之前的数据失败，将从零基底重建选中表。', error);
                 refillBase = null;
             }
         }
@@ -33879,7 +33930,7 @@ $CONTENT
                     });
                 }
             }
-            if (!bucketSucceeded && (failedGroups.size > 0 || firstError || options.abortController?.signal.aborted)) {
+            if (!bucketSucceeded && options.abortController?.signal.aborted) {
                 break;
             }
         }
