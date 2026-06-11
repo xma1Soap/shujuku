@@ -14974,36 +14974,58 @@ $CONTENT
      * AI 输入准备 — 格式化表格数据和对话内容为 AI 可读文本
      * 从 prompt-builder.ts 拆出（L14-L194）
      */
+    async function resolvePromptSourceTableData_ACU(options, sqlMode) {
+        if (!sqlMode) {
+            return options?.tableData || currentJsonTableData_ACU;
+        }
+        try {
+            const provider = await ensureStorageProviderReady_ACU();
+            if (provider.mode !== 'sqlite') {
+                logError_ACU(`prepareAIInput_ACU: SQLite mode expected runtime DB provider, got ${provider.mode}.`);
+                return null;
+            }
+            return provider.getCurrentData();
+        }
+        catch (e) {
+            logError_ACU('prepareAIInput_ACU: 无法从 SQLite 运行时 DB 获取权威表格数据。', e);
+            return null;
+        }
+    }
     async function prepareAIInput_ACU(messages, updateMode = 'standard', targetSheetKeys = null, options = {}) {
-        const sourceTableData = options?.tableData || currentJsonTableData_ACU;
+        const sqlMode = isSqliteMode();
+        const sourceTableData = await resolvePromptSourceTableData_ACU(options, sqlMode);
         if (!sourceTableData) {
-            logError_ACU('prepareAIInput_ACU: Cannot prepare AI input, currentJsonTableData_ACU is null.');
+            logError_ACU(sqlMode
+                ? 'prepareAIInput_ACU: Cannot prepare AI input, SQLite runtime DB data is null.'
+                : 'prepareAIInput_ACU: Cannot prepare AI input, currentJsonTableData_ACU is null.');
             return null;
         }
         let _seedGuideDataForThisPrepare_ACU = null;
         let workingTableData = sourceTableData;
         try {
-            _seedGuideDataForThisPrepare_ACU = await ensureChatSheetGuideSeeded_ACU({ reason: 'prepare_ai_input_seedrows' });
-            if (_seedGuideDataForThisPrepare_ACU) {
-                if (options?.tableData) {
-                    workingTableData = JSON.parse(JSON.stringify(sourceTableData));
-                    Object.keys(workingTableData).forEach((sheetKey) => {
-                        if (!sheetKey.startsWith('sheet_'))
-                            return;
-                        const table = workingTableData[sheetKey];
-                        if (!table || typeof table !== 'object')
-                            return;
-                        const existing = table?.seedRows;
-                        if (Array.isArray(existing) && existing.length > 0)
-                            return;
-                        const seedRows = _seedGuideDataForThisPrepare_ACU?.[sheetKey]?.seedRows;
-                        if (Array.isArray(seedRows) && seedRows.length > 0) {
-                            table.seedRows = JSON.parse(JSON.stringify(seedRows));
-                        }
-                    });
-                }
-                else {
-                    attachSeedRowsToCurrentDataFromGuide_ACU(_seedGuideDataForThisPrepare_ACU);
+            if (!sqlMode) {
+                _seedGuideDataForThisPrepare_ACU = await ensureChatSheetGuideSeeded_ACU({ reason: 'prepare_ai_input_seedrows' });
+                if (_seedGuideDataForThisPrepare_ACU) {
+                    if (options?.tableData) {
+                        workingTableData = JSON.parse(JSON.stringify(sourceTableData));
+                        Object.keys(workingTableData).forEach((sheetKey) => {
+                            if (!sheetKey.startsWith('sheet_'))
+                                return;
+                            const table = workingTableData[sheetKey];
+                            if (!table || typeof table !== 'object')
+                                return;
+                            const existing = table?.seedRows;
+                            if (Array.isArray(existing) && existing.length > 0)
+                                return;
+                            const seedRows = _seedGuideDataForThisPrepare_ACU?.[sheetKey]?.seedRows;
+                            if (Array.isArray(seedRows) && seedRows.length > 0) {
+                                table.seedRows = JSON.parse(JSON.stringify(seedRows));
+                            }
+                        });
+                    }
+                    else {
+                        attachSeedRowsToCurrentDataFromGuide_ACU(_seedGuideDataForThisPrepare_ACU);
+                    }
                 }
             }
         }
@@ -15040,13 +15062,13 @@ $CONTENT
             if (!shouldShowData) {
                 return;
             }
-            // SQLite 模式：输出 DDL + 注释数据格式
-            if (isSqliteMode() && table.sourceData?.ddl) {
-                tableDataText += formatTableForSqliteMode(table, tableIndex, sheetKey, _seedGuideDataForThisPrepare_ACU);
+            // SQLite 模式：输出 DDL + 注释数据格式；数据只来自运行时 DB，不再从模板 seedRows 兜底。
+            if (sqlMode && table.sourceData?.ddl) {
+                tableDataText += formatTableForSqliteMode(table, tableIndex, sheetKey, _seedGuideDataForThisPrepare_ACU, { allowSeedRowsFallback: false });
                 return;
             }
             const allRows = table.content.slice(1);
-            const seedRows = getEffectiveSeedRowsForSheet_ACU(sheetKey, { guideData: _seedGuideDataForThisPrepare_ACU, allowTemplateFallback: true });
+            const seedRows = sqlMode ? [] : getEffectiveSeedRowsForSheet_ACU(sheetKey, { guideData: _seedGuideDataForThisPrepare_ACU, allowTemplateFallback: true });
             try {
                 if ((!Array.isArray(table.seedRows) || table.seedRows.length === 0) && Array.isArray(seedRows) && seedRows.length > 0) {
                     table.seedRows = JSON.parse(JSON.stringify(seedRows));
@@ -15157,9 +15179,10 @@ $CONTENT
      * SQLite 模式下的表格格式化
      * 输出 DDL + Note/Trigger 注释 + 当前数据（注释格式）
      */
-    function formatTableForSqliteMode(table, tableIndex, sheetKey, guideData) {
+    function formatTableForSqliteMode(table, tableIndex, sheetKey, guideData, options = {}) {
         let text = '';
         const ddl = table.sourceData.ddl;
+        const allowSeedRowsFallback = options.allowSeedRowsFallback !== false;
         // 输出 DDL
         text += ddl.trim() + '\n';
         // 输出 Note 和 Trigger（作为 SQL 注释）
@@ -15175,7 +15198,7 @@ $CONTENT
         }
         // 获取有效数据行
         const allRows = table.content.slice(1);
-        const seedRows = getEffectiveSeedRowsForSheet_ACU(sheetKey, { guideData, allowTemplateFallback: true });
+        const seedRows = allowSeedRowsFallback ? getEffectiveSeedRowsForSheet_ACU(sheetKey, { guideData, allowTemplateFallback: true }) : [];
         const isUsingSeedRows = (allRows.length === 0 && seedRows.length > 0);
         const effectiveAllRows = (allRows.length > 0) ? allRows : (seedRows.length > 0 ? seedRows : []);
         if (effectiveAllRows.length === 0) {
