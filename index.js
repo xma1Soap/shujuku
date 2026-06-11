@@ -8338,12 +8338,31 @@ $CONTENT
         }
         return count;
     }
-    function findLatestAiMessage_ACU(chat) {
-        for (let i = chat.length - 1; i >= 0; i -= 1) {
-            if (chat[i] && !chat[i].is_user)
-                return { message: chat[i], index: i };
+    function normalizeSkipUpdateFloors_ACU(value) {
+        const num = Number(value);
+        return Number.isFinite(num) && num > 0 ? Math.trunc(num) : 0;
+    }
+    function resolveMigrationSkipUpdateFloors_ACU(data, inheritedSkip) {
+        let maxSkip = normalizeSkipUpdateFloors_ACU(inheritedSkip);
+        for (const sheetKey of sheetKeysOfData_ACU(data)) {
+            const rawSkip = data?.[sheetKey]?.updateConfig?.skipFloors;
+            if (Number.isFinite(rawSkip) && rawSkip >= 0) {
+                maxSkip = Math.max(maxSkip, normalizeSkipUpdateFloors_ACU(rawSkip));
+            }
         }
-        return null;
+        return maxSkip;
+    }
+    function findMigrationTargetAiMessage_ACU(chat, skipUpdateFloors) {
+        const aiMessages = [];
+        for (let i = 0; i < chat.length; i += 1) {
+            if (chat[i] && !chat[i].is_user)
+                aiMessages.push({ message: chat[i], index: i });
+        }
+        if (aiMessages.length === 0)
+            return null;
+        const normalizedSkip = normalizeSkipUpdateFloors_ACU(skipUpdateFloors);
+        const targetAiIndex = Math.max(0, aiMessages.length - 1 - normalizedSkip);
+        return aiMessages[targetAiIndex];
     }
     function noteFilled_ACU(summary, sheetKey, aiFloor) {
         if (!summary[sheetKey])
@@ -8381,14 +8400,17 @@ $CONTENT
             dataKeys.forEach(sheetKey => noteFilledAndChanged_ACU(summary, sheetKey, aiFloor));
         }
     }
-    function collectLegacyScheduleSummaryForMigration_ACU(chat, isolationKey, isolationConfig, data) {
+    function collectLegacyScheduleSummaryForMigration_ACU(chat, isolationKey, isolationConfig, data, options = {}) {
         if (!Array.isArray(chat) || chat.length === 0)
             return {};
         const allowedSheetKeys = new Set(sheetKeysOfData_ACU(data));
         if (allowedSheetKeys.size === 0)
             return {};
+        const maxMessageIndex = Number.isInteger(options.maxMessageIndex)
+            ? Math.max(0, Math.min(chat.length - 1, options.maxMessageIndex))
+            : chat.length - 1;
         const summary = {};
-        for (let i = 0; i < chat.length; i += 1) {
+        for (let i = 0; i <= maxMessageIndex; i += 1) {
             const message = chat[i];
             if (!message || message.is_user)
                 continue;
@@ -8466,12 +8488,13 @@ $CONTENT
         if (strategy.mode !== 'legacy-v1') {
             return { migrated: false };
         }
-        const target = findLatestAiMessage_ACU(chat);
+        const skipUpdateFloors = resolveMigrationSkipUpdateFloors_ACU(options.data, options.skipUpdateFloors);
+        const target = findMigrationTargetAiMessage_ACU(chat, skipUpdateFloors);
         if (!target) {
             return { migrated: false, error: 'no AI message found for legacy migration' };
         }
         const existingTargetTagData = readIsolatedTagData_ACU(target.message, options.isolationKey);
-        const scheduleSummary = collectLegacyScheduleSummaryForMigration_ACU(chat, options.isolationKey, options.isolationConfig, options.data);
+        const scheduleSummary = collectLegacyScheduleSummaryForMigration_ACU(chat, options.isolationKey, options.isolationConfig, options.data, { maxMessageIndex: target.index });
         const revision = buildMigrationRevision_ACU();
         const frame = {
             version: 2,
@@ -8495,7 +8518,7 @@ $CONTENT
         target.message.TavernDB_ACU_IsolatedData = isolatedData;
         cleanupLegacyFieldsAfterV2Write_ACU(chat, options.isolationKey, options.isolationConfig);
         await saveChatToHost_ACU();
-        logDebug_ACU(`[V2 Migration] legacy-v1 migrated to V2 checkpoint: messageIndex=${target.index}, isolationKey=[${options.isolationKey || '无标签'}], sheets=${sheetKeys.length}`);
+        logDebug_ACU(`[V2 Migration] legacy-v1 migrated to V2 checkpoint: messageIndex=${target.index}, skipUpdateFloors=${skipUpdateFloors}, isolationKey=[${options.isolationKey || '无标签'}], sheets=${sheetKeys.length}`);
         return { migrated: true, messageIndex: target.index };
     }
 
@@ -8525,6 +8548,7 @@ $CONTENT
             data: mergedLegacyData,
             isolationKey,
             isolationConfig,
+            skipUpdateFloors: settings_ACU.skipUpdateFloors,
         });
         if (!migrationResult.migrated) {
             return { success: false, error: `旧存储迁移到 V2 失败: ${migrationResult.error || '未执行迁移'}` };
@@ -11220,6 +11244,7 @@ $CONTENT
                     enabled: settings_ACU.dataIsolationEnabled,
                     code: settings_ACU.dataIsolationCode,
                 },
+                skipUpdateFloors: settings_ACU.skipUpdateFloors,
             });
             if (!migrationResult.migrated) {
                 throw new Error(`旧存储迁移到 V2 失败: ${migrationResult.error || '未执行迁移'}`);
