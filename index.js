@@ -84446,7 +84446,7 @@ Expected function or array of functions, received type ${typeof value}.`
             if (coveredCheckpoints.length !== checkpoints.length)
                 return '';
             const coveredFloors = coveredCheckpoints.map(item => `AI 第 ${item.aiFloor} 层`).join('、');
-            return `危险：当前聊天的所有 full checkpoint 都在本次重填范围内（${coveredFloors}）。继续重填将导致重填起点前没有可回放 checkpoint，选中表可能从空白结构开始重填，是否是预期行为？`;
+            return `危险：当前聊天的所有 full checkpoint 都在即将执行的重填范围内（${coveredFloors}）。确认执行后，重填起点前将没有可回放 checkpoint，选中表可能从空白结构开始重填，是否是预期行为？`;
         });
         const vectorIndexWarning = computed(() => {
             void refreshTick.value;
@@ -84597,8 +84597,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-form-fill-page[data-v-96a7f98d] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-form-fill-page__grid[data-v-96a7f98d] {\n  grid-template-areas:\n    \"status update\"\n    \"manual template\"\n    \"manual template\";\n}\n.acu-v2-form-fill-page__panel--status[data-v-96a7f98d] {\n  grid-area: status;\n}\n.acu-v2-form-fill-page__panel--update[data-v-96a7f98d] {\n  grid-area: update;\n}\n.acu-v2-form-fill-page__panel--template[data-v-96a7f98d] {\n  grid-area: template;\n}\n.acu-v2-form-fill-page__panel--manual[data-v-96a7f98d] {\n  grid-area: manual;\n}\n.acu-v2-form-fill-page__manual-number-grid[data-v-96a7f98d] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-v2-form-fill-page__status-line[data-v-96a7f98d] {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-v2-form-fill-page__status-chat[data-v-96a7f98d] {\n  max-width: min(42ch, 100%);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-form-fill-page__checkpoint-label[data-v-96a7f98d] {\n  color: var(--acu-accent);\n}\n.acu-v2-form-fill-page__manual-extra[data-v-96a7f98d] {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.acu-v2-form-fill-page__checkpoint-risk[data-v-96a7f98d] {\n  color: var(--acu-danger);\n  font-weight: 700;\n}\n.acu-v2-form-fill-page__table-wrap[data-v-96a7f98d] {\n  min-width: 0;\n  overflow: auto;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-v2-form-fill-page__status-table[data-v-96a7f98d] {\n  width: 100%;\n  border-collapse: collapse;\n  min-width: 560px;\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-form-fill-page__status-table th[data-v-96a7f98d],\n.acu-v2-form-fill-page__status-table td[data-v-96a7f98d] {\n  padding: 8px 10px;\n  border-bottom: 1px solid var(--acu-border-2);\n  text-align: left;\n}\n.acu-v2-form-fill-page__status-table th[data-v-96a7f98d] {\n  color: var(--acu-text-3);\n  font-weight: 600;\n  background: var(--acu-bg-1);\n}\n.acu-v2-form-fill-page__status-table td[data-v-96a7f98d] {\n  color: var(--acu-text-2);\n}\n.acu-v2-form-fill-page__status-table tr:last-child td[data-v-96a7f98d] {\n  border-bottom: 0;\n}\n.acu-v2-form-fill-page__status-row--ready td[data-v-96a7f98d] {\n  color: var(--acu-text-1);\n}\n.acu-v2-form-fill-page__empty[data-v-96a7f98d] {\n  text-align: center !important;\n  color: var(--acu-text-3) !important;\n}\n.acu-v2-form-fill-page__actions[data-v-96a7f98d] {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-form-fill-page[data-v-96a7f98d] {\n    padding: 14px;\n}\n.acu-v2-form-fill-page__grid[data-v-96a7f98d] {\n    grid-template-areas:\n      \"status\"\n      \"update\"\n      \"manual\"\n      \"template\";\n}\n.acu-v2-form-fill-page__manual-number-grid[data-v-96a7f98d] {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/FormFillPage.vue#style-0-96a7f98d");
-    var FormFillPage_vue_vue_type_style_index_0_scoped_96a7f98d_lang = null;
+    injectSfcStyle("\n.acu-v2-form-fill-page[data-v-38a4f8a8] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-form-fill-page__grid[data-v-38a4f8a8] {\n  grid-template-areas:\n    \"status update\"\n    \"manual template\"\n    \"manual template\";\n}\n.acu-v2-form-fill-page__panel--status[data-v-38a4f8a8] {\n  grid-area: status;\n}\n.acu-v2-form-fill-page__panel--update[data-v-38a4f8a8] {\n  grid-area: update;\n}\n.acu-v2-form-fill-page__panel--template[data-v-38a4f8a8] {\n  grid-area: template;\n}\n.acu-v2-form-fill-page__panel--manual[data-v-38a4f8a8] {\n  grid-area: manual;\n}\n.acu-v2-form-fill-page__manual-number-grid[data-v-38a4f8a8] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-v2-form-fill-page__status-line[data-v-38a4f8a8] {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-v2-form-fill-page__status-chat[data-v-38a4f8a8] {\n  max-width: min(42ch, 100%);\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-v2-form-fill-page__checkpoint-label[data-v-38a4f8a8] {\n  color: var(--acu-accent);\n}\n.acu-v2-form-fill-page__manual-extra[data-v-38a4f8a8] {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.acu-v2-form-fill-page__checkpoint-risk[data-v-38a4f8a8] {\n  color: var(--acu-danger);\n  font-weight: 700;\n}\n.acu-v2-form-fill-page__table-wrap[data-v-38a4f8a8] {\n  min-width: 0;\n  overflow: auto;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-v2-form-fill-page__status-table[data-v-38a4f8a8] {\n  width: 100%;\n  border-collapse: collapse;\n  min-width: 560px;\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-form-fill-page__status-table th[data-v-38a4f8a8],\n.acu-v2-form-fill-page__status-table td[data-v-38a4f8a8] {\n  padding: 8px 10px;\n  border-bottom: 1px solid var(--acu-border-2);\n  text-align: left;\n}\n.acu-v2-form-fill-page__status-table th[data-v-38a4f8a8] {\n  color: var(--acu-text-3);\n  font-weight: 600;\n  background: var(--acu-bg-1);\n}\n.acu-v2-form-fill-page__status-table td[data-v-38a4f8a8] {\n  color: var(--acu-text-2);\n}\n.acu-v2-form-fill-page__status-table tr:last-child td[data-v-38a4f8a8] {\n  border-bottom: 0;\n}\n.acu-v2-form-fill-page__status-row--ready td[data-v-38a4f8a8] {\n  color: var(--acu-text-1);\n}\n.acu-v2-form-fill-page__empty[data-v-38a4f8a8] {\n  text-align: center !important;\n  color: var(--acu-text-3) !important;\n}\n.acu-v2-form-fill-page__actions[data-v-38a4f8a8] {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-form-fill-page[data-v-38a4f8a8] {\n    padding: 14px;\n}\n.acu-v2-form-fill-page__grid[data-v-38a4f8a8] {\n    grid-template-areas:\n      \"status\"\n      \"update\"\n      \"manual\"\n      \"template\";\n}\n.acu-v2-form-fill-page__manual-number-grid[data-v-38a4f8a8] {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/pages/FormFillPage.vue#style-0-38a4f8a8");
+    var FormFillPage_vue_vue_type_style_index_0_scoped_38a4f8a8_lang = null;
 
     const _hoisted_1$u = { class: "acu-v2-form-fill-page" };
     const _hoisted_2$o = ["title"];
@@ -84665,26 +84665,14 @@ Expected function or array of functions, received type ${typeof value}.`
     					}),
     					createVNode($setup["AcuMessage"], { kind: "info" }, {
     						default: withCtx(() => [createTextVNode(
-    							" 本次重填范围：" + toDisplayString($setup.manualUpdate.manualRefillRangeLabel.value) + "。 ",
+    							" 按当前手动填表设置，预计处理范围：" + toDisplayString($setup.manualUpdate.manualRefillRangeLabel.value) + "。 ",
     							1
     							/* TEXT */
     						)]),
     						_: 1
     					}),
-    					$setup.manualUpdate.checkpointRiskMessage.value ? (openBlock(), createBlock($setup["AcuMessage"], {
-    						key: 0,
-    						kind: "error",
-    						class: "acu-v2-form-fill-page__checkpoint-risk"
-    					}, {
-    						default: withCtx(() => [createTextVNode(
-    							toDisplayString($setup.manualUpdate.checkpointRiskMessage.value),
-    							1
-    							/* TEXT */
-    						)]),
-    						_: 1
-    					})) : createCommentVNode("v-if", true),
     					!$setup.dashboard.hasTables.value ? (openBlock(), createBlock($setup["AcuMessage"], {
-    						key: 1,
+    						key: 0,
     						kind: "info"
     					}, {
     						default: withCtx(() => [..._cache[7] || (_cache[7] = [createTextVNode(
@@ -84824,24 +84812,12 @@ Expected function or array of functions, received type ${typeof value}.`
     					})]),
     					createVNode($setup["AcuMessage"], { kind: "info" }, {
     						default: withCtx(() => [createTextVNode(
-    							" 当前 full checkpoint：" + toDisplayString($setup.manualUpdate.checkpointFloorsLabel.value) + "；本次重填范围：" + toDisplayString($setup.manualUpdate.manualRefillRangeLabel.value) + "。 ",
+    							" 当前 full checkpoint：" + toDisplayString($setup.manualUpdate.checkpointFloorsLabel.value) + "；按当前设置预计处理范围：" + toDisplayString($setup.manualUpdate.manualRefillRangeLabel.value) + "。 ",
     							1
     							/* TEXT */
     						)]),
     						_: 1
     					}),
-    					$setup.manualUpdate.checkpointRiskMessage.value ? (openBlock(), createBlock($setup["AcuMessage"], {
-    						key: 0,
-    						kind: "error",
-    						class: "acu-v2-form-fill-page__checkpoint-risk"
-    					}, {
-    						default: withCtx(() => [createTextVNode(
-    							toDisplayString($setup.manualUpdate.checkpointRiskMessage.value),
-    							1
-    							/* TEXT */
-    						)]),
-    						_: 1
-    					})) : createCommentVNode("v-if", true),
     					createVNode($setup["TableSelector"], {
     						"sheet-keys": $setup.manualUpdate.sheetKeys.value,
     						"selected-keys": $setup.manualUpdate.selectedManualTableKeys.value,
@@ -84870,7 +84846,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						_: 1
     					})]),
     					$setup.manualUpdate.vectorIndexWarning.value ? (openBlock(), createBlock($setup["AcuMessage"], {
-    						key: 1,
+    						key: 0,
     						kind: "warning"
     					}, {
     						default: withCtx(() => [..._cache[11] || (_cache[11] = [createTextVNode(
@@ -84899,7 +84875,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	})]);
     }
-    var FormFillPage = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$u], ["__scopeId", "data-v-96a7f98d"]]);
+    var FormFillPage = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$u], ["__scopeId", "data-v-38a4f8a8"]]);
 
     var _sfc_main$t = /*@__PURE__*/ defineComponent({
         __name: 'FormFillPromptDrawer',
