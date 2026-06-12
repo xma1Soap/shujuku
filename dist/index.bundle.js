@@ -76339,7 +76339,8 @@ Expected function or array of functions, received type ${typeof value}.`
             description: { default: undefined },
             descriptionTone: { default: 'info' }
         },
-        setup(__props, { expose: __expose }) {
+        emits: ["description-toggle"],
+        setup(__props, { expose: __expose, emit: __emit }) {
             __expose();
             const props = __props;
             const slots = useSlots();
@@ -76351,8 +76352,10 @@ Expected function or array of functions, received type ${typeof value}.`
                 collapsedTransform: 'none',
                 expandedTransform: 'none',
             });
+            const emit = __emit;
             function toggleDescription() {
                 descriptionOpen.value = !descriptionOpen.value;
+                emit('description-toggle', descriptionOpen.value);
             }
             function beforeDescriptionEnter(el) {
                 descriptionTransition.beforeEnter(el);
@@ -76375,14 +76378,14 @@ Expected function or array of functions, received type ${typeof value}.`
             function cleanupDescriptionTransition(el) {
                 descriptionTransition.cleanupTransition(el);
             }
-            const __returned__ = { props, slots, descriptionOpen, descriptionId, hasDescriptionSlot, hasDescription, descriptionTransition, toggleDescription, beforeDescriptionEnter, descriptionEnter, afterDescriptionEnter, beforeDescriptionLeave, descriptionLeave, afterDescriptionLeave, cleanupDescriptionTransition, AcuIconButton, AcuInfoBanner };
+            const __returned__ = { props, slots, descriptionOpen, descriptionId, hasDescriptionSlot, hasDescription, descriptionTransition, emit, toggleDescription, beforeDescriptionEnter, descriptionEnter, afterDescriptionEnter, beforeDescriptionLeave, descriptionLeave, afterDescriptionLeave, cleanupDescriptionTransition, AcuIconButton, AcuInfoBanner };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-panel[data-v-79a060ff] {\n  min-width: 0; padding: 16px;\n  background: var(--acu-bg-1);\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  display: flex; flex-direction: column; gap: 0;\n  height: 100%;\n}\n.acu-panel__header[data-v-79a060ff] {\n  display: flex; align-items: center; justify-content: space-between;\n  gap: 12px; margin-bottom: 12px;\n  min-height: 32px;\n  transition: margin-bottom 0.15s ease;\n}\n.acu-panel__header--description-open[data-v-79a060ff] {\n  margin-bottom: 8px;\n}\n.acu-panel__title[data-v-79a060ff] {\n  margin: 0;\n  min-width: 0;\n  flex: 1 1 auto;\n  font-size: var(--acu-font-size-panel-title, 15px);\n  line-height: 1.3;\n  color: var(--acu-text-1);\n}\n.acu-panel__header-right[data-v-79a060ff] {\n  margin-left: auto;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-shrink: 0;\n}\n.acu-panel__actions[data-v-79a060ff] { display: flex; align-items: center; gap: 8px; flex-shrink: 0;\n}\n.acu-panel__description-button[data-v-79a060ff] {\n  width: 28px;\n  height: 28px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: var(--acu-text-3);\n  cursor: pointer;\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;\n}\n.acu-panel__description-button[data-v-79a060ff]:hover {\n  background: var(--acu-bg-2);\n  color: var(--acu-text-1);\n}\n.acu-panel__description-button--open[data-v-79a060ff] {\n  background: color-mix(in srgb, var(--acu-text-3) 12%, transparent);\n  color: var(--acu-text-1);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-text-3) 18%, transparent);\n}\n.acu-panel__description-button[data-v-79a060ff]:focus-visible {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-panel__body[data-v-79a060ff] { display: flex; flex-direction: column; gap: 12px; min-width: 0; flex: 1 1 auto;\n}\n.acu-panel__description-region[data-v-79a060ff] {\n  min-width: 0;\n  overflow: hidden;\n}\n.acu-panel__description-region-inner[data-v-79a060ff] {\n  padding-bottom: 12px;\n  overflow: hidden;\n}\n", "src/presentation-v2/components/_lib/AcuPanel.vue#style-0-79a060ff");
-    var AcuPanel_vue_vue_type_style_index_0_scoped_79a060ff_lang = null;
+    injectSfcStyle("\n.acu-panel[data-v-16e35679] {\n  min-width: 0; padding: 16px;\n  background: var(--acu-bg-1);\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  display: flex; flex-direction: column; gap: 0;\n  height: 100%;\n}\n.acu-panel__header[data-v-16e35679] {\n  display: flex; align-items: center; justify-content: space-between;\n  gap: 12px; margin-bottom: 12px;\n  min-height: 32px;\n  transition: margin-bottom 0.15s ease;\n}\n.acu-panel__header--description-open[data-v-16e35679] {\n  margin-bottom: 8px;\n}\n.acu-panel__title[data-v-16e35679] {\n  margin: 0;\n  min-width: 0;\n  flex: 1 1 auto;\n  font-size: var(--acu-font-size-panel-title, 15px);\n  line-height: 1.3;\n  color: var(--acu-text-1);\n}\n.acu-panel__header-right[data-v-16e35679] {\n  margin-left: auto;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-shrink: 0;\n}\n.acu-panel__actions[data-v-16e35679] { display: flex; align-items: center; gap: 8px; flex-shrink: 0;\n}\n.acu-panel__description-button[data-v-16e35679] {\n  width: 28px;\n  height: 28px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  border: 0;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  color: var(--acu-text-3);\n  cursor: pointer;\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;\n}\n.acu-panel__description-button[data-v-16e35679]:hover {\n  background: var(--acu-bg-2);\n  color: var(--acu-text-1);\n}\n.acu-panel__description-button--open[data-v-16e35679] {\n  background: color-mix(in srgb, var(--acu-text-3) 12%, transparent);\n  color: var(--acu-text-1);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-text-3) 18%, transparent);\n}\n.acu-panel__description-button[data-v-16e35679]:focus-visible {\n  outline: none;\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-panel__body[data-v-16e35679] { display: flex; flex-direction: column; gap: 12px; min-width: 0; flex: 1 1 auto;\n}\n.acu-panel__description-region[data-v-16e35679] {\n  min-width: 0;\n  overflow: hidden;\n}\n.acu-panel__description-region-inner[data-v-16e35679] {\n  padding-bottom: 12px;\n  overflow: hidden;\n}\n", "src/presentation-v2/components/_lib/AcuPanel.vue#style-0-16e35679");
+    var AcuPanel_vue_vue_type_style_index_0_scoped_16e35679_lang = null;
 
     const _hoisted_1$T = { class: "acu-panel" };
     const _hoisted_2$L = {
@@ -76463,7 +76466,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		createBaseVNode("div", _hoisted_7$k, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])
     	]);
     }
-    var AcuPanel = /* @__PURE__ */ _export_sfc(_sfc_main$V, [["render", _sfc_render$V], ["__scopeId", "data-v-79a060ff"]]);
+    var AcuPanel = /* @__PURE__ */ _export_sfc(_sfc_main$V, [["render", _sfc_render$V], ["__scopeId", "data-v-16e35679"]]);
 
     var _sfc_main$U = /*@__PURE__*/ defineComponent({
         __name: 'AcuTextarea',
@@ -78538,7 +78541,7 @@ Expected function or array of functions, received type ${typeof value}.`
             },
             checkpoint: {
                 title: "Checkpoint 设置",
-                description: "查看 checkpoint 后的增量状态，并调整自动生成 full checkpoint 的阈值。",
+                description: "查看 checkpoint 后的增量状态，用于判断是否接近自动生成 full checkpoint。",
             },
             filter: {
                 title: "标签筛选",
@@ -84263,6 +84266,8 @@ Expected function or array of functions, received type ${typeof value}.`
     }
     var DashboardPage = /* @__PURE__ */ _export_sfc(_sfc_main$x, [["render", _sfc_render$x], ["__scopeId", "data-v-35bbca43"]]);
 
+    const UNLOCK_CLICK_COUNT_ACU = 5;
+    const UNLOCK_CLICK_INTERVAL_MS_ACU = 2000;
     var _sfc_main$w = /*@__PURE__*/ defineComponent({
         __name: 'FormFillCheckpointSettingsPanel',
         setup(__props, { expose: __expose }) {
@@ -84276,6 +84281,9 @@ Expected function or array of functions, received type ${typeof value}.`
             ]);
             const settings = useFormFillSettings();
             const refreshTick = ref(0);
+            const checkpointSettingsUnlocked = ref(false);
+            const descriptionClickCount = ref(0);
+            const lastDescriptionClickAt = ref(0);
             const checkpointFields = computed(() => settings.numberFields.value.filter((field) => checkpointFieldKeys.has(field.key)));
             const checkpointSettingsFingerprint = computed(() => checkpointFields.value.map((field) => `${field.key}:${field.value}`).join("|"));
             const status = computed(() => {
@@ -84307,28 +84315,44 @@ Expected function or array of functions, received type ${typeof value}.`
                 settings.setNumber(key, value);
                 refreshTick.value++;
             }
+            function handleDescriptionToggle(_open) {
+                if (checkpointSettingsUnlocked.value)
+                    return;
+                const now = Date.now();
+                descriptionClickCount.value = now - lastDescriptionClickAt.value <= UNLOCK_CLICK_INTERVAL_MS_ACU
+                    ? descriptionClickCount.value + 1
+                    : 1;
+                lastDescriptionClickAt.value = now;
+                if (descriptionClickCount.value >= UNLOCK_CLICK_COUNT_ACU) {
+                    checkpointSettingsUnlocked.value = true;
+                }
+            }
             onMounted(refresh);
             watch(useChatChangedTick(), refresh);
-            const __returned__ = { checkpointFieldKeys, settings, refreshTick, checkpointFields, checkpointSettingsFingerprint, status, currentCheckpointLabel, entryCountLabel, cumulativeBytesLabel, cumulativeOperationCountLabel, nextWriteLabel, formatBytes, refresh, setCheckpointNumber, get formFillCopy() { return formFillCopy; }, AcuFormRow, AcuInput, AcuMessage, AcuPanel };
+            const __returned__ = { checkpointFieldKeys, UNLOCK_CLICK_COUNT_ACU, UNLOCK_CLICK_INTERVAL_MS_ACU, settings, refreshTick, checkpointSettingsUnlocked, descriptionClickCount, lastDescriptionClickAt, checkpointFields, checkpointSettingsFingerprint, status, currentCheckpointLabel, entryCountLabel, cumulativeBytesLabel, cumulativeOperationCountLabel, nextWriteLabel, formatBytes, refresh, setCheckpointNumber, handleDescriptionToggle, get formFillCopy() { return formFillCopy; }, AcuFormRow, AcuInput, AcuMessage, AcuPanel };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-form-fill-checkpoint-panel__status-grid[data-v-2938219c] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-form-fill-checkpoint-panel__status-item[data-v-2938219c] {\n  min-width: 0;\n  padding: 10px;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n  border: 1px solid var(--acu-border-2);\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-form-fill-checkpoint-panel__status-item span[data-v-2938219c] {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-form-fill-checkpoint-panel__status-item strong[data-v-2938219c] {\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  font-variant-numeric: tabular-nums;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-form-fill-checkpoint-panel__next-kind[data-v-2938219c] {\n  color: var(--acu-accent);\n}\n.acu-form-fill-checkpoint-panel__next-kind--full[data-v-2938219c] {\n  color: var(--acu-warning);\n}\n.acu-form-fill-checkpoint-panel__settings[data-v-2938219c] {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-form-fill-checkpoint-panel__section-title[data-v-2938219c] {\n  margin: 0;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.4;\n  color: var(--acu-text-1);\n}\n.acu-form-fill-checkpoint-panel__number-grid[data-v-2938219c] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n@media (max-width: 860px) {\n.acu-form-fill-checkpoint-panel__status-grid[data-v-2938219c],\n  .acu-form-fill-checkpoint-panel__number-grid[data-v-2938219c] {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/components/FormFillCheckpointSettingsPanel.vue#style-0-2938219c");
-    var FormFillCheckpointSettingsPanel_vue_vue_type_style_index_0_scoped_2938219c_lang = null;
+    injectSfcStyle("\n.acu-form-fill-checkpoint-panel__status-grid[data-v-b9089874] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-form-fill-checkpoint-panel__status-item[data-v-b9089874] {\n  min-width: 0;\n  padding: 10px;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n  border: 1px solid var(--acu-border-2);\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-form-fill-checkpoint-panel__status-item span[data-v-b9089874] {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-form-fill-checkpoint-panel__status-item strong[data-v-b9089874] {\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  font-variant-numeric: tabular-nums;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-form-fill-checkpoint-panel__next-kind[data-v-b9089874] {\n  color: var(--acu-accent);\n}\n.acu-form-fill-checkpoint-panel__next-kind--full[data-v-b9089874] {\n  color: var(--acu-warning);\n}\n.acu-form-fill-checkpoint-panel__settings[data-v-b9089874] {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-form-fill-checkpoint-panel__section-title[data-v-b9089874] {\n  margin: 0;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.4;\n  color: var(--acu-text-1);\n}\n.acu-form-fill-checkpoint-panel__number-grid[data-v-b9089874] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n@media (max-width: 860px) {\n.acu-form-fill-checkpoint-panel__status-grid[data-v-b9089874],\n  .acu-form-fill-checkpoint-panel__number-grid[data-v-b9089874] {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/components/FormFillCheckpointSettingsPanel.vue#style-0-b9089874");
+    var FormFillCheckpointSettingsPanel_vue_vue_type_style_index_0_scoped_b9089874_lang = null;
 
     const _hoisted_1$w = { class: "acu-form-fill-checkpoint-panel__status-grid" };
     const _hoisted_2$q = { class: "acu-form-fill-checkpoint-panel__status-item" };
     const _hoisted_3$k = { class: "acu-form-fill-checkpoint-panel__status-item" };
     const _hoisted_4$h = { class: "acu-form-fill-checkpoint-panel__status-item" };
     const _hoisted_5$f = { class: "acu-form-fill-checkpoint-panel__status-item" };
-    const _hoisted_6$d = { class: "acu-form-fill-checkpoint-panel__settings" };
+    const _hoisted_6$d = {
+    	key: 0,
+    	class: "acu-form-fill-checkpoint-panel__settings"
+    };
     const _hoisted_7$b = { class: "acu-form-fill-checkpoint-panel__number-grid" };
     function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createBlock($setup["AcuPanel"], {
     		title: $setup.formFillCopy.panels.checkpoint.title,
-    		description: $setup.formFillCopy.panels.checkpoint.description
+    		description: $setup.formFillCopy.panels.checkpoint.description,
+    		onDescriptionToggle: $setup.handleDescriptionToggle
     	}, {
     		default: withCtx(() => [
     			createBaseVNode("div", _hoisted_1$w, [
@@ -84399,7 +84423,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				)]),
     				_: 1
     			}),
-    			createBaseVNode("section", _hoisted_6$d, [_cache[5] || (_cache[5] = createBaseVNode(
+    			$setup.checkpointSettingsUnlocked ? (openBlock(), createElementBlock("section", _hoisted_6$d, [_cache[5] || (_cache[5] = createBaseVNode(
     				"h4",
     				{ class: "acu-form-fill-checkpoint-panel__section-title" },
     				" 自动生成 full checkpoint ",
@@ -84431,12 +84455,12 @@ Expected function or array of functions, received type ${typeof value}.`
     				}),
     				128
     				/* KEYED_FRAGMENT */
-    			))])])
+    			))])])) : createCommentVNode("v-if", true)
     		]),
     		_: 1
     	}, 8, ["title", "description"]);
     }
-    var FormFillCheckpointSettingsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$w, [["render", _sfc_render$w], ["__scopeId", "data-v-2938219c"]]);
+    var FormFillCheckpointSettingsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$w, [["render", _sfc_render$w], ["__scopeId", "data-v-b9089874"]]);
 
     var _sfc_main$v = /*@__PURE__*/ defineComponent({
         __name: 'TableSelector',
