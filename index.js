@@ -271,7 +271,7 @@
             ddl: `CREATE TABLE protagonist_info ( -- 主角信息表
   row_id INTEGER PRIMARY KEY, -- 行号
   char_name TEXT NOT NULL, -- 人物名称
-  gender_age TEXT NOT NULL, -- 性别/年龄
+  gender_age TEXT, -- 性别/年龄
   appearance TEXT, -- 外貌特征
   occupation TEXT, -- 职业/身份
   past_experience TEXT, -- 过往经历
@@ -348,8 +348,8 @@
             ddl: `CREATE TABLE important_characters ( -- 重要角色表
   row_id INTEGER PRIMARY KEY, -- 行号
   name TEXT NOT NULL UNIQUE, -- 姓名
-  gender_age TEXT NOT NULL, -- 性别/年龄
-  brief_intro TEXT CHECK(brief_intro IS NULL OR LENGTH(brief_intro) <= 20), -- 一句话介绍
+  gender_age TEXT, -- 性别/年龄
+  brief_intro TEXT, -- 一句话介绍
   appearance TEXT, -- 外貌特征
   key_items TEXT, -- 持有的重要物品
   is_absent TEXT NOT NULL DEFAULT '否' CHECK(is_absent IN ('是', '否')), -- 是否离场
@@ -508,7 +508,7 @@
   item_name TEXT NOT NULL UNIQUE, -- 物品名称
   quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity > 0), -- 数量
   description TEXT, -- 描述/效果
-  category TEXT NOT NULL -- 类别
+  category TEXT -- 类别
 );`
         },
         content: [
@@ -656,13 +656,13 @@
             initNode: "故事初始化时，插入一条新记录用于记录初始化剧情。",
             deleteNode: "禁止删除。",
             updateNode: "禁止操作。",
-            insertNode: "每轮交互结束后插入一条新记录。\nSQL示例: INSERT INTO chronicle (row_id, time_span, location, chronicle_text, summary, code_index) VALUES ((SELECT MAX(row_id)+1 FROM chronicle), '2024-03-15 14:00~15:00', '王城·中央广场', '本轮纪要内容...', '一句话概括', 'AM0002');",
+            insertNode: "每轮交互结束后插入一条新记录。\n时间跨度格式必须为 YYYY-MM-DD HH:MM ~ YYYY-MM-DD HH:MM。\nSQL示例: INSERT INTO chronicle (row_id, time_span, location, chronicle_text, summary, code_index) VALUES ((SELECT MAX(row_id)+1 FROM chronicle), '2024-03-15 14:00 ~ 2024-03-15 15:00', '王城·中央广场', '本轮纪要内容...', '一句话概括', 'AM0002');",
             ddl: `CREATE TABLE chronicle ( -- 纪要表
   row_id INTEGER PRIMARY KEY, -- 行号
-  time_span TEXT NOT NULL, -- 时间跨度
+  time_span TEXT NOT NULL CHECK(time_span GLOB '????-??-?? ??:?? ~ ????-??-?? ??:??'), -- 时间跨度
   location TEXT NOT NULL, -- 地点
   chronicle_text TEXT NOT NULL, -- 纪要
-  summary TEXT CHECK(summary IS NULL OR LENGTH(summary) <= 40), -- 概览
+  summary TEXT, -- 概览
   code_index TEXT NOT NULL UNIQUE CHECK(code_index GLOB 'AM[0-9][0-9][0-9][0-9]') -- 编码索引
 );`
         },
@@ -822,6 +822,308 @@
     };
 
     /**
+     * romance-overrides.js — 恋爱特化默认表覆盖片段
+     *
+     * 只包含与原默认模板同名的表。
+     * 组装新默认模板时会保留原默认表的 key/uid/orderNo，
+     * 仅用这里的表结构、提示词、导出配置等内容覆盖。
+     */
+    const romanceDefaultSheetOverrides = {
+        "sheet_global_data": {
+            "uid": "sheet_global_data",
+            "name": "全局数据表",
+            "sourceData": {
+                "note": "记录当前主角所在地点及时间相关参数。此表有且仅有一行。\n\n【列定义】\n- 列1: 全局状态 story_state\n- 列2: 当前详细地点 current_location\n- 列3: 当前次要地区 current_minor_region\n- 列4: 当前主要地区 current_major_region\n- 列5: 上轮场景时间 prev_scene_time（初始化时为NULL）\n- 列6: 经过的时间 elapsed_time\n- 列7: 当前时间 cur_time\n- 列8: 是否色色 is_lewd\n- 列8: 聚焦镜头 focus_shot\n- 列9: 镜头计数 - 各部位累计被指定为聚焦镜头的次数，固定格式 `腿部=N,足部=N,性器=N,臀部=N,胸部=N,脸部=N,反差=N`，七个部位顺序固定，用英文逗号分隔\n\n【强制约束】\n全局状态为固定字符串`全局状态`，标题性质。\n\n地点层级从小到大：详细地点 < 次要地区 < 主要地区。\n每个字段只写本级名称，不拼上级前缀。\n√ 当前详细地点填 “御苑”\n× 当前详细地点填 “东京-新宿区-御苑”\n\n时间格式：\nprev_scene_time / cur_time: YYYY-MM-DD HH:MM\nelapsed_time: {数值}{单位}，多单位用空格连。\n单位集合：[纪元,千年,百年,年,月,周,天,小时,分]\n示例：\"3小时20分\" | \"2天\" | \"3年6月\"\n\n时间计算公式：cur_time = prev_scene_time + elapsed_time\n- 初始化时prev_scene_time为NULL，cur_time直接填写初始时间，无需计算\n- 每轮推进时，将上一轮的cur_time赋值给prev_scene_time，然后填写本次的elapsed_time，最后计算得到新的cur_time\n\n【色情模块】\n是否色色: 根据当前剧情判定下一轮是否即将进入色情/性爱内容，字段取值限定 `是` 或 `否`。\n聚焦镜头: 给下一轮的特写指引，规定下一轮剧情应聚焦哪个部位的特写，取值范围 `无 / 腿部 / 足部 / 性器 / 臀部 / 胸部 / 脸部 / 反差` 七选一\n聚焦镜头: \n  - 时序定位：本列写的是【下一轮】要聚焦的部位指引\n  - 七个部位的描写方向：\n    - - 腿部：大腿、小腿的形态、皮肤质感、姿态\n    - - 足部：脚趾、脚踝、足弓、鞋袜的状态\n    - - 性器：阴唇、阴蒂、阴道口、子宫口的形态与状态\n    - - 臀部：臀肉、臀缝、臀部曲线与受力反应\n    - - 胸部：乳房、乳头、乳晕的形态与反应\n    - - 脸部：表情、神态、眼神、嘴唇、潮红等情绪外显\n    - - 反差：角色的清纯/端庄外表与淫荡言行的强烈对比（圣女服下的红痕、制服外漏出的内裤、纯洁笑容下的湿润私处等）\n  - 选择流程（每轮表更新时执行）：\n    - - Step 1：读取镜头计数中7个部位的数值，记最高值为 max\n    - - Step 2：找出\"冷却部位\"——数值 ≤ max - 3 的所有部位\n    - - Step 3：根据下一轮剧情自然流向（即本轮 then/initiative 推到的方向、未解决的线索、即将发生的互动等），预判下一轮可能展开的身体描写方向\n    - - Step 4：若冷却部位非空，必须从冷却部位中选一个最贴合下一轮预判方向的部位作为聚焦镜头；若冷却部位为空，根据下一轮预判方向自由选择最贴合的部位\n    - - Step 5：将选中部位的计数 +1，重新拼接 `腿部=N,足部=N,...` 写入镜头计数",
+                "initNode": "故事初始化时，插入唯一条目，记录用户开局初始时间与初始地点。禁止直接照搬示例中的地点和日期。\n聚焦镜头根据开场白下一轮确定。\n\nSQL示例: INSERT INTO global_state (row_id, story_state, current_location, current_minor_region, current_major_region, prev_scene_time, elapsed_time, cur_time, is_lewd, focus_shot, shot_counter)\nVALUES (1, '全局状态', '御苑', '新宿区', '东京都', NULL, '0分', '2026-02-03 09:00', '否', '无', '腿部=0,足部=0,性器=0,臀部=0,胸部=0,脸部=0,反差=0');",
+                "deleteNode": "禁止。",
+                "updateNode": "每轮推进时更新 prev_scene_time、elapsed_time 和 cur_time；若地点变动则同步更新三级地点字段。\n\n【更新约束】\n所有字段均 NOT NULL，不可写 NULL 或空串。\n根据当前剧情判定当前是否即将色情/性爱内容，字段取值限定 `是` 或 `否`。\n\n【更新SQL示例（同日+跨日+位置变动综合覆盖）】\nSQL示例(同日推进): UPDATE global_state SET prev_scene_time = '2026-02-03 09:00', elapsed_time = '3 小时 ', cur_time = '2026-02-03 12:00' WHERE row_id = 1;\n\nSQL示例(跨日推进): UPDATE global_state SET prev_scene_time = '2026-02-03 23:55', elapsed_time = '20 分 ', cur_time = '2026-02-04 00:15' WHERE row_id = 1;\n\nSQL示例(含位置变动): UPDATE global_state SET current_location = ' 新宿车站 ', current_minor_region = ' 新宿区 ', current_major_region = ' 东京都 ', prev_scene_time = '2026-02-03 12:00', elapsed_time = '30 分 ', cur_time = '2026-02-03 12:30' WHERE row_id = 1;",
+                "insertNode": "禁止。",
+                "ddl": "CREATE TABLE global_state ( -- 全局数据表\n  row_id INTEGER PRIMARY KEY, -- 行号\n  story_state TEXT NOT NULL CHECK(story_state = '全局状态'), -- 全局状态\n  current_location TEXT NOT NULL, -- 当前详细地点\n  current_minor_region TEXT NOT NULL, -- 当前次要地区\n  current_major_region TEXT NOT NULL, -- 当前主要地区\n  prev_scene_time TEXT CHECK(prev_scene_time IS NULL OR prev_scene_time GLOB '????-??-?? ??:??'), -- 上轮场景时间\n  elapsed_time TEXT NOT NULL, -- 经过的时间\n  cur_time TEXT NOT NULL CHECK(cur_time GLOB '????-??-?? ??:??'), -- 当前时间\n  is_lewd TEXT NOT NULL DEFAULT '否' CHECK(is_lewd IN ('是', '否')), -- 是否色色\n  focus_shot TEXT NOT NULL DEFAULT '无' CHECK(focus_shot IN ('无', '腿部', '足部', '性器', '臀部', '胸部', '脸部', '反差')), -- 聚焦镜头\n  shot_counter TEXT NOT NULL -- 镜头计数\n);"
+            },
+            "content": [
+                [
+                    "row_id",
+                    "全局状态",
+                    "当前详细地点",
+                    "当前次要地区",
+                    "当前主要地区",
+                    "上轮场景时间",
+                    "经过的时间",
+                    "当前时间",
+                    "是否色色",
+                    "聚焦镜头",
+                    "镜头计数"
+                ]
+            ],
+            "updateConfig": {
+                "uiSentinel": -1,
+                "contextDepth": -1,
+                "updateFrequency": -1,
+                "batchSize": -1,
+                "skipFloors": -1,
+                "groupId": -1
+            },
+            "exportConfig": {
+                "enabled": false,
+                "splitByRow": false,
+                "entryName": "全局数据表",
+                "entryType": "constant",
+                "keywords": "",
+                "preventRecursion": true,
+                "injectionTemplate": "",
+                "extraIndexEnabled": false,
+                "extraIndexEntryName": "全局数据表-索引",
+                "extraIndexColumns": [],
+                "extraIndexColumnModes": {},
+                "extraIndexInjectionTemplate": "",
+                "entryPlacement": {
+                    "position": "at_depth_as_system",
+                    "depth": 2,
+                    "order": 10000
+                },
+                "extraIndexPlacement": {
+                    "position": "at_depth_as_system",
+                    "depth": 2,
+                    "order": 10010
+                },
+                "fixedEntryPlacement": {
+                    "position": "before_character_definition",
+                    "depth": 2,
+                    "order": 99981
+                },
+                "fixedIndexPlacement": {
+                    "position": "before_character_definition",
+                    "depth": 2,
+                    "order": 99982
+                }
+            },
+            "orderNo": 0
+        },
+        "sheet_protagonist": {
+            "uid": "sheet_protagonist",
+            "name": "主角信息表",
+            "sourceData": {
+                "note": "记录主角的核心身份信息。此表有且仅有一行。\n\n【列定义】\n- 列1: 姓名 name\n- 列2: 性别 gender\n- 列3: 年龄 age\n- 列4: 外貌特征 appearance（≤60字，含日常穿衣风格，写出整体印象，避免罗列数据）\n- 列5: 身份 identity_text（≤40字，逗号分隔）\n- 列6: 近况 current_condition\n- 列7: 所在地点 location_name\n- 列8: 基础属性 base_attributes\n- 列9: 特有属性 special_attributes（可NULL）\n- 列10: 随身财物 belongings（可NULL）\n\n【强制约束】\n1. 所在地点优先填世界地图点表已有的详细地点，只写地点名不带层级前缀。位置变化时同步更新。\n\n2. 近况用一口话描述主角当前的身体感觉、情绪状态或心头惦记的事。\n正常时期填\"一切如常\"，有异常时直接写具体感受，不用标签堆叠。\n√ 昨晚没睡好，脑子有点沉\n√ 刚从雨里跑回来，衣服还湿着\n\n3. 属性相关\n<属性规则>\n基础属性: \"{基础属性}:{数值}\"，数值范围[10,90]\n示例: \"健康:90; 力量:76; 敏捷:42; 理智:44; 观察:84; 魅力:67\"\n\n特有属性: 角色的特殊能力与技能，体现世界观特色与个体差异。\n格式: \"{特有属性}:{数值}\"，数值范围[0,100]\n示例: \"爆裂魔法:85; 时间回溯:70; 超电磁炮:90\"\n\n【属性标尺】\n10-18:能力缺失 | 19-42:弱项 | 43-58:平均 | 59-74:精英 | 75-82:极限 | 83-90:破格。基准: 数值呈指数增长；分布呈长尾状(绝大多数聚集在43-58，83+呈断崖式稀缺)，依角色[身份背景]生成，当前值受[当前状态]修正。如:重伤→10-18; 肾上腺素→75-82\n</属性规则>\n\n\n随身财物：只写当前身上带着的有意义物品，不写游戏化资源。\n√ 钱包里夹着第一次看电影的票根\n√ 口袋里剩两颗橘子糖",
+                "initNode": "故事初始化时，插入主角的唯一条目。",
+                "deleteNode": "禁止。",
+                "updateNode": "已存在的这一行，字段值变化时更新：年龄、外貌、身份、近况、所在地点、基础属性、特有属性、随身财物。所在地点变化时建议同步补录世界地图点表。\n\n【更新SQL示例（近况+位置变化）】\n更新SQL示例(近况变化): UPDATE protagonist_info SET current_condition = '疲劳，左膝擦伤', location_name = '御苑' WHERE row_id = 1;\n\n更新SQL示例(属性变化): UPDATE protagonist_info SET base_attributes = '力量:58;敏捷:60;体质:55;智力:63;感知:62;魅力:56', special_attributes = '爆裂魔法:75' WHERE row_id = 1;\n\n更新SQL示例(随身财物变化): UPDATE protagonist_info SET belongings = '钱包里夹着第一次看电影的票根，口袋里剩两颗橘子糖' WHERE row_id = 1;",
+                "insertNode": "禁止。",
+                "ddl": "CREATE TABLE protagonist_info ( -- 主角信息\n  row_id INTEGER PRIMARY KEY CHECK(row_id = 1), -- 行号，仅允许为 1\n  name TEXT NOT NULL, -- 姓名\n  gender TEXT NOT NULL, -- 性别\n  age INTEGER CHECK(age IS NULL OR age >= 0), -- 年龄\n  appearance TEXT NOT NULL, -- 外貌特征\n  identity_text TEXT NOT NULL, -- 身份\n  current_condition TEXT NOT NULL DEFAULT '一切如常', -- 近况\n  location_name TEXT NOT NULL, -- 所在地点\n  base_attributes TEXT NOT NULL, -- 基础属性\n  special_attributes TEXT, -- 特有属性\n  belongings TEXT -- 随身财物\n);"
+            },
+            "content": [
+                [
+                    "row_id",
+                    "姓名",
+                    "性别",
+                    "年龄",
+                    "外貌特征",
+                    "身份",
+                    "近况",
+                    "所在地点",
+                    "基础属性",
+                    "特有属性",
+                    "随身财物"
+                ]
+            ],
+            "updateConfig": {
+                "uiSentinel": -1,
+                "contextDepth": -1,
+                "updateFrequency": -1,
+                "batchSize": -1,
+                "skipFloors": -1,
+                "groupId": -1
+            },
+            "exportConfig": {
+                "enabled": false,
+                "splitByRow": false,
+                "entryName": "主角信息",
+                "entryType": "constant",
+                "keywords": "",
+                "preventRecursion": true,
+                "injectionTemplate": "",
+                "extraIndexEnabled": false,
+                "extraIndexEntryName": "主角信息-索引",
+                "extraIndexColumns": [],
+                "extraIndexColumnModes": {},
+                "extraIndexInjectionTemplate": "",
+                "entryPlacement": {
+                    "position": "at_depth_as_system",
+                    "depth": 2,
+                    "order": 10000
+                },
+                "extraIndexPlacement": {
+                    "position": "at_depth_as_system",
+                    "depth": 2,
+                    "order": 10010
+                },
+                "fixedEntryPlacement": {
+                    "position": "at_depth_as_system",
+                    "depth": 2,
+                    "order": 99990
+                },
+                "fixedIndexPlacement": {
+                    "position": "at_depth_as_system",
+                    "depth": 2,
+                    "order": 99991
+                }
+            },
+            "orderNo": 2
+        },
+        "sheet_important_non_romance": {
+            "uid": "sheet_important_non_romance",
+            "name": "重要角色表",
+            "sourceData": {
+                "note": "记录所有非恋爱对象、但对当前剧情产生作用的角色。\n\n【列定义】\n- 列1: 姓名 name（全表唯一）\n- 列2: 性别 gender\n- 列3: 年龄 age\n- 列4: 一句话介绍 brief_intro（≤30字）\n- 列5: 外貌特征 appearance（≤60字）\n- 列6: 穿着打扮 outfit_text（≤40字）\n- 列7: 基础属性 base_attributes\n- 列8: 特有属性 special_attributes（可NULL）\n- 列9: 所在地点 location_name\n- 列10: 在场状态 presence_status（在场/离场）\n- 列11: 人际关系 relation_text\n- 列12: 过往经历 past_experience（≤600字）\n- 列13: 交互选项 interaction_options\n\n【强制约束】\nbrief_intro仅允许客观事实类内容，严禁出现任何性格标签概述，如\"开朗\"\"冷漠\"\"温柔\"等；客观内容范畴包括但不限于：角色核心身份、与剧情强相关的客观行为、与关键人物的客观关联、非性格类核心特征。\n√ 经营城南杂货铺 / 曾救过主角的性命 / 艾莉丝的亲生兄长\n× 性格孤僻的杂货铺老板 / 温柔且救过主角 / 偏执的艾莉丝兄长\n\noutfit_text仅写外在可见的服饰、饰品、妆容、持握物等可视元素，禁止写固有的长相特征、气质、气场等非视觉内容。\n√ 深灰立领风衣配黑皮手套 / 左手无名指戴着一枚银色蛇纹戒\n× 散发出高贵的气场、看起来像个军人\n\ninteraction_options必须同时遵循下述要求\n1.不使用第一人称\"我\"\n2.动作发起方为主角，接收方为角色\n3.必须是具体、有代入感的实际行动，避免干瘪的单词\n√ 向他打听失踪案线索 / 假装偶遇并搭话套取信息 / 故意打翻水杯制造冲突\n× 交谈 / 打听\n\n【relation_text 格式规则】（强制）\n1. 格式必须是：角色名:关系描述\n   - 必须显式写出\"角色名:\"前缀，禁止省略角色名直接写关系内容。\n   - 同一角色有多个关系标签/描述时，标签之间用英文逗号 , 分隔。\n   - 不同角色之间用英文分号 ; 分隔。\n   - 关系描述去除人称，使用简短陈述。\n2. 主要记录该角色与主角及其他重要角色之间的客观关联，至少包含与主角的关系。\n   √ 主角:曾帮其修过自行车,旧识\n   √ 主角:认识;艾莉丝:室兼闺蜜\n   √ 主角:校长身份,从未直接交谈;艾莉丝:监护人\n   × 曾帮主角修过自行车                    ← 缺少角色名前缀\n   × 主角:认识;室友兼闺蜜                  ← 第二段缺少角色名\n   × 主角:旧识,艾莉丝:室友                 ← 不同角色错用逗号\n   × 主角:曾帮其修过自行车;旧识            ← 同一角色多标签错用分号\n\n【属性规则】\n<属性规则>\n基础属性: \"{基础属性}:{数值}\"，数值范围[10,90]\n示例: \"健康:90; 力量:76; 敏捷:42; 理智:44; 观察:84; 魅力:67\"\n\n特有属性: 角色的特殊能力与技能，体现世界观特色与个体差异。\n格式: \"{特有属性}:{数值}\"，数值范围[0,100]\n示例: \"爆裂魔法:85; 时间回溯:70; 超电磁炮:90\"\n\n【属性标尺】\n10-18:能力缺失 | 19-42:弱项 | 43-58:平均 | 59-74:精英 | 75-82:极限 | 83-90:破格。基准: 数值呈指数增长；分布呈长尾状(绝大多数聚集在43-58，83+呈断崖式稀缺)，依角色[身份背景]生成，当前值受[当前状态]修正。如:重伤→10-18; 肾上腺素→75-82\n</属性规则>",
+                "initNode": "故事开始时为当前已知的非恋爱重要角色分别插入条目。\n\n【格式约束】\nrelation_text 必须写\"角色名:关系描述\"；同一角色多项描述用英文逗号 , 分隔；不同角色之间用英文分号 ; 分隔。\n\nSQL示例: INSERT INTO important_non_romance (row_id, name, gender, age, brief_intro, appearance, outfit_text, base_attributes, special_attributes, location_name, presence_status, relation_text, past_experience, interaction_options) VALUES ((SELECT COALESCE(MAX(row_id), 0) + 1 FROM important_non_romance), '校长', '男', 60, '学院校长', '白发，手持手杖，目光深邃', '深灰立领风衣配黑皮手套', '力量:40; 敏捷:40; 体质:55; 智力:80; 感知:75; 魅力:70', '预知:60', '校长室', '离场', '主角:曾帮其修过自行车,旧识;艾莉丝:监护人', '据说知晓学院的许多秘密，很少露面。', '向他打听失踪案线索');",
+                "deleteNode": "重要角色转为恋爱对象时，可从本表删除，相关数据迁移到恋爱对象表。已出场但暂时无剧情的角色禁止删除。\nSQL示例(转为恋爱对象):DELETE FROM important_non_romance WHERE name = '艾莉丝';",
+                "updateNode": "已存在的非恋爱重要角色，字段变化时更新。\n\n【格式约束】\nrelation_text 必须写\"角色名:关系描述\"；同一角色多项描述用英文逗号 , 分隔；不同角色之间用英文分号 ; 分隔。\n\nSQL示例(普通字段更新): UPDATE important_non_romance SET presence_status = '离场', interaction_options = '向他打听失踪案线索' WHERE name = '校长';\nSQL示例(单角色多描述): UPDATE important_non_romance SET relation_text = '主角:曾帮其修过自行车,近期开始留意主角动向' WHERE name = '校长';\nSQL示例(多角色关系): UPDATE important_non_romance SET relation_text = '主角:旧识,旧情人;艾莉丝:监护人;神田:旧部下' WHERE name = '校长';",
+                "insertNode": "新非恋爱重要角色登场时新增。\n\n【格式约束】\nrelation_text 必系描述\"；同一角色多项描述用英文逗号 , 分隔；不同角色之间用英文分号 ; 分隔。至少包含与主角的关系。\n\nSQL示例: INSERT INTO important_non_romance (row_id, name, gender, age, brief_intro, appearance, outfit_text, base_attributes, special_attributes, location_name, presence_status, relation_text, past_experience, interaction_options) VALUES ((SELECT COALESCE(MAX(row_id), 0) + 1 FROM important_non_romance), '黑市商人', '男', 45, '经营城南杂货铺', '左眼带有刀疤', '深灰立领风衣配黑皮手套', '力量:50; 敏捷:60; 体质:55; 智力:70; 感知:65; 魅力:40', NULL, '城南杂货铺', '在场', '主角:曾救过其性命,长期供货人', '长期在地下黑市进行交易。', '假装偶遇并搭话套取信息');",
+                "ddl": "CREATE TABLE important_non_romance ( -- 重要角色表\n  row_id INTEGER PRIMARY KEY, -- 行号\n  name TEXT NOT NULL UNIQUE, -- 姓名\n  gender TEXT, -- 性别\n  age INTEGER CHECK(age IS NULL OR age >= 0), -- 年龄\n  brief_intro TEXT NOT NULL, -- 一句话介绍\n  appearance TEXT, -- 外貌特征\n  outfit_text TEXT, -- 穿着打扮\n  base_attributes TEXT, -- 基础属性\n  special_attributes TEXT, -- 特有属性\n  location_name TEXT, -- 所在地点\n  presence_status TEXT NOT NULL DEFAULT '在场' CHECK(presence_status IN ('在场', '离场')), -- 在场状态\n  relation_text TEXT NOT NULL, -- 人际关系\n  past_experience TEXT, -- 过往经历\n  interaction_options TEXT -- 交互选项\n);"
+            },
+            "content": [
+                [
+                    "row_id",
+                    "姓名",
+                    "性别",
+                    "年龄",
+                    "一句话介绍",
+                    "外貌特征",
+                    "穿着打扮",
+                    "基础属性",
+                    "特有属性",
+                    "所在地点",
+                    "在场状态",
+                    "人际关系",
+                    "过往经历",
+                    "交互选项"
+                ]
+            ],
+            "updateConfig": {
+                "uiSentinel": -1,
+                "contextDepth": -1,
+                "updateFrequency": -1,
+                "batchSize": -1,
+                "skipFloors": -1,
+                "groupId": -1
+            },
+            "exportConfig": {
+                "enabled": true,
+                "splitByRow": true,
+                "entryName": "重要角色表",
+                "entryType": "keyword",
+                "keywords": "姓名",
+                "preventRecursion": true,
+                "injectionTemplate": "",
+                "extraIndexEnabled": true,
+                "extraIndexEntryName": "重要角色表-索引",
+                "extraIndexColumns": [
+                    "姓名",
+                    "一句话介绍"
+                ],
+                "extraIndexColumnModes": {
+                    "姓名": "both",
+                    "一句话介绍": "index_only"
+                },
+                "extraIndexInjectionTemplate": "以下为已经登场过的非恋爱重要角色：\n<重要角色索引>\n$1\n</重要角色索引>",
+                "entryPlacement": {
+                    "position": "at_depth_as_system",
+                    "depth": 10000,
+                    "order": 10000
+                },
+                "extraIndexPlacement": {
+                    "position": "at_depth_as_system",
+                    "depth": 10000,
+                    "order": 8010
+                },
+                "fixedEntryPlacement": {
+                    "position": "at_depth_as_system",
+                    "depth": 10000,
+                    "order": 99985
+                },
+                "fixedIndexPlacement": {
+                    "position": "at_depth_as_system",
+                    "depth": 10000,
+                    "order": 99986
+                }
+            },
+            "orderNo": 5
+        },
+        "sheet_summary": {
+            "uid": "sheet_summary",
+            "name": "纪要表",
+            "sourceData": {
+                "note": "轮次日志。每轮交互结束后立刻插入一条新记录。\n\n【列定义】\n- 列1: 编码索引 code_index（AM0001起递增，全表唯一）\n- 列2: 时间跨度 time_span\n- 列3: 概览 summary（≤30字）\n- 列4: 纪要 chronicle_text（240-480字）\n- 列5: 重要对话 key_dialogue（可NULL）\n\n【强制约束】\n1.编码索引格式 AMXXXX，从0001开始递增。\n2.时间跨度格式为 \"YYYY-MM-DD HH:MM ~ YYYY-MM-DD HH:MM\"，覆盖本轮事件的实际时间范围。\n3.概览一句话概括本轮纪要内容，≤30字。\n\n4.纪要规范：\n- 以第三方视角中立客观记录正文发生的一切，移除所有修辞与对话。不滥用环境描写、不进行动作细节分析、不加评论，不抒情，不升华。\n- 用词直白生活化，避免正式措辞（如“达成协议”“确立计划”）。\n- 结尾必须开放，在事件自然流动中结束，不得归纳状态或做出封闭式收束。\n违例：故事仍在继续 / 新的篇章开启 / 二人关系迈入新阶段 / 未来等待着他们。\n- 多轮交互整合为一条记录。\n- 禁止内容：极端情绪（崩溃、狂喜、绝望等）、夸张、比喻、升华、情绪总结、支配欲、掌控欲、总结性收尾。\n\n5.重要对话仅摘录直接推动剧情转折、揭示关键信息、改变人物关系/决策或构成承诺/誓约/约定的原文台词，标明说话人。排除寒暄、重复、情绪感叹。通常3句，最多5句，总token不超过150。",
+                "initNode": "故事初始化时，插入一条新记录用于记录剧情。",
+                "deleteNode": "禁止。",
+                "updateNode": "禁止。",
+                "insertNode": "每轮交互结束后插入一条新记录。\n\n【强制约束】\ncode_index、time_span、summary、chronicle_text 均 NOT NULL，不可写 NULL 或空串。\ntime_span 格式必须为 YYYY-MM-DD HH:MM ~ YYYY-MM-DD HH:MM。\ncode_index 格式必须为 AM0001 这种四位编号，且全表唯一。\n\nSQL示例：INSERT INTO chronicle (row_id, code_index, time_span, summary, chronicle_text, key_dialogue) VALUES ((SELECT COALESCE(MAX(row_id), 0) + 1 FROM chronicle), 'AM0036', '2026-02-04 08:00 ~ 2026-02-04 08:30', '一句话概括', '本轮纪要内容...', NULL);",
+                "ddl": "CREATE TABLE chronicle ( -- 纪要表\n  row_id INTEGER PRIMARY KEY, -- 行号\n  code_index TEXT NOT NULL UNIQUE CHECK(code_index GLOB 'AM[0-9][0-9][0-9][0-9]'), -- 编码索引\n  time_span TEXT NOT NULL CHECK(time_span GLOB '????-??-?? ??:?? ~ ????-??-?? ??:??'), -- 时间跨度\n  summary TEXT NOT NULL, -- 概览\n  chronicle_text TEXT NOT NULL, -- 纪要\n  key_dialogue TEXT -- 重要对话\n);"
+            },
+            "content": [
+                [
+                    "row_id",
+                    "编码索引",
+                    "时间跨度",
+                    "概览",
+                    "纪要",
+                    "重要对话"
+                ]
+            ],
+            "updateConfig": {
+                "uiSentinel": -1,
+                "contextDepth": -1,
+                "updateFrequency": -1,
+                "batchSize": -1,
+                "skipFloors": -1,
+                "groupId": -1
+            },
+            "exportConfig": {
+                "enabled": true,
+                "splitByRow": true,
+                "entryName": "纪要",
+                "entryType": "keyword",
+                "keywords": "编码索引",
+                "preventRecursion": true,
+                "injectionTemplate": "<记忆回溯>\n$1\n</记忆回溯>",
+                "extraIndexEnabled": true,
+                "extraIndexEntryName": "纪要索引",
+                "extraIndexColumns": [
+                    "编码索引",
+                    "时间跨度",
+                    "概览"
+                ],
+                "extraIndexColumnModes": {
+                    "编码索引": "both",
+                    "时间跨度": "both",
+                    "概览": "index_only"
+                },
+                "extraIndexInjectionTemplate": "<已发生的事件概览>\n$1\n</已发生的事件概览>",
+                "entryPlacement": {
+                    "position": "at_depth_as_system",
+                    "depth": 999,
+                    "order": 10000
+                },
+                "extraIndexPlacement": {
+                    "position": "at_depth_as_system",
+                    "depth": 1000,
+                    "order": 10010
+                },
+                "fixedEntryPlacement": {
+                    "position": "at_depth_as_system",
+                    "depth": 9999,
+                    "order": 99987
+                },
+                "fixedIndexPlacement": {
+                    "position": "at_depth_as_system",
+                    "depth": 9999,
+                    "order": 99988
+                }
+            },
+            "orderNo": 10
+        }
+    };
+
+    /**
      * table-defaults/index.js — 默认表模板组装入口
      *
      * 将 8 张表 + mate 元数据组装为消费端期望的双重编码 JSON 字符串。
@@ -830,21 +1132,58 @@
      * 消费端（parseTableTemplateJson_ACU）会先 JSON.parse 去掉外层引号得到内层 JSON 字符串，
      * 再 JSON.parse 得到最终对象。这里的组装逻辑精确复现这个格式。
      */
+    function cloneTableDefault_ACU(value) {
+        return JSON.parse(JSON.stringify(value));
+    }
+    function buildOriginalDefaultTableTemplateObjectInternal_ACU() {
+        return {
+            [globalStateSheet.uid]: cloneTableDefault_ACU(globalStateSheet),
+            [protagonistInfoSheet.uid]: cloneTableDefault_ACU(protagonistInfoSheet),
+            [importantCharsSheet.uid]: cloneTableDefault_ACU(importantCharsSheet),
+            [protagonistSkillsSheet.uid]: cloneTableDefault_ACU(protagonistSkillsSheet),
+            [inventorySheet.uid]: cloneTableDefault_ACU(inventorySheet),
+            [questsEventsSheet.uid]: cloneTableDefault_ACU(questsEventsSheet),
+            [chronicleSheet.uid]: cloneTableDefault_ACU(chronicleSheet),
+            [optionsSheet.uid]: cloneTableDefault_ACU(optionsSheet),
+            mate: cloneTableDefault_ACU(mateConfig)
+        };
+    }
+    function applyRomanceDefaultOverrides_ACU(base) {
+        const overridesByName = new Map(Object.values(romanceDefaultSheetOverrides || {})
+            .filter(sheet => sheet && typeof sheet === 'object' && sheet.name)
+            .map(sheet => [String(sheet.name), sheet]));
+        Object.keys(base).forEach((sheetKey) => {
+            if (sheetKey === 'mate')
+                return;
+            const currentSheet = base[sheetKey];
+            const overrideSheet = overridesByName.get(String(currentSheet?.name || ''));
+            if (!overrideSheet)
+                return;
+            const nextSheet = cloneTableDefault_ACU(overrideSheet);
+            nextSheet.uid = currentSheet.uid || sheetKey;
+            nextSheet.orderNo = currentSheet.orderNo ?? nextSheet.orderNo;
+            base[sheetKey] = nextSheet;
+        });
+        return base;
+    }
     /**
-     * 构建默认表模板对象（普通 JS 对象，未序列化）
+     * 构建原始默认表模板对象（普通 JS 对象，未序列化）。
+     * 该模板保留 8 张原默认表，仅放宽 DDL 约束，供旧用户已保存模板继续使用。
+     */
+    function buildOriginalDefaultTableTemplateObject_ACU() {
+        return buildOriginalDefaultTableTemplateObjectInternal_ACU();
+    }
+    /**
+     * 构建当前默认表模板对象（普通 JS 对象，未序列化）。
+     * 当前默认以原默认 8 张表为基础，同名表使用恋爱特化表内容覆盖，不引入恋爱表新增表。
      */
     function buildDefaultTableTemplateObject_ACU() {
-        return {
-            [globalStateSheet.uid]: globalStateSheet,
-            [protagonistInfoSheet.uid]: protagonistInfoSheet,
-            [importantCharsSheet.uid]: importantCharsSheet,
-            [protagonistSkillsSheet.uid]: protagonistSkillsSheet,
-            [inventorySheet.uid]: inventorySheet,
-            [questsEventsSheet.uid]: questsEventsSheet,
-            [chronicleSheet.uid]: chronicleSheet,
-            [optionsSheet.uid]: optionsSheet,
-            mate: mateConfig
-        };
+        return applyRomanceDefaultOverrides_ACU(buildOriginalDefaultTableTemplateObjectInternal_ACU());
+    }
+    function buildOriginalDefaultTableTemplateString_ACU() {
+        const obj = buildOriginalDefaultTableTemplateObject_ACU();
+        const innerJson = JSON.stringify(obj, null, 2);
+        return JSON.stringify(innerJson);
     }
     /**
      * 构建默认表模板的双重编码 JSON 字符串
@@ -990,8 +1329,211 @@ DELETE FROM table_name WHERE row_id = 2;
         }
         return { ...segment };
     });
+    const ORIGINAL_DEFAULT_TABLE_TEMPLATE_ACU = buildOriginalDefaultTableTemplateString_ACU();
     const DEFAULT_TABLE_TEMPLATE_ACU = buildDefaultTableTemplateString_ACU();
     let TABLE_TEMPLATE_ACU = DEFAULT_TABLE_TEMPLATE_ACU;
+    // --- [剧情推进] 内置预设：时间召回 ---
+    const DEFAULT_TIME_RECALL_PLOT_PRESET_ACU = {
+        "name": "时间召回",
+        "prompts": [
+            {
+                "id": "mainPrompt",
+                "name": "主系统提示词",
+                "role": "system",
+                "content": "",
+                "deletable": false
+            },
+            {
+                "id": "systemPrompt",
+                "name": "拦截任务详细指令",
+                "role": "user",
+                "content": "<task_rules>\nYou select AM from「已发生的事件概览」, group by time, output <match> then <recall>.\n\n==========================================\nHARD CONSTRAINTS\n==========================================\n- AM source: ONLY「已发生的事件概览」. Never invent. Never use AM from USER_INPUT/PREVIOUS_PLOT/背景设定.\n- required_count = min({zhaohui}, total_AM_in_概览). If 概览 empty, required_count=0.\n- <match> count = <recall> count = required_count. Same AM set.\n- Selection by content only. NEVER by time distance, NEVER by AM code order.\n- Time is computed AFTER selection is finalized.\n- Placeholders (X/N/XXXX/XdXhYm/YYYY-MM-DD/HH:MM) MUST be replaced with real computed values. Any residual placeholder = invalid.\n\n==========================================\nSTEP 1: LIST ALL AM (mandatory output)\n==========================================\nFirst output ALL AM codes from 概览, comma separated:\n\n<all_am>\nAM0001, AM0002, AM0003, ...\n</all_am>\n\nThis forces you to see the full set before picking.\nIf 概览 empty → <all_am></all_am>. Never list selected only.\n\n==========================================\nSTEP 2: SELF CHECK (mandatory output)\n==========================================\n<self_check>\ntotal_am=N\nrequired_count=N\nselection_basis=content_only\ntime_computed=after_selection\n</self_check>\nN must be actual numbers.\n\n==========================================\nSTEP 3: SELECT (priority order)\n==========================================\n\nFor each AM, judge link type by CONTENT, not by time:\n\n[REAL LINK] — AM concretely affects current plot:\n- 因果链: cause/result/risk/obstacle/next action\n- 人物关系: trust/betrayal/promise/grudge/tension\n- 共同经历: shared past changes current interaction\n- 物品线索: evidence/clue/identity/anomaly\n- 矛盾挑战: challenges current claim/stance\n- 情感主题: trauma/fear/desire/value conflict\n- 地点延续: same place AND place still affects action\n\n[WEAK LINK] — indirect but concrete:\n- same character with known attitude/conflict\n- same relationship pair with prior tension/debt\n- same object/clue/location/organization thread\n- same unresolved plot thread\n\n[FALLBACK] — only to fill required_count:\n- same character / same pair / same object / same thread / same area\n- 类型 must be 补位召回\n\nPick order: REAL LINK > WEAK LINK > FALLBACK, until count = required_count.\n\nSame keyword/name/place ALONE is NOT REAL LINK. It is WEAK LINK at best.\n\n==========================================\nSTEP 4: TIME (only for selected AM)\n==========================================\n\ncurrent_time_full = USER_INPUT time | PREVIOUS_PLOT last time | max(end_time in 概览)\ncur_date  = first YYYY-MM-DD in current_time_full\ncur_clock = HH:MM after cur_date\n\nFor each selected AM:\n  start_date  = first YYYY-MM-DD in 时间跨度\n  start_clock = first HH:MM after start_date\n  end_date    = second YYYY-MM-DD if any, else = start_date\n  end_clock   = last HH:MM in 时间跨度\n  if end_date == start_date AND end_clock < start_clock:\n    end_date += 1 day\n  diff_min  = (cur_date − end_date)*1440 + (cur_clock − end_clock)\n  same_date = (cur_date == end_date)\n  // diff_min MUST include the date-difference term.\n  // date difference ≠ 0  ⇒  same_date=false  ⇒  NEVER now/today.\n\nIf missing date/clock OR diff_min<0:\n  diff_min=NA, group=unknown, display=记不清时间.\n\nElse pick group (one-step, USE MINUTES DIRECTLY):\n\n  diff_min          | same_date | group     | display\n  ------------------+-----------+-----------+----------\n  0-120             | true      | now       | Xm\n  121-1440          | true      | today     | XhYm\n  0-1440            | false     | days      | XdXhYm\n  1441-7200         | any       | days      | XdXhYm\n  7201-30240        | any       | weeks     | XdXhYm\n  30241-86400       | any       | months    | XdXhYm\n  86401-259200      | any       | seasons   | XdXhYm\n  259201-2628000    | any       | years     | XdXhYm\n  2628001+          | any       | old       | XdXhYm\n\nCritical: now/today REQUIRE same_date=true. Any cross-day event starts at days minimum.\nCritical boundaries: 120=now,121=today | 1440=today,1441=days | 7200=days,7201=weeks | 30240=weeks,30241=months | 86400=months,86401=seasons | 259200=seasons,259201=years | 2628000=years,2628001=old.\n\ndisplay computation:\n  now    → 数字m + \"m\"                                e.g. 45m\n  today  → 数字h + \"h\" + 数字m + \"m\"; write m even if 0   e.g. 3h0m / 3h20m\n  days~old → full:\n    d = diff_min // 1440\n    h = (diff_min % 1440) // 60\n    m = diff_min % 60\n    full = 数字d + \"d\" + 数字h + \"h\" + 数字m + \"m\"      e.g. 5d3h20m\n  unknown → 记不清时间\n- All d/h/m must be actual computed Arabic numbers; write 0 if 0 (e.g. 5d0h0m / 3h0m).\n- Never omit, never copy template literals like XdXhYm / XhYm.\n\n==========================================\nSTEP 5: OUTPUT <match>\n==========================================\n\nFormat (one line per AM):\n<match>\nAMxxxx | 类型 | diff_min=XXXX | group | display | 理由\n</match>\n\n类型 must be one of: 因果链 / 人物关系 / 共同经历 / 物品线索 / 矛盾挑战 / 情感主题 / 地点延续 / 补位召回\n\n理由 must state: 当前剧情具体问题 + this AM's concrete effect (or weak basis, or fallback basis).\nBad 理由: only says \"相关/有关/呼应剧情\", only repeats 概览, uses time distance, invents facts.\n\nConsistency: diff_min + same_date MUST fit group by the table above. If mismatch, fix group.\ngroup=unknown → diff_min=NA, display=记不清时间, skip consistency check.\n\n==========================================\nSTEP 6: OUTPUT <recall>\n==========================================\n\nCopy from <match>. For each AM line, put \"AMxxxx | display\" under its group.\nDo NOT copy 类型, diff_min, 理由.\nOutput ONLY groups that contain ≥1 AM. Skip empty groups entirely; never skip AM lines.\n\nVALID group names (pick group ONLY from this list, never invent new):\nnow / today / days / weeks / months / seasons / years / old / unknown\n\n<recall>\nnow =\nAMxxxx | Xm\ndays =\nAMxxxx | XdXhYm\n</recall>\n\n==========================================\nFULL OUTPUT TEMPLATE (example, empty groups omitted)\n==========================================\n\n<all_am>\nAM0001, AM0002, ...\n</all_am>\n\n<self_check>\ntotal_am=N\nrequired_count=N\nselection_basis=content_only\ntime_computed=after_selection\n</self_check>\n\n<match>\nAMxxxx | 类型 | diff_min=XXXX | group | display | 理由\nAMxxxx | 类型 | diff_min=XXXX | group | display | 理由\n</match>\n\n<recall>\nnow =\nAMxxxx | Xm\ndays =\nAMxxxx | XdXhYm\n</recall>\n</task_rules>",
+                "deletable": false
+            },
+            {
+                "id": "finalSystemDirective",
+                "name": "最终注入指令",
+                "role": "system",
+                "content": "以下是用户的本轮输入：\n<本轮用户输入>\n$8\n</本轮用户输入>\n\n以下输入的代码为既定事实记忆的对应索引编码，并已按时间距离分组。注意，请参考这些过去记忆保持剧情连续性，不在正文里直接引用编码，并自然融入对应的时间约束词：\n\n[时间约束词]\nnow=刚刚|刚才|眼下|此刻|这会儿\ntoday=今天早些时候|今天稍早|白天的时候|今天\ndays=这两天|这几天|近几天|前些天\nweeks=前阵子|这阵子|早些时候\nmonths=半个月前|上个月|之前|不久前|前些日子\nseasons=几个月前|小半年前|当时|那阵子|上次\nyears=一年前|去年|前几年|这几年|几年前|那几年|好多个月前\nold=很久以前|过去|那阵子|早些时候|当时|上次\nunknown=有一次|曾经|某次|上次\n\n",
+                "deletable": false
+            }
+        ],
+        "recallCount": 25,
+        "extractTags": "recall",
+        "extractInjectTags": "",
+        "contextExtractRules": [],
+        "contextExcludeRules": [
+            {
+                "start": "<disclaimer",
+                "end": "</disclaimer>"
+            },
+            {
+                "start": "<JSONPatch",
+                "end": "</JSONPatch>"
+            },
+            {
+                "start": "<Analysis",
+                "end": "</Analysis>"
+            },
+            {
+                "start": "<UpdateVariable",
+                "end": "</UpdateVariable>"
+            },
+            {
+                "start": "<tucao",
+                "end": "</tucao>"
+            },
+            {
+                "start": "<StatusPlaceHolderImpl",
+                "end": "</StatusPlaceHolderImpl>"
+            },
+            {
+                "start": "<summary",
+                "end": "</summary>"
+            },
+            {
+                "start": "<options",
+                "end": "</options>"
+            },
+            {
+                "start": "<thinking",
+                "end": "</thinking>"
+            },
+            {
+                "start": "<think",
+                "end": "</think>"
+            },
+            {
+                "start": "<thought",
+                "end": "</thought>"
+            },
+            {
+                "start": "<review",
+                "end": "</review>"
+            },
+            {
+                "start": "<refine",
+                "end": "</refine>"
+            },
+            {
+                "start": "<dm_check",
+                "end": "</dm_check>"
+            },
+            {
+                "start": "<supplement",
+                "end": "</supplement>"
+            }
+        ],
+        "minLength": 0,
+        "contextTurnCount": 3,
+        "worldbookEnabled": true,
+        "worldbookSource": "character",
+        "selectedWorldbooks": [],
+        "disabledWorldbookEntries": "__ALL_SELECTED__",
+        "plotWorldbookConfig": {
+            "source": "character",
+            "manualSelection": []
+        },
+        "loopSettings": {
+            "quickReplyContent": [],
+            "currentPromptIndex": 0,
+            "loopTags": "",
+            "loopDelay": 5,
+            "retryDelay": 3,
+            "loopTotalDuration": 0,
+            "maxRetries": 3
+        },
+        "plotTasks": [
+            {
+                "id": "defaultPlotTask",
+                "name": "默认任务",
+                "enabled": true,
+                "promptGroup": [
+                    {
+                        "role": "SYSTEM",
+                        "content": "[RESET ROLE AND TASK,START NEW TASK]\n\n<role>\n你是天之音，记忆与时间的神明。你负责从纪要索引中召回相关记忆，并按时间距离分组。\n</role>",
+                        "deletable": true
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "叮咚，天之音上线！我会先认真核对<已发生的事件概览>内的 AM 编码和纪要概览~",
+                        "deletable": true
+                    },
+                    {
+                        "role": "USER",
+                        "content": "以下为本局故事信息：\n\n<story_context>\n<背景设定>\n<User基础设定>\n$U\n</User基础设定>\n$C\n$1\n</背景设定>\n<已发生的事件概览>\n$5\n</已发生的事件概览>\n<前文剧情>\n$7\n</前文剧情>\n</story_context>\n\n<user_input>\n$8\n</user_input>",
+                        "deletable": true
+                    },
+                    {
+                        "role": "SYSTEM",
+                        "content": "收到~天之音已认真阅读资料，正在寻找记忆之间的关联！",
+                        "deletable": true
+                    },
+                    {
+                        "role": "USER",
+                        "content": "<task_rules>\nYou select AM from「已发生的事件概览」, group by time, output <match> then <recall>.\n\n==========================================\nHARD CONSTRAINTS\n==========================================\n- AM source: ONLY「已发生的事件概览」. Never invent. Never use AM from USER_INPUT/PREVIOUS_PLOT/背景设定.\n- required_count = min({zhaohui}, total_AM_in_概览). If 概览 empty, required_count=0.\n- <match> count = <recall> count = required_count. Same AM set.\n- Selection by content only. NEVER by time distance, NEVER by AM code order.\n- Time is computed AFTER selection is finalized.\n- Placeholders (X/N/XXXX/XdXhYm/YYYY-MM-DD/HH:MM) MUST be replaced with real computed values. Any residual placeholder = invalid.\n\n==========================================\nSTEP 1: LIST ALL AM (mandatory output)\n==========================================\nFirst output ALL AM codes from 概览, comma separated:\n\n<all_am>\nAM0001, AM0002, AM0003, ...\n</all_am>\n\nThis forces you to see the full set before picking.\nIf 概览 empty → <all_am></all_am>. Never list selected only.\n\n==========================================\nSTEP 2: SELF CHECK (mandatory output)\n==========================================\n<self_check>\ntotal_am=N\nrequired_count=N\nselection_basis=content_only\ntime_computed=after_selection\n</self_check>\nN must be actual numbers.\n\n==========================================\nSTEP 3: SELECT (priority order)\n==========================================\n\nFor each AM, judge link type by CONTENT, not by time:\n\n[REAL LINK] — AM concretely affects current plot:\n- 因果链: cause/result/risk/obstacle/next action\n- 人物关系: trust/betrayal/promise/grudge/tension\n- 共同经历: shared past changes current interaction\n- 物品线索: evidence/clue/identity/anomaly\n- 矛盾挑战: challenges current claim/stance\n- 情感主题: trauma/fear/desire/value conflict\n- 地点延续: same place AND place still affects action\n\n[WEAK LINK] — indirect but concrete:\n- same character with known attitude/conflict\n- same relationship pair with prior tension/debt\n- same object/clue/location/organization thread\n- same unresolved plot thread\n\n[FALLBACK] — only to fill required_count:\n- same character / same pair / same object / same thread / same area\n- 类型 must be 补位召回\n\nPick order: REAL LINK > WEAK LINK > FALLBACK, until count = required_count.\n\nSame keyword/name/place ALONE is NOT REAL LINK. It is WEAK LINK at best.\n\n==========================================\nSTEP 4: TIME (only for selected AM)\n==========================================\n\ncurrent_time_full = USER_INPUT time | PREVIOUS_PLOT last time | max(end_time in 概览)\ncur_date  = first YYYY-MM-DD in current_time_full\ncur_clock = HH:MM after cur_date\n\nFor each selected AM:\n  start_date  = first YYYY-MM-DD in 时间跨度\n  start_clock = first HH:MM after start_date\n  end_date    = second YYYY-MM-DD if any, else = start_date\n  end_clock   = last HH:MM in 时间跨度\n  if end_date == start_date AND end_clock < start_clock:\n    end_date += 1 day\n  diff_min  = (cur_date − end_date)*1440 + (cur_clock − end_clock)\n  same_date = (cur_date == end_date)\n  // diff_min MUST include the date-difference term.\n  // date difference ≠ 0  ⇒  same_date=false  ⇒  NEVER now/today.\n\nIf missing date/clock OR diff_min<0:\n  diff_min=NA, group=unknown, display=记不清时间.\n\nElse pick group (one-step, USE MINUTES DIRECTLY):\n\n  diff_min          | same_date | group     | display\n  ------------------+-----------+-----------+----------\n  0-120             | true      | now       | Xm\n  121-1440          | true      | today     | XhYm\n  0-1440            | false     | days      | XdXhYm\n  1441-7200         | any       | days      | XdXhYm\n  7201-30240        | any       | weeks     | XdXhYm\n  30241-86400       | any       | months    | XdXhYm\n  86401-259200      | any       | seasons   | XdXhYm\n  259201-2628000    | any       | years     | XdXhYm\n  2628001+          | any       | old       | XdXhYm\n\nCritical: now/today REQUIRE same_date=true. Any cross-day event starts at days minimum.\nCritical boundaries: 120=now,121=today | 1440=today,1441=days | 7200=days,7201=weeks | 30240=weeks,30241=months | 86400=months,86401=seasons | 259200=seasons,259201=years | 2628000=years,2628001=old.\n\ndisplay computation:\n  now    → 数字m + \"m\"                                e.g. 45m\n  today  → 数字h + \"h\" + 数字m + \"m\"; write m even if 0   e.g. 3h0m / 3h20m\n  days~old → full:\n    d = diff_min // 1440\n    h = (diff_min % 1440) // 60\n    m = diff_min % 60\n    full = 数字d + \"d\" + 数字h + \"h\" + 数字m + \"m\"      e.g. 5d3h20m\n  unknown → 记不清时间\n- All d/h/m must be actual computed Arabic numbers; write 0 if 0 (e.g. 5d0h0m / 3h0m).\n- Never omit, never copy template literals like XdXhYm / XhYm.\n\n==========================================\nSTEP 5: OUTPUT <match>\n==========================================\n\nFormat (one line per AM):\n<match>\nAMxxxx | 类型 | diff_min=XXXX | group | display | 理由\n</match>\n\n类型 must be one of: 因果链 / 人物关系 / 共同经历 / 物品线索 / 矛盾挑战 / 情感主题 / 地点延续 / 补位召回\n\n理由 must state: 当前剧情具体问题 + this AM's concrete effect (or weak basis, or fallback basis).\nBad 理由: only says \"相关/有关/呼应剧情\", only repeats 概览, uses time distance, invents facts.\n\nConsistency: diff_min + same_date MUST fit group by the table above. If mismatch, fix group.\ngroup=unknown → diff_min=NA, display=记不清时间, skip consistency check.\n\n==========================================\nSTEP 6: OUTPUT <recall>\n==========================================\n\nCopy from <match>. For each AM line, put \"AMxxxx | display\" under its group.\nDo NOT copy 类型, diff_min, 理由.\nOutput ONLY groups that contain ≥1 AM. Skip empty groups entirely; never skip AM lines.\n\nVALID group names (pick group ONLY from this list, never invent new):\nnow / today / days / weeks / months / seasons / years / old / unknown\n\n<recall>\nnow =\nAMxxxx | Xm\ndays =\nAMxxxx | XdXhYm\n</recall>\n\n==========================================\nFULL OUTPUT TEMPLATE (example, empty groups omitted)\n==========================================\n\n<all_am>\nAM0001, AM0002, ...\n</all_am>\n\n<self_check>\ntotal_am=N\nrequired_count=N\nselection_basis=content_only\ntime_computed=after_selection\n</self_check>\n\n<match>\nAMxxxx | 类型 | diff_min=XXXX | group | display | 理由\nAMxxxx | 类型 | diff_min=XXXX | group | display | 理由\n</match>\n\n<recall>\nnow =\nAMxxxx | Xm\ndays =\nAMxxxx | XdXhYm\n</recall>\n</task_rules>",
+                        "deletable": false,
+                        "mainSlot": "B",
+                        "isMain2": true
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "收到，天之音开始执行！",
+                        "deletable": true
+                    }
+                ],
+                "extractTags": "recall",
+                "extractInjectTags": "",
+                "finalDirectiveTemplate": "",
+                "minLength": 0,
+                "maxRetries": 3,
+                "mergeStrategy": "append",
+                "stage": 1,
+                "order": 0
+            }
+        ],
+        "globalRevision": 0,
+        "promptGroup": [
+            {
+                "role": "SYSTEM",
+                "content": "[RESET ROLE AND TASK,START NEW TASK]\n\n<role>\n你是天之音，记忆与时间的神明。你负责从纪要索引中召回相关记忆，并按时间距离分组。\n</role>",
+                "deletable": true
+            },
+            {
+                "role": "assistant",
+                "content": "叮咚，天之音上线！我会先认真核对<已发生的事件概览>内的 AM 编码和纪要概览~",
+                "deletable": true
+            },
+            {
+                "role": "USER",
+                "content": "以下为本局故事信息：\n\n<story_context>\n<背景设定>\n<User基础设定>\n$U\n</User基础设定>\n$C\n$1\n</背景设定>\n<已发生的事件概览>\n$5\n</已发生的事件概览>\n<前文剧情>\n$7\n</前文剧情>\n</story_context>\n\n<user_input>\n$8\n</user_input>",
+                "deletable": true
+            },
+            {
+                "role": "SYSTEM",
+                "content": "收到~天之音已认真阅读资料，正在寻找记忆之间的关联！",
+                "deletable": true
+            },
+            {
+                "role": "USER",
+                "content": "<task_rules>\nYou select AM from「已发生的事件概览」, group by time, output <match> then <recall>.\n\n==========================================\nHARD CONSTRAINTS\n==========================================\n- AM source: ONLY「已发生的事件概览」. Never invent. Never use AM from USER_INPUT/PREVIOUS_PLOT/背景设定.\n- required_count = min({zhaohui}, total_AM_in_概览). If 概览 empty, required_count=0.\n- <match> count = <recall> count = required_count. Same AM set.\n- Selection by content only. NEVER by time distance, NEVER by AM code order.\n- Time is computed AFTER selection is finalized.\n- Placeholders (X/N/XXXX/XdXhYm/YYYY-MM-DD/HH:MM) MUST be replaced with real computed values. Any residual placeholder = invalid.\n\n==========================================\nSTEP 1: LIST ALL AM (mandatory output)\n==========================================\nFirst output ALL AM codes from 概览, comma separated:\n\n<all_am>\nAM0001, AM0002, AM0003, ...\n</all_am>\n\nThis forces you to see the full set before picking.\nIf 概览 empty → <all_am></all_am>. Never list selected only.\n\n==========================================\nSTEP 2: SELF CHECK (mandatory output)\n==========================================\n<self_check>\ntotal_am=N\nrequired_count=N\nselection_basis=content_only\ntime_computed=after_selection\n</self_check>\nN must be actual numbers.\n\n==========================================\nSTEP 3: SELECT (priority order)\n==========================================\n\nFor each AM, judge link type by CONTENT, not by time:\n\n[REAL LINK] — AM concretely affects current plot:\n- 因果链: cause/result/risk/obstacle/next action\n- 人物关系: trust/betrayal/promise/grudge/tension\n- 共同经历: shared past changes current interaction\n- 物品线索: evidence/clue/identity/anomaly\n- 矛盾挑战: challenges current claim/stance\n- 情感主题: trauma/fear/desire/value conflict\n- 地点延续: same place AND place still affects action\n\n[WEAK LINK] — indirect but concrete:\n- same character with known attitude/conflict\n- same relationship pair with prior tension/debt\n- same object/clue/location/organization thread\n- same unresolved plot thread\n\n[FALLBACK] — only to fill required_count:\n- same character / same pair / same object / same thread / same area\n- 类型 must be 补位召回\n\nPick order: REAL LINK > WEAK LINK > FALLBACK, until count = required_count.\n\nSame keyword/name/place ALONE is NOT REAL LINK. It is WEAK LINK at best.\n\n==========================================\nSTEP 4: TIME (only for selected AM)\n==========================================\n\ncurrent_time_full = USER_INPUT time | PREVIOUS_PLOT last time | max(end_time in 概览)\ncur_date  = first YYYY-MM-DD in current_time_full\ncur_clock = HH:MM after cur_date\n\nFor each selected AM:\n  start_date  = first YYYY-MM-DD in 时间跨度\n  start_clock = first HH:MM after start_date\n  end_date    = second YYYY-MM-DD if any, else = start_date\n  end_clock   = last HH:MM in 时间跨度\n  if end_date == start_date AND end_clock < start_clock:\n    end_date += 1 day\n  diff_min  = (cur_date − end_date)*1440 + (cur_clock − end_clock)\n  same_date = (cur_date == end_date)\n  // diff_min MUST include the date-difference term.\n  // date difference ≠ 0  ⇒  same_date=false  ⇒  NEVER now/today.\n\nIf missing date/clock OR diff_min<0:\n  diff_min=NA, group=unknown, display=记不清时间.\n\nElse pick group (one-step, USE MINUTES DIRECTLY):\n\n  diff_min          | same_date | group     | display\n  ------------------+-----------+-----------+----------\n  0-120             | true      | now       | Xm\n  121-1440          | true      | today     | XhYm\n  0-1440            | false     | days      | XdXhYm\n  1441-7200         | any       | days      | XdXhYm\n  7201-30240        | any       | weeks     | XdXhYm\n  30241-86400       | any       | months    | XdXhYm\n  86401-259200      | any       | seasons   | XdXhYm\n  259201-2628000    | any       | years     | XdXhYm\n  2628001+          | any       | old       | XdXhYm\n\nCritical: now/today REQUIRE same_date=true. Any cross-day event starts at days minimum.\nCritical boundaries: 120=now,121=today | 1440=today,1441=days | 7200=days,7201=weeks | 30240=weeks,30241=months | 86400=months,86401=seasons | 259200=seasons,259201=years | 2628000=years,2628001=old.\n\ndisplay computation:\n  now    → 数字m + \"m\"                                e.g. 45m\n  today  → 数字h + \"h\" + 数字m + \"m\"; write m even if 0   e.g. 3h0m / 3h20m\n  days~old → full:\n    d = diff_min // 1440\n    h = (diff_min % 1440) // 60\n    m = diff_min % 60\n    full = 数字d + \"d\" + 数字h + \"h\" + 数字m + \"m\"      e.g. 5d3h20m\n  unknown → 记不清时间\n- All d/h/m must be actual computed Arabic numbers; write 0 if 0 (e.g. 5d0h0m / 3h0m).\n- Never omit, never copy template literals like XdXhYm / XhYm.\n\n==========================================\nSTEP 5: OUTPUT <match>\n==========================================\n\nFormat (one line per AM):\n<match>\nAMxxxx | 类型 | diff_min=XXXX | group | display | 理由\n</match>\n\n类型 must be one of: 因果链 / 人物关系 / 共同经历 / 物品线索 / 矛盾挑战 / 情感主题 / 地点延续 / 补位召回\n\n理由 must state: 当前剧情具体问题 + this AM's concrete effect (or weak basis, or fallback basis).\nBad 理由: only says \"相关/有关/呼应剧情\", only repeats 概览, uses time distance, invents facts.\n\nConsistency: diff_min + same_date MUST fit group by the table above. If mismatch, fix group.\ngroup=unknown → diff_min=NA, display=记不清时间, skip consistency check.\n\n==========================================\nSTEP 6: OUTPUT <recall>\n==========================================\n\nCopy from <match>. For each AM line, put \"AMxxxx | display\" under its group.\nDo NOT copy 类型, diff_min, 理由.\nOutput ONLY groups that contain ≥1 AM. Skip empty groups entirely; never skip AM lines.\n\nVALID group names (pick group ONLY from this list, never invent new):\nnow / today / days / weeks / months / seasons / years / old / unknown\n\n<recall>\nnow =\nAMxxxx | Xm\ndays =\nAMxxxx | XdXhYm\n</recall>\n\n==========================================\nFULL OUTPUT TEMPLATE (example, empty groups omitted)\n==========================================\n\n<all_am>\nAM0001, AM0002, ...\n</all_am>\n\n<self_check>\ntotal_am=N\nrequired_count=N\nselection_basis=content_only\ntime_computed=after_selection\n</self_check>\n\n<match>\nAMxxxx | 类型 | diff_min=XXXX | group | display | 理由\nAMxxxx | 类型 | diff_min=XXXX | group | display | 理由\n</match>\n\n<recall>\nnow =\nAMxxxx | Xm\ndays =\nAMxxxx | XdXhYm\n</recall>\n</task_rules>",
+                "deletable": false,
+                "mainSlot": "B",
+                "isMain2": true
+            },
+            {
+                "role": "assistant",
+                "content": "收到，天之音开始执行！",
+                "deletable": true
+            }
+        ],
+        "finalSystemDirective": "以下是用户的本轮输入：\n<本轮用户输入>\n$8\n</本轮用户输入>\n\n以下输入的代码为既定事实记忆的对应索引编码，并已按时间距离分组。注意，请参考这些过去记忆保持剧情连续性，不在正文里直接引用编码，并自然融入对应的时间约束词：\n\n[时间约束词]\nnow=刚刚|刚才|眼下|此刻|这会儿\ntoday=今天早些时候|今天稍早|白天的时候|今天\ndays=这两天|这几天|近几天|前些天\nweeks=前阵子|这阵子|早些时候\nmonths=半个月前|上个月|之前|不久前|前些日子\nseasons=几个月前|小半年前|当时|那阵子|上次\nyears=一年前|去年|前几年|这几年|几年前|那几年|好多个月前\nold=很久以前|过去|那阵子|早些时候|当时|上次\nunknown=有一次|曾经|某次|上次\n\n",
+        "mainPrompt": "",
+        "systemPrompt": "<task_rules>\nYou select AM from「已发生的事件概览」, group by time, output <match> then <recall>.\n\n==========================================\nHARD CONSTRAINTS\n==========================================\n- AM source: ONLY「已发生的事件概览」. Never invent. Never use AM from USER_INPUT/PREVIOUS_PLOT/背景设定.\n- required_count = min({zhaohui}, total_AM_in_概览). If 概览 empty, required_count=0.\n- <match> count = <recall> count = required_count. Same AM set.\n- Selection by content only. NEVER by time distance, NEVER by AM code order.\n- Time is computed AFTER selection is finalized.\n\n==========================================\nSTEP 1: LIST ALL AM (mandatory output)\n==========================================\nFirst output ALL AM codes from 概览, comma separated:\n\n<all_am>\nAM0001, AM0002, AM0003, ...\n</all_am>\n\nThis forces you to see the full set before picking.\n\n==========================================\nSTEP 2: SELF CHECK (mandatory output)\n==========================================\nThen output:\n\n<self_check>\ntotal_am=N\nrequired_count=N\nselection_basis=content_only\ntime_computed=after_selection\n</self_check>\n\n==========================================\nSTEP 3: SELECT (priority order)\n==========================================\n\nFor each AM, judge link type by CONTENT, not by time:\n\n[REAL LINK] — AM concretely affects current plot:\n- 因果链: cause/result/risk/obstacle/next action\n- 人物关系: trust/betrayal/promise/grudge/tension\n- 共同经历: shared past changes current interaction\n- 物品线索: evidence/clue/identity/anomaly\n- 矛盾挑战: challenges current claim/stance\n- 情感主题: trauma/fear/desire/value conflict\n- 地点延续: same place AND place still affects action\n\n[WEAK LINK] — indirect but concrete:\n- same character with known attitude/conflict\n- same relationship pair with prior tension/debt\n- same object/clue/location/organization thread\n- same unresolved plot thread\n\n[FALLBACK] — only to fill required_count:\n- same character / same pair / same object / same thread / same area\n- 类型 must be 补位召回\n\nPick order: REAL LINK > WEAK LINK > FALLBACK, until count = required_count.\n\nSame keyword/name/place ALONE is NOT REAL LINK. It is WEAK LINK at best.\n\n==========================================\nSTEP 4: TIME (only for selected AM)\n==========================================\n\ncurrent_time = USER_INPUT time | PREVIOUS_PLOT last time | max end_time in 概览.\n\nFor each selected AM:\n  end_time = time after \"~\" in 时间跨度\n  diff_min = minutes(current_time - end_time)\n\nIf current_time/end_time missing OR diff_min<0:\n  diff_min=NA, group=unknown, display=记不清时间.\n\nElse pick group by diff_min (USE MINUTES DIRECTLY):\n\n  diff_min          | group     | display\n  ------------------+-----------+----------\n  0-120             | now       | Xm\n  121-1440          | today     | XhYm\n  1441-7200         | days      | XdXhYm\n  7201-30240        | weeks     | XdXhYm\n  30241-86400       | months    | XdXhYm\n  86401-259200      | seasons   | XdXhYm\n  259201-2628000     | years     | XdXhYm\n  2628001+           | old       | XdXhYm\n\nCritical boundaries: 1440=today, 1441=days | 7200=days, 7201=weeks | 30240=weeks, 30241=months | 86400=months, 86401=seasons | 259200=seasons, 259201=years | 2628000=years, 2628001=old.\n\n==========================================\nSTEP 5: OUTPUT <match>\n==========================================\n\nFormat (one line per AM):\n<match>\nAMxxxx | 类型 | diff_min=XXXX | group | display | 理由\n</match>\n\n类型 must be one of: 因果链 / 人物关系 / 共同经历 / 物品线索 / 矛盾挑战 / 情感主题 / 地点延续 / 补位召回\n\n理由 must state: 当前剧情具体问题 + this AM's concrete effect (or weak basis, or fallback basis).\nBad 理由: only says \"相关/有关/呼应剧情\", only repeats 概览, uses time distance, invents facts.\n\nConsistency: diff_min MUST fit group by the table above. If mismatch, fix group.\n\n==========================================\nSTEP 6: OUTPUT <recall>\n==========================================\n\nCopy from <match>. For each AM line, put \"AMxxxx | display\" under its group.\nDo NOT copy 类型, diff_min, 理由. Keep all group names even if empty.\n\n<recall>\nnow =\ntoday =\ndays =\nweeks =\nmonths =\nseasons =\nyears =\nold =\nunknown =\n</recall>\n\n==========================================\nFULL OUTPUT TEMPLATE\n==========================================\n\n<all_am>\nAM0001, AM0002, ...\n</all_am>\n\n<self_check>\ntotal_am=N\nrequired_count=N\nselection_basis=content_only\ntime_computed=after_selection\n</self_check>\n\n<match>\nAMxxxx | 类型 | diff_min=XXXX | group | display | 理由\nAMxxxx | 类型 | diff_min=XXXX | group | display | 理由\n</match>\n\n<recall>\nnow =\nAMxxxx | Xm\ntoday =\nAMxxxx | XhYm\ndays =\nAMxxxx | XdXhYm\nweeks =\nAMxxxx | XdXhYm\nmonths =\nAMxxxx | XdXhYm\nseasons =\nAMxxxx | XdXhYm\nyears =\nAMxxxx | XdXhYm\nold =\nAMxxxx | XdXhYm\nunknown =\nAMxxxx | 记不清时间\n</recall>\n</task_rules>",
+        "_acuBuiltinPresetId": "time-recall",
+        "_acuBuiltinPresetVersion": "v4.9"
+    };
+    const DEFAULT_BUILTIN_PLOT_PRESETS_ACU = [DEFAULT_TIME_RECALL_PLOT_PRESET_ACU];
     // --- [剧情推进] 默认设置 ---
     const DEFAULT_PLOT_SETTINGS_ACU = {
         "enabled": true,
@@ -27041,6 +27583,66 @@ $CONTENT
         settings_ACU.plotSettings.enabled = globalMeta_ACU.plotEnabledGlobal === true;
         return settings_ACU.plotSettings.enabled;
     }
+    function ensureBuiltinPlotPresets_ACU() {
+        if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
+            settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
+        }
+        if (!Array.isArray(settings_ACU.plotSettings.promptPresets)) {
+            settings_ACU.plotSettings.promptPresets = [];
+        }
+        if (!Array.isArray(DEFAULT_BUILTIN_PLOT_PRESETS_ACU))
+            return false;
+        let changed = false;
+        for (const builtinPreset of DEFAULT_BUILTIN_PLOT_PRESETS_ACU) {
+            const name = String(builtinPreset?.name || '').trim();
+            if (!name)
+                continue;
+            const idx = settings_ACU.plotSettings.promptPresets.findIndex((preset) => String(preset?.name || '').trim() === name);
+            const cloned = JSON.parse(JSON.stringify(builtinPreset));
+            if (idx < 0) {
+                settings_ACU.plotSettings.promptPresets.push(cloned);
+                changed = true;
+                continue;
+            }
+            const current = settings_ACU.plotSettings.promptPresets[idx];
+            if (current?._acuBuiltinPresetId === cloned._acuBuiltinPresetId
+                && current?._acuBuiltinPresetVersion !== cloned._acuBuiltinPresetVersion) {
+                settings_ACU.plotSettings.promptPresets[idx] = cloned;
+                changed = true;
+            }
+        }
+        return changed;
+    }
+    function relaxStoredOriginalDefaultDdls_ACU(templateObj) {
+        if (!templateObj || typeof templateObj !== 'object' || Array.isArray(templateObj))
+            return false;
+        const parseDefaultTemplate_ACU = () => {
+            const first = safeJsonParse_ACU(ORIGINAL_DEFAULT_TABLE_TEMPLATE_ACU, null);
+            return typeof first === 'string' ? safeJsonParse_ACU(first, null) : first;
+        };
+        const relaxedDefault = parseDefaultTemplate_ACU();
+        if (!relaxedDefault || typeof relaxedDefault !== 'object')
+            return false;
+        const signatureToDdl = new Map();
+        Object.keys(relaxedDefault).forEach((key) => {
+            const sheet = relaxedDefault[key];
+            if (!sheet?.name || !Array.isArray(sheet.content?.[0]) || typeof sheet.sourceData?.ddl !== 'string')
+                return;
+            signatureToDdl.set(`${sheet.name}::${JSON.stringify(sheet.content[0])}`, sheet.sourceData.ddl);
+        });
+        let changed = false;
+        Object.keys(templateObj).forEach((key) => {
+            const sheet = templateObj[key];
+            if (!sheet?.name || !Array.isArray(sheet.content?.[0]) || !sheet.sourceData || typeof sheet.sourceData !== 'object')
+                return;
+            const relaxedDdl = signatureToDdl.get(`${sheet.name}::${JSON.stringify(sheet.content[0])}`);
+            if (!relaxedDdl || sheet.sourceData.ddl === relaxedDdl)
+                return;
+            sheet.sourceData.ddl = relaxedDdl;
+            changed = true;
+        });
+        return changed;
+    }
     function saveSettings_ACU() {
         if (!settingsStorageReadyForSave_ACU) {
             if (isIndexedDbAvailable_ACU() && !configIdbCacheLoaded_ACU) {
@@ -27159,6 +27761,7 @@ $CONTENT
         loadTemplateFromStorage_ACU(activeCode);
         // 5) 加载设置（按标识 profile）
         const defaultSettings = buildDefaultSettings_ACU();
+        let shouldPersistSettingsAfterLoad_ACU = false;
         try {
             const savedSettings = readProfileSettingsFromStorage_ACU(activeCode);
             if (savedSettings) {
@@ -27273,6 +27876,10 @@ $CONTENT
         }
         // [兼容] 旧标签排除字段自动迁移为新规则组结构
         ensureTagRulesCompat_ACU(settings_ACU);
+        if (ensureBuiltinPlotPresets_ACU()) {
+            shouldPersistSettingsAfterLoad_ACU = true;
+            logDebug_ACU('[剧情推进预设] 已补齐内置预设：时间召回');
+        }
         settingsStorageReadyForSave_ACU = true;
         // [交火模式配置] 权威配置存放在 globalMeta.vectorMemoryConfigGlobal（跨 profile 全局）。
         // settings_ACU.vectorMemoryConfig 只保留为运行时投影，兼容旧调用方。
@@ -27309,7 +27916,6 @@ $CONTENT
         settings_ACU.vectorMemoryConfig = globalMeta_ACU.vectorMemoryConfigGlobal;
         // [交火模式] 一次性补齐默认归档/召回/关键词提示词参数。
         // 只能补缺失字段，绝不能在版本刷新时覆盖用户已经填写的模型、API、召回参数或提示词。
-        let shouldPersistSettingsAfterLoad_ACU = false;
         if (globalMeta_ACU.vectorMemoryConfigGlobal && typeof globalMeta_ACU.vectorMemoryConfigGlobal === 'object' && !Array.isArray(globalMeta_ACU.vectorMemoryConfigGlobal)) {
             const vectorConfig = globalMeta_ACU.vectorMemoryConfigGlobal;
             if (vectorConfig.defaultsRefreshVersion !== VECTOR_MEMORY_DEFAULTS_REFRESH_VERSION_ACU) {
@@ -27374,7 +27980,7 @@ $CONTENT
         if (shouldPersistSettingsAfterLoad_ACU) {
             saveGlobalMeta_ACU();
             persistSettingsToStorage_ACU(settings_ACU, activeCode);
-            logDebug_ACU(`[交火模式配置] 已持久化全局默认参数刷新版本: ${VECTOR_MEMORY_DEFAULTS_REFRESH_VERSION_ACU}`);
+            logDebug_ACU(`[设置加载] 已持久化加载期默认值补齐，交火配置版本: ${VECTOR_MEMORY_DEFAULTS_REFRESH_VERSION_ACU}`);
         }
         if (!Number.isFinite(settings_ACU.maxConcurrentGroups) || settings_ACU.maxConcurrentGroups < 1) {
             settings_ACU.maxConcurrentGroups = 1;
@@ -27440,6 +28046,8 @@ $CONTENT
                 if (parsedTemplate && parsedTemplate.mate && Object.keys(parsedTemplate).some(k => k.startsWith('sheet_'))) {
                     // [迁移] 0(沿用UI) -> -1(沿用UI)，并写入标记
                     migrateTemplateUpdateConfigSentinel_ACU(parsedTemplate);
+                    // [迁移] 对已保存的原默认表仅放宽 DDL 约束，不替换为新的恋爱特化默认表。
+                    relaxStoredOriginalDefaultDdls_ACU(parsedTemplate);
                     // [Profile] 模板载入时先补齐/修复顺序编号，并回写（编号可随导出/导入迁移）
                     const sheetKeys = Object.keys(parsedTemplate).filter(k => k.startsWith('sheet_'));
                     ensureSheetOrderNumbers_ACU(parsedTemplate, { baseOrderKeys: sheetKeys, forceRebuild: false });
@@ -27499,12 +28107,19 @@ $CONTENT
                 logDebug_ACU(`[模板默认值] 当前全局模板使用命名预设，跳过默认模板刷新并记录版本: ${TABLE_TEMPLATE_DEFAULTS_REFRESH_VERSION_ACU}`);
                 return;
             }
+            const code = normalizeIsolationCode_ACU(activeCode || settings_ACU.dataIsolationCode || globalMeta_ACU?.activeIsolationCode || '');
+            const existingTemplate = readProfileTemplateFromStorage_ACU(code);
+            if (existingTemplate && existingTemplate.trim()) {
+                settings_ACU.tableTemplateDefaultsRefreshVersion = TABLE_TEMPLATE_DEFAULTS_REFRESH_VERSION_ACU;
+                saveSettings_ACU();
+                logDebug_ACU(`[模板默认值] 当前 profile 已有模板，保留用户/旧默认模板并记录版本: ${TABLE_TEMPLATE_DEFAULTS_REFRESH_VERSION_ACU}`);
+                return;
+            }
             const defaultSnapshot = getDefaultTemplateSnapshot_ACU();
             if (!defaultSnapshot?.templateStr) {
                 logWarn_ACU('[模板默认值] 默认表格模板快照无效，跳过一次性刷新。');
                 return;
             }
-            const code = normalizeIsolationCode_ACU(activeCode || settings_ACU.dataIsolationCode || globalMeta_ACU?.activeIsolationCode || '');
             _set_TABLE_TEMPLATE_ACU(defaultSnapshot.templateStr);
             writeProfileTemplateToStorage_ACU(code, TABLE_TEMPLATE_ACU);
             settings_ACU.tableTemplateDefaultsRefreshVersion = TABLE_TEMPLATE_DEFAULTS_REFRESH_VERSION_ACU;
