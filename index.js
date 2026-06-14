@@ -20701,6 +20701,28 @@ $CONTENT
         }
         return -1;
     }
+    function hasAppendableTableDataFrame_ACU(msg, isolationKey, settings) {
+        const tagData = readIsolatedTagData_ACU(msg, isolationKey);
+        if (isV2TagData_ACU(tagData) && tagData.storageFrame)
+            return true;
+        return hasAnyTableData_ACU(msg, isolationKey, {
+            enabled: !!settings?.dataIsolationEnabled,
+            code: String(settings?.dataIsolationCode || ''),
+        });
+    }
+    function getLatestTableAppendMessageIndexFromChat_ACU(chat, isolationKey, settings) {
+        if (!Array.isArray(chat))
+            return -1;
+        const latestAiMessageIndex = getLatestAiMessageIndexFromChat_ACU(chat);
+        for (let i = chat.length - 1; i >= 0; i -= 1) {
+            const msg = chat[i];
+            if (!msg || msg.is_user)
+                continue;
+            if (hasAppendableTableDataFrame_ACU(msg, isolationKey, settings))
+                return i;
+        }
+        return latestAiMessageIndex;
+    }
     function countAiMessagesUpToIndex_ACU(chat, messageIndex) {
         if (!Array.isArray(chat) || messageIndex < 0)
             return 0;
@@ -42720,7 +42742,7 @@ $CONTENT
                 logError_ACU('Error updating template from visualizer:', e);
             }
         }
-        // 2. Save to Chat History (per table, back to its original floor)
+        // 2. Save to Chat History (append to current effective latest AI floor)
         const chat = getChatArray_ACU();
         if (!chat.length) {
             showToastr_ACU('warning', '聊天记录为空，更改仅保存在内存，未持久化。');
@@ -42729,126 +42751,99 @@ $CONTENT
             // 2.1 预先获取当前隔离标签与所有表
             const isolationKey = getCurrentIsolationKey_ACU();
             const allSheetKeys = getSortedSheetKeys_ACU(currentJsonTableData_ACU);
-            // 2.2 计算最新一条 AI 楼层索引，作为兜底
+            // 2.2 计算当前有效追加楼层：所有 V2 追加日志必须落在最新可承载表数据的 AI 楼，不能按单表历史楼层回写。
             const latestAiIndex = getLatestAiMessageIndexFromChat_ACU(chat);
-            // 2.3 查找每张表当前最新数据所在的原楼层
-            const bucketByIndex = {};
-            const resolveTargetIndexForSheet = (sheetKey) => {
-                const table = currentJsonTableData_ACU[sheetKey];
-                const history = resolveTableHistoryStateFromChat_ACU(chat, {
-                    sheetKey,
-                    isSummaryTable: table ? isSummaryOrOutlineTable_ACU(table.name) : false,
-                    isolationKey,
-                    settings: settings_ACU,
-                });
-                return history.latestDataMessageIndex !== -1 ? history.latestDataMessageIndex : latestAiIndex;
-            };
-            allSheetKeys.forEach(key => {
-                const idx = resolveTargetIndexForSheet(key);
-                if (idx === -1)
-                    return; // 没有可保存的AI楼层
-                if (!bucketByIndex[idx])
-                    bucketByIndex[idx] = [];
-                bucketByIndex[idx].push(key);
-            });
-            // 如果一个都没匹配到，但存在AI消息，则全部落在最新楼层以避免数据丢失
-            if (Object.keys(bucketByIndex).length === 0 && latestAiIndex !== -1) {
-                bucketByIndex[latestAiIndex] = [...allSheetKeys];
-            }
-            if (Object.keys(bucketByIndex).length === 0) {
+            const appendTargetIndex = getLatestTableAppendMessageIndexFromChat_ACU(chat, isolationKey, settings_ACU);
+            if (appendTargetIndex === -1) {
                 showToastr_ACU('warning', '找不到AI消息，更改仅保存到内存，未持久化到聊天记录。');
             }
             else {
-                // 2.4 分楼层保存，每层只保存属于该层的表
-                for (const [indexStr, keys] of Object.entries(bucketByIndex)) {
-                    const idx = parseInt(indexStr, 10);
-                    if (Number.isNaN(idx))
-                        continue;
-                    const sheetKeys = keys;
-                    const writeSet = sheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
-                    const commitResult = await runTableUpdateCommit_ACU({
-                        source: 'manual_crud',
-                        reason: 'visualizer_save',
-                        isolationKey,
-                        writeSet,
-                        revisionWriteSet: writeSet,
-                        initialData: currentJsonTableData_ACU,
-                        targetMessageIndex: idx,
-                        targetSheetKeys: sheetKeys,
-                        updateGroupKeys: null,
-                        trackingSheetKeys: [],
-                        trackAsUpdate: false,
-                        operations: sheetKeys
-                            .filter(sheetKey => Boolean(currentJsonTableData_ACU?.[sheetKey]))
-                            .map(sheetKey => ({ kind: 'sheet_replace', sheetKey, sheet: currentJsonTableData_ACU[sheetKey], reason: 'manual_crud' })),
-                    }, () => ({
-                        success: true,
-                        value: null,
-                        tableData: currentJsonTableData_ACU,
-                        mutationResult: { changes: sheetKeys.length, errors: [] },
-                    }));
-                    if (!commitResult.success) {
-                        logWarn_ACU(`[VisualizerSave] 保存楼层 ${idx} 失败: ${commitResult.error || 'unknown error'}`);
-                    }
+                // 2.4 统一保存到当前有效追加楼层，维护 V2 operation log 的时间顺序
+                const sheetKeys = [...allSheetKeys];
+                const idx = appendTargetIndex;
+                const writeSet = sheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
+                const commitResult = await runTableUpdateCommit_ACU({
+                    source: 'manual_crud',
+                    reason: 'visualizer_save',
+                    isolationKey,
+                    writeSet,
+                    revisionWriteSet: writeSet,
+                    initialData: currentJsonTableData_ACU,
+                    targetMessageIndex: idx,
+                    targetSheetKeys: sheetKeys,
+                    updateGroupKeys: null,
+                    trackingSheetKeys: [],
+                    trackAsUpdate: false,
+                    operations: sheetKeys
+                        .filter(sheetKey => Boolean(currentJsonTableData_ACU?.[sheetKey]))
+                        .map(sheetKey => ({ kind: 'sheet_replace', sheetKey, sheet: currentJsonTableData_ACU[sheetKey], reason: 'manual_crud' })),
+                }, () => ({
+                    success: true,
+                    value: null,
+                    tableData: currentJsonTableData_ACU,
+                    mutationResult: { changes: sheetKeys.length, errors: [] },
+                }));
+                if (!commitResult.success) {
+                    logWarn_ACU(`[VisualizerSave] 保存楼层 ${idx} 失败: ${commitResult.error || 'unknown error'}`);
                 }
-                // 2.4.5 [关键] 如果本次在可视化编辑器删除了表格，则此处追溯整个聊天记录做“硬删除”
-                // 说明：saveIndependentTableToChatHistory_ACU 只会覆盖/追加 keys，不会自动移除旧 keys，因此必须额外做一次全局清理。
-                if (typeof purgeSheetKeysFromChatHistoryHard_ACU === 'function' && deletedKeysToPurge_ACU.length > 0) {
-                    try {
-                        const r = await purgeSheetKeysFromChatHistoryHard_ACU(deletedKeysToPurge_ACU);
-                        if (r?.changed) {
-                            logDebug_ACU(`[VisualizerDelete] Hard-purged ${deletedKeysToPurge_ACU.length} keys from ${r.changedCount} AI messages.`);
-                            if (topLevelWindow_ACU?.AutoCardUpdaterAPI) {
-                                topLevelWindow_ACU.AutoCardUpdaterAPI._notifyTableUpdate();
-                            }
-                            // SQLite 模式下重建运行时数据库实例，确保模板切换时不会残留旧表结构或旧数据
-                            if (isSqliteMode()) {
-                                try {
-                                    await reloadStorageProvider();
-                                    logDebug_ACU('[VisualizerDelete] SQLite 运行时数据库已重建');
-                                }
-                                catch (reloadError) {
-                                    logWarn_ACU(`[VisualizerDelete] reloadStorageProvider 失败: ${reloadError?.message}，继续使用当前 provider`);
-                                }
-                            }
-                        }
-                        _acuVisState.deletedSheetKeys = [];
-                    }
-                    catch (e) {
-                        logWarn_ACU('[VisualizerDelete] Hard purge failed:', e);
-                        // 不清空队列，让用户再次保存时有机会重试
-                    }
-                }
-                // 2.5 所有保存完成后再统一刷新，确保读取最新数据再进行后续操作
-                await refreshMergedDataAndNotifyWithUI_ACU();
-                if (shouldSyncSummaryVectorIndexAfterSave_ACU && getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
-                    try {
-                        const queueResult = await enqueueSummaryVectorIndexFlush_ACU({
-                            targetMessageIndex: latestAiIndex !== -1 ? latestAiIndex : undefined,
-                            mode: 'sync',
-                            reason: 'visualizer_save',
-                        });
-                        if (!queueResult.queued && !queueResult.skipped) {
-                            logWarn_ACU('[VisualizerVectorIndex] 交火索引防抖归档入队失败:', queueResult.reason);
-                            showToastr_ACU('warning', `表格已保存，但交火索引防抖归档入队失败：${queueResult.reason || 'unknown'}`);
-                        }
-                        else if (queueResult.skipped) {
-                            logDebug_ACU(`[VisualizerVectorIndex] 交火索引防抖归档入队跳过: ${queueResult.reason || 'skipped'}`);
-                        }
-                        else {
-                            logDebug_ACU(`[VisualizerVectorIndex] 交火索引防抖归档已入队: scope=${queueResult.scopeKey || ''}`);
-                        }
-                    }
-                    catch (error) {
-                        logWarn_ACU('[VisualizerVectorIndex] 交火索引防抖归档入队异常:', error);
-                        showToastr_ACU('warning', '表格已保存，但交火索引防抖归档入队异常，请查看控制台日志。');
-                    }
-                }
-                if ($popupInstance_ACU && $popupInstance_ACU.length) {
-                    loadTemplatePresetSelect_ACU({ keepGlobalValue: false });
-                }
-                showToastr_ACU('success', '更改已按原楼层保存到聊天记录！');
             }
+            // 2.4.5 [关键] 如果本次在可视化编辑器删除了表格，则此处追溯整个聊天记录做“硬删除”
+            // 说明：saveIndependentTableToChatHistory_ACU 只会覆盖/追加 keys，不会自动移除旧 keys，因此必须额外做一次全局清理。
+            if (typeof purgeSheetKeysFromChatHistoryHard_ACU === 'function' && deletedKeysToPurge_ACU.length > 0) {
+                try {
+                    const r = await purgeSheetKeysFromChatHistoryHard_ACU(deletedKeysToPurge_ACU);
+                    if (r?.changed) {
+                        logDebug_ACU(`[VisualizerDelete] Hard-purged ${deletedKeysToPurge_ACU.length} keys from ${r.changedCount} AI messages.`);
+                        if (topLevelWindow_ACU?.AutoCardUpdaterAPI) {
+                            topLevelWindow_ACU.AutoCardUpdaterAPI._notifyTableUpdate();
+                        }
+                        // SQLite 模式下重建运行时数据库实例，确保模板切换时不会残留旧表结构或旧数据
+                        if (isSqliteMode()) {
+                            try {
+                                await reloadStorageProvider();
+                                logDebug_ACU('[VisualizerDelete] SQLite 运行时数据库已重建');
+                            }
+                            catch (reloadError) {
+                                logWarn_ACU(`[VisualizerDelete] reloadStorageProvider 失败: ${reloadError?.message}，继续使用当前 provider`);
+                            }
+                        }
+                    }
+                    _acuVisState.deletedSheetKeys = [];
+                }
+                catch (e) {
+                    logWarn_ACU('[VisualizerDelete] Hard purge failed:', e);
+                    // 不清空队列，让用户再次保存时有机会重试
+                }
+            }
+            // 2.5 所有保存完成后再统一刷新，确保读取最新数据再进行后续操作
+            await refreshMergedDataAndNotifyWithUI_ACU();
+            if (shouldSyncSummaryVectorIndexAfterSave_ACU && getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
+                try {
+                    const queueResult = await enqueueSummaryVectorIndexFlush_ACU({
+                        targetMessageIndex: appendTargetIndex !== -1 ? appendTargetIndex : (latestAiIndex !== -1 ? latestAiIndex : undefined),
+                        mode: 'sync',
+                        reason: 'visualizer_save',
+                    });
+                    if (!queueResult.queued && !queueResult.skipped) {
+                        logWarn_ACU('[VisualizerVectorIndex] 交火索引防抖归档入队失败:', queueResult.reason);
+                        showToastr_ACU('warning', `表格已保存，但交火索引防抖归档入队失败：${queueResult.reason || 'unknown'}`);
+                    }
+                    else if (queueResult.skipped) {
+                        logDebug_ACU(`[VisualizerVectorIndex] 交火索引防抖归档入队跳过: ${queueResult.reason || 'skipped'}`);
+                    }
+                    else {
+                        logDebug_ACU(`[VisualizerVectorIndex] 交火索引防抖归档已入队: scope=${queueResult.scopeKey || ''}`);
+                    }
+                }
+                catch (error) {
+                    logWarn_ACU('[VisualizerVectorIndex] 交火索引防抖归档入队异常:', error);
+                    showToastr_ACU('warning', '表格已保存，但交火索引防抖归档入队异常，请查看控制台日志。');
+                }
+            }
+            if ($popupInstance_ACU && $popupInstance_ACU.length) {
+                loadTemplatePresetSelect_ACU({ keepGlobalValue: false });
+            }
+            showToastr_ACU('success', '更改已追加保存到当前最新有效楼层！');
         }
         // 3. Trigger UI Update & Worldbook Injection
         await updateReadableLorebookEntry_ACU(true);
@@ -54259,22 +54254,14 @@ $CONTENT
         return true;
     }
     /**
-     * 查找指定表格数据所在的最新聊天楼层索引
-     * 复用逻辑：updateRow / insertRow / deleteRow 共享此函数
+     * 查找 V2 operation log 的当前有效追加楼层。
+     * 手动 CRUD 必须追加到最新可承载表数据的 AI 楼，不能按单表历史楼层回写。
      */
-    function findTableLatestFloor(targetSheetKey, tableName) {
+    function findTableLatestFloor(_targetSheetKey, _tableName) {
         const chat = SillyTavern_API_ACU.chat;
         if (!chat || chat.length === 0)
             return -1;
-        const history = resolveTableHistoryStateFromChat_ACU(chat, {
-            sheetKey: targetSheetKey,
-            isSummaryTable: isSummaryOrOutlineTable_ACU(tableName),
-            isolationKey: getCurrentIsolationKey_ACU(),
-            settings: settings_ACU,
-        });
-        if (history.latestDataMessageIndex !== -1)
-            return history.latestDataMessageIndex;
-        return history.latestAiMessageIndex;
+        return getLatestTableAppendMessageIndexFromChat_ACU(chat, getCurrentIsolationKey_ACU(), settings_ACU);
     }
     async function syncSummaryVectorIndexAfterTableEdit_ACU(tableName, methodName, tableLatestFloorIndex, skipSync) {
         if (skipSync) {
