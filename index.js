@@ -82559,6 +82559,7 @@ Expected function or array of functions, received type ${typeof value}.`
             tempData: null,
             sheetOrder: [],
             deletedSheetKeys: [],
+            pendingDataOps: null,
             pendingLockChanges: [],
             tableLockDrafts: {},
             isLoading: false,
@@ -82653,6 +82654,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 this.tempData = nextData;
                 this.sheetOrder = nextOrder;
                 this.deletedSheetKeys = [];
+                resetVisualizerPendingDataOps_ACU(this);
                 this.pendingLockChanges = [];
                 this.tableLockDrafts = {};
                 this.currentSheetKey = nextOrder.includes(this.currentSheetKey || '')
@@ -82744,8 +82746,10 @@ Expected function or array of functions, received type ${typeof value}.`
                 const headers = Array.isArray(sheet.content[0]) ? sheet.content[0] : [null, '列1'];
                 sheet.content[0] = headers;
                 const row = new Array(headers.length).fill('');
-                row[0] = null;
+                row[0] = createVisualizerTempRowId_ACU();
                 sheet.content.push(row);
+                if (this.currentSheetKey)
+                    recordVisualizerRowInsert_ACU(this, this.currentSheetKey, String(row[0]));
                 this.setDirty(true);
             },
             deleteRow(rowIndex) {
@@ -82755,6 +82759,9 @@ Expected function or array of functions, received type ${typeof value}.`
                 const target = Math.trunc(Number(rowIndex));
                 if (target < 0 || target >= sheet.content.length - 1)
                     return;
+                const rowId = sheet.content[target + 1]?.[0];
+                if (this.currentSheetKey)
+                    recordVisualizerRowDelete_ACU(this, this.currentSheetKey, rowId);
                 sheet.content.splice(target + 1, 1);
                 this.setDirty(true);
             },
@@ -82769,11 +82776,17 @@ Expected function or array of functions, received type ${typeof value}.`
                 const contentRow = sheet.content[row + 1];
                 if (!Array.isArray(contentRow))
                     return;
-                contentRow[col + 1] = String(value ?? '');
+                const nextValue = String(value ?? '');
+                const rowId = contentRow[0];
+                const columnName = Array.isArray(sheet.content[0]) ? sheet.content[0][col + 1] : '';
+                contentRow[col + 1] = nextValue;
+                if (this.currentSheetKey)
+                    recordVisualizerCellUpdate_ACU(this, this.currentSheetKey, rowId, columnName, nextValue);
                 this.setDirty(true);
             },
             markSaved(target) {
                 this.deletedSheetKeys = [];
+                resetVisualizerPendingDataOps_ACU(this);
                 this.pendingLockChanges = [];
                 this.lastSavedTarget = target;
                 this.lastSavedAt = Date.now();
@@ -82909,6 +82922,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 this.tempData = null;
                 this.sheetOrder = [];
                 this.deletedSheetKeys = [];
+                resetVisualizerPendingDataOps_ACU(this);
                 this.pendingLockChanges = [];
                 this.tableLockDrafts = {};
                 this.isLoading = false;
@@ -95500,36 +95514,12 @@ Expected function or array of functions, received type ${typeof value}.`
     function useVisualizerSave(interactions = {}) {
         const visualizer = useVisualizerStore();
         const toastStore = useToastStore();
-        async function save(target) {
+        async function runSaving(task) {
             if (visualizer.isSaving)
                 return false;
             visualizer.setSaving(true);
             try {
-                const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder, visualizer.tableLockDrafts);
-                let globalTemplateResult = null;
-                if (target === 'global') {
-                    globalTemplateResult = await saveGlobalTemplateSnapshot(orderedData, interactions);
-                    if (globalTemplateResult.status === 'cancelled')
-                        return false;
-                }
-                _set_currentJsonTableData_ACU(cloneData$1(orderedData));
-                syncChatSheetGuide(orderedData, [...visualizer.sheetOrder], target === 'global');
-                const chatResult = await saveCurrentDataToChat([...visualizer.sheetOrder], [...visualizer.deletedSheetKeys]);
-                saveLockDrafts(visualizer.tableLockDrafts);
-                visualizer.markSaved(target);
-                if (target === 'global' && globalTemplateResult?.status === 'saved') {
-                    toastStore.success(`已保存到全局预设：${globalTemplateResult.presetName}。`, { muteable: false });
-                }
-                else if (target === 'global') {
-                    toastStore.info('全局模板没有结构变化；当前聊天数据已同步。', { muteable: false });
-                }
-                else if (chatResult === 'memory-only') {
-                    toastStore.warning('找不到可写入的 AI 消息，修改已保存在运行内存中。', { muteable: false });
-                }
-                else {
-                    toastStore.success('已保存到当前聊天。', { muteable: false });
-                }
-                return true;
+                return await task();
             }
             catch (error) {
                 const message = error instanceof Error ? error.message : '保存失败，请查看控制台日志。';
@@ -95541,9 +95531,76 @@ Expected function or array of functions, received type ${typeof value}.`
                 visualizer.setSaving(false);
             }
         }
+        async function saveDataToCurrentMessage() {
+            return runSaving(async () => {
+                const result = await applyVisualizerPendingDataOps_ACU(visualizer);
+                if (!result.success) {
+                    toastStore.error(result.error || '数据保存失败。', { muteable: false });
+                    return false;
+                }
+                if (!result.changed) {
+                    toastStore.info('没有需要保存的数据增量。', { muteable: false });
+                    return false;
+                }
+                saveLockDrafts(visualizer.tableLockDrafts);
+                await refreshMergedDataAndNotify_ACU();
+                try {
+                    topLevelWindow_ACU.AutoCardUpdaterAPI?._notifyTableUpdate?.();
+                }
+                catch { }
+                visualizer.markSaved('data');
+                toastStore.success('数据增量已保存到当前消息。', { muteable: false });
+                return true;
+            });
+        }
+        async function saveTemplateToCurrentChat() {
+            return runSaving(async () => {
+                if (hasVisualizerPendingDataOps_ACU(visualizer)) {
+                    toastStore.error('存在未保存的数据增量；本次是模板保存，已阻止混合提交。', { muteable: false });
+                    return false;
+                }
+                const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder, visualizer.tableLockDrafts);
+                syncChatSheetGuide(orderedData, [...visualizer.sheetOrder], false);
+                await saveChatToHost_ACU();
+                saveLockDrafts(visualizer.tableLockDrafts);
+                if (isSqliteMode())
+                    await reloadStorageProvider();
+                await refreshMergedDataAndNotify_ACU();
+                visualizer.markSaved('template-chat');
+                toastStore.success('模板/结构已保存到当前聊天。', { muteable: false });
+                return true;
+            });
+        }
+        async function saveTemplateToGlobal() {
+            return runSaving(async () => {
+                if (hasVisualizerPendingDataOps_ACU(visualizer)) {
+                    toastStore.error('存在未保存的数据增量；本次是模板保存，已阻止混合提交。', { muteable: false });
+                    return false;
+                }
+                const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder, visualizer.tableLockDrafts);
+                const globalTemplateResult = await saveGlobalTemplateSnapshot(orderedData, interactions);
+                if (globalTemplateResult.status === 'cancelled')
+                    return false;
+                saveLockDrafts(visualizer.tableLockDrafts);
+                if (isSqliteMode())
+                    await reloadStorageProvider();
+                await refreshMergedDataAndNotify_ACU();
+                visualizer.markSaved('template-global');
+                if (globalTemplateResult.status === 'saved') {
+                    toastStore.success(`模板/结构已保存到全局预设：${globalTemplateResult.presetName}。`, { muteable: false });
+                }
+                else {
+                    toastStore.info('全局模板无变化。', { muteable: false });
+                }
+                return true;
+            });
+        }
         return {
-            saveToChat: () => save('chat'),
-            saveToGlobal: () => save('global'),
+            saveDataToCurrentMessage,
+            saveTemplateToCurrentChat,
+            saveTemplateToGlobal,
+            saveToChat: saveDataToCurrentMessage,
+            saveToGlobal: saveTemplateToGlobal,
         };
     }
 
@@ -97423,12 +97480,12 @@ Expected function or array of functions, received type ${typeof value}.`
             const save = useVisualizerSave({
                 requestGlobalPresetName(defaultName) {
                     return openInputDialog({
-                        title: "保存到全局模板",
-                        message: "当前生效的是默认模板，保存到全局前需要给这份模板起一个名字。取消后不会写入聊天或清掉未保存状态。",
+                        title: "保存模板到全局",
+                        message: "当前生效的是默认模板，保存模板到全局前需要给这份模板起一个名字。取消后不会写入聊天或清掉未保存状态。",
                         label: "模板预设名称",
                         defaultValue: defaultName,
                         placeholder: "例如：当前角色专用模板",
-                        confirmLabel: "保存到全局",
+                        confirmLabel: "保存模板到全局",
                     });
                 },
                 confirmOverwriteGlobalPreset(presetName) {
@@ -97850,7 +97907,7 @@ Expected function or array of functions, received type ${typeof value}.`
                     return "有未保存修改，保存前只存在于编辑器草稿中。";
                 if (visualizer.lastSavedAt)
                     return "最近一次保存已完成。";
-                return "载入后可以编辑数据卡片，并选择保存到当前聊天或全局模板。";
+                return "载入后可以分别保存数据、当前聊天模板或全局模板。";
             });
             const saveDisabled = computed(() => visualizer.isLoading || !!visualizer.loadError || !visualizer.tempData);
             async function requestAddSheet() {
@@ -98003,7 +98060,7 @@ Expected function or array of functions, received type ${typeof value}.`
                     badge: { label: "未保存", variant: "warning" },
                     cancelLabel: "取消关闭",
                     actions: [
-                        { value: "save", label: "保存到当前聊天", variant: "primary" },
+                        { value: "save", label: "保存数据到当前消息", variant: "primary" },
                         { value: "discard", label: "丢弃草稿", variant: "danger" },
                     ],
                 }).then((value) => value || "cancel");
@@ -98049,8 +98106,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-visualizer-surface[data-v-da714d75] {\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n  display: grid;\n  grid-template-columns: 260px minmax(0, 1fr);\n  overflow: hidden;\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__sidebar[data-v-da714d75] {\n  min-width: 0;\n  min-height: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  padding: 24px 12px 16px;\n  overflow-y: auto;\n  border-right: 1px solid var(--acu-border-2);\n  background: var(--acu-sidebar-bg);\n}\n.acu-visualizer-surface__main[data-v-da714d75] {\n  min-width: 0;\n  min-height: 0;\n  display: flex;\n  flex-direction: column;\n  overflow: hidden;\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar[data-v-da714d75] {\n  flex: 0 0 auto;\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  min-height: 50px;\n  padding: 8px 12px 8px 16px;\n  border-bottom: 1px solid var(--acu-border-2);\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar-context[data-v-da714d75] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex: 1 1 auto;\n  gap: 10px;\n}\n.acu-visualizer-surface__mobile-menu[data-v-da714d75] {\n  display: none;\n  flex: 0 0 auto;\n  background: transparent;\n  color: var(--acu-text-2);\n  box-shadow: none;\n}\n.acu-visualizer-surface__mobile-menu[data-v-da714d75]:hover:not(:disabled) {\n  background: transparent;\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__context-items[data-v-da714d75] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex: 1 1 auto;\n  justify-content: flex-start;\n  gap: 16px;\n}\n.acu-visualizer-surface__context-item[data-v-da714d75] {\n  min-width: 0;\n  display: grid;\n  gap: 2px;\n}\n.acu-visualizer-surface__context-item[data-v-da714d75]:first-child {\n  flex: 0 1 auto;\n  max-width: min(560px, 42vw);\n}\n.acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-da714d75] {\n  flex: 0 0 auto;\n  max-width: min(260px, 20vw);\n}\n.acu-visualizer-surface__context-item span[data-v-da714d75] {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.2;\n}\n.acu-visualizer-surface__context-item strong[data-v-da714d75] {\n  min-width: 0;\n  overflow: hidden;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 600;\n  line-height: 1.25;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__context-item:first-child strong[data-v-da714d75] {\n  overflow: visible;\n  text-overflow: clip;\n  white-space: normal;\n  word-break: break-word;\n}\n.acu-visualizer-surface__context-badge[data-v-da714d75] {\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__conflict[data-v-da714d75] {\n  flex: 0 0 auto;\n  margin: 12px 16px 0;\n}\n.acu-visualizer-surface__conflict-actions[data-v-da714d75] {\n  display: inline-flex;\n  flex-wrap: wrap;\n  gap: 6px;\n  margin-left: 8px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-da714d75],\n.acu-visualizer-surface__data-toolbar-actions[data-v-da714d75],\n.acu-visualizer-surface__database-toolbar[data-v-da714d75],\n.acu-visualizer-surface__pagination[data-v-da714d75],\n.acu-visualizer-surface__pagination-pages[data-v-da714d75],\n.acu-visualizer-surface__card-header[data-v-da714d75] {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 8px;\n}\n.acu-visualizer-surface__workspace[data-v-da714d75] {\n  flex: 1 1 auto;\n  min-height: 0;\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  overflow: auto;\n  padding: 16px;\n}\n.acu-visualizer-surface__loading[data-v-da714d75] {\n  min-height: 140px;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  gap: 8px;\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__mode-tabs[data-v-da714d75] {\n  flex: 0 0 auto;\n  width: min(360px, 42vw);\n}\n.acu-visualizer-surface__close[data-v-da714d75] {\n  width: 30px;\n  height: 30px;\n  flex: 0 0 auto;\n  border: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-page-title, 22px);\n  line-height: 1;\n  border-radius: var(--acu-radius-sm);\n}\n.acu-visualizer-surface__close[data-v-da714d75]:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__data-toolbar[data-v-da714d75] {\n  flex: 0 0 auto;\n  justify-content: space-between;\n  padding: 4px 0 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__data-toolbar-actions[data-v-da714d75] {\n  flex: 0 0 auto;\n  justify-content: flex-end;\n}\n.acu-visualizer-surface__pagination[data-v-da714d75] {\n  flex: 0 0 auto;\n  justify-content: center;\n  gap: 14px;\n  padding: 6px 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-visualizer-surface__pagination-pages[data-v-da714d75] {\n  min-width: 0;\n  flex-wrap: wrap;\n  justify-content: center;\n  gap: 8px;\n}\n.acu-visualizer-surface__page-button[data-v-da714d75] {\n  width: 34px;\n  min-width: 34px;\n  height: 34px;\n  padding: 0;\n  border: 1px solid var(--acu-border);\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n}\n.acu-visualizer-surface__page-button[data-v-da714d75]:hover:not(:disabled) {\n  border-color: var(--acu-accent);\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__page-button--active[data-v-da714d75],\n.acu-visualizer-surface__page-button--active[data-v-da714d75]:hover:not(:disabled) {\n  border-color: var(--acu-accent);\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-visualizer-surface__page-button[data-v-da714d75]:disabled:not(\n    .acu-visualizer-surface__page-button--active\n  ) {\n  border-color: var(--acu-border);\n  background: var(--acu-bg-0);\n  color: var(--acu-text-2);\n  opacity: 1;\n  cursor: default;\n}\n.acu-visualizer-surface__page-jump[data-v-da714d75] {\n  flex: 0 0 64px;\n  width: 64px;\n}\n.acu-visualizer-surface__page-jump[data-v-da714d75] .acu-input {\n  min-height: 34px;\n  border: 1px solid var(--acu-border) !important;\n  background: var(--acu-bg-0) !important;\n  text-align: center;\n  font-size: var(--acu-font-size-body-lg, 13px) !important;\n  font-variant-numeric: tabular-nums;\n}\n.acu-visualizer-surface__data-range[data-v-da714d75] {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__database-toolbar[data-v-da714d75] {\n  flex: 0 0 auto;\n  padding: 0 0 4px;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar h2[data-v-da714d75] {\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-page-title, 22px);\n  font-weight: 700;\n  line-height: 1.2;\n}\n.acu-visualizer-surface__database-toolbar p[data-v-da714d75] {\n  margin: 5px 0 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-readable, 1.55);\n}\n.acu-visualizer-surface__empty[data-v-da714d75] {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-visualizer-surface__card-grid[data-v-da714d75] {\n  display: grid;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));\n  gap: 12px;\n}\n.acu-visualizer-surface__data-card[data-v-da714d75] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  height: 100%;\n  padding: 16px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-bg-1);\n}\n.acu-visualizer-surface__card-header strong[data-v-da714d75] {\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-visualizer-surface__card-header span[data-v-da714d75] {\n  min-width: 0;\n  margin-right: auto;\n  overflow: hidden;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__card-header[data-v-da714d75] .acu-icon-btn {\n  background: transparent;\n}\n.acu-visualizer-surface__card-header[data-v-da714d75]\n  .acu-icon-btn--default:hover:not(:disabled) {\n  background:\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\n    transparent;\n}\n.acu-visualizer-surface__card-header[data-v-da714d75] .acu-icon-btn--accent {\n  background: var(--acu-accent-glow);\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__card-header[data-v-da714d75]\n  .acu-icon-btn--danger:hover:not(:disabled) {\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-visualizer-surface__fields[data-v-da714d75] {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.acu-visualizer-surface__field-row[data-v-da714d75] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 8px;\n  align-items: stretch;\n}\n.acu-visualizer-surface__field-row.is-wide[data-v-da714d75] {\n  grid-template-columns: minmax(0, 1fr);\n}\n.acu-visualizer-surface__field[data-v-da714d75] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  padding: 2px;\n  border: 1px solid transparent;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  transition:\n    background 0.15s ease,\n    border-color 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field[data-v-da714d75] .acu-textarea {\n  flex: 1 1 auto;\n  min-height: 34px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.45;\n  white-space: pre-wrap;\n  word-break: break-word;\n  overflow-wrap: break-word;\n}\n.acu-visualizer-surface__field-preview[data-v-da714d75] {\n  width: 100%;\n  min-height: 34px;\n  box-sizing: border-box;\n  padding: 8px 10px;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  color: var(--acu-text-1);\n  cursor: text;\n  display: block;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.45;\n  white-space: pre-wrap;\n  word-break: break-word;\n  overflow-wrap: break-word;\n  transition:\n    background 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field-preview[data-v-da714d75]:hover,\n.acu-visualizer-surface__field-preview[data-v-da714d75]:focus-visible {\n  outline: none;\n  background:\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\n    var(--acu-bg-2);\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field-preview.is-empty[data-v-da714d75] {\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__field-label[data-v-da714d75] {\n  min-width: 0;\n  min-height: 24px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 6px;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 600;\n}\n.acu-visualizer-surface__field-label > span[data-v-da714d75]:first-child {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__field-locks[data-v-da714d75] {\n  flex: 0 0 auto;\n  min-width: 51px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: flex-end;\n  gap: 3px;\n  opacity: 0.44;\n  transition: opacity 0.15s ease;\n}\n.acu-visualizer-surface__field:hover .acu-visualizer-surface__field-locks[data-v-da714d75],\n.acu-visualizer-surface__field:focus-within\n  .acu-visualizer-surface__field-locks[data-v-da714d75],\n.acu-visualizer-surface__field.is-actions-active\n  .acu-visualizer-surface__field-locks[data-v-da714d75],\n.acu-visualizer-surface__field.is-locked .acu-visualizer-surface__field-locks[data-v-da714d75],\n.acu-visualizer-surface__field.is-special-index\n  .acu-visualizer-surface__field-locks[data-v-da714d75] {\n  opacity: 1;\n}\n.acu-visualizer-surface__field-locks[data-v-da714d75] .acu-icon-btn {\n  --acu-icon-btn-size: 24px;\n  --acu-icon-btn-font-size: 11px;\n  width: 24px;\n  height: 24px;\n  background: transparent !important;\n}\n.acu-visualizer-surface__field-locks[data-v-da714d75]\n  .acu-icon-btn--default:hover:not(:disabled) {\n  background:\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\n    transparent;\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__field-locks[data-v-da714d75] .acu-icon-btn--accent {\n  color: var(--acu-warning) !important;\n  background: color-mix(in srgb, var(--acu-warning) 16%, transparent) !important;\n}\n.acu-visualizer-surface__field-locks[data-v-da714d75]\n  .acu-icon-btn--accent:hover:not(:disabled) {\n  color: var(--acu-warning) !important;\n  background: color-mix(in srgb, var(--acu-warning) 22%, transparent) !important;\n}\n.acu-visualizer-surface__field.is-locked[data-v-da714d75] {\n  border-color: var(--acu-border);\n  background: color-mix(in srgb, var(--acu-warning) 8%, transparent);\n}\n.acu-visualizer-surface__field.is-actions-active[data-v-da714d75]:not(.is-locked) {\n  background: color-mix(in srgb, var(--acu-accent) 6%, transparent);\n}\n.acu-visualizer-surface__footer[data-v-da714d75] {\n  flex: 0 0 auto;\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 12px 16px;\n  border-top: 1px solid var(--acu-border-2);\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__footer-actions[data-v-da714d75] {\n  display: flex;\n  gap: 8px;\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__footer-actions[data-v-da714d75] .acu-btn {\n  min-width: 132px;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-da714d75] {\n  position: fixed;\n  top: 0;\n  right: 0;\n  bottom: 0;\n  left: 0;\n  inset: 0;\n  width: 100%;\n  width: 100vw;\n  width: 100dvw;\n  height: 100%;\n  height: 100vh;\n  height: 100dvh;\n  min-height: 100vh;\n  min-height: 100dvh;\n  z-index: 9350;\n  display: none;\n  align-items: stretch;\n  justify-content: flex-start;\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\n  overflow: hidden;\n  background: rgba(0, 0, 0, 0.58);\n  pointer-events: auto;\n  overscroll-behavior: contain;\n  animation: visualizer-mobile-nav-layer-in-da714d75 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing[data-v-da714d75] {\n  pointer-events: auto;\n  animation: visualizer-mobile-nav-layer-out-da714d75 0.15s ease-in both;\n}\n.acu-visualizer-surface__mobile-nav[data-v-da714d75] {\n  width: 360px;\n  max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n  height: 100%;\n  max-height: 100%;\n  min-width: 0;\n  min-height: 0;\n  align-self: stretch;\n  flex: 0 1 360px;\n  display: flex;\n  flex-direction: column;\n  padding: 24px 12px 16px;\n  overflow-y: auto;\n  border-right: 0;\n  background: var(--acu-sidebar-bg);\n  box-shadow: var(--acu-shadow);\n  pointer-events: auto;\n  animation: visualizer-mobile-nav-drawer-in-da714d75 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing\n  .acu-visualizer-surface__mobile-nav[data-v-da714d75] {\n  animation: visualizer-mobile-nav-drawer-out-da714d75 0.15s ease-in both;\n}\n@supports (width: min(360px, calc(100% - 24px))) {\n.acu-visualizer-surface__mobile-nav[data-v-da714d75] {\n    width: min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n    flex: 0 0 min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n}\n}\n@supports (width: 100dvw) {\n.acu-visualizer-surface__mobile-nav[data-v-da714d75] {\n    max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n}\n}\n@supports (height: 100dvh) {\n.acu-visualizer-surface__mobile-nav[data-v-da714d75] {\n    height: 100%;\n    max-height: 100%;\n}\n}\n@keyframes visualizer-mobile-nav-layer-in-da714d75 {\nfrom {\n    opacity: 0;\n}\nto {\n    opacity: 1;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-in-da714d75 {\nfrom {\n    transform: translateX(-100%);\n}\nto {\n    transform: translateX(0);\n}\n}\n@keyframes visualizer-mobile-nav-layer-out-da714d75 {\nfrom {\n    opacity: 1;\n}\nto {\n    opacity: 0;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-out-da714d75 {\nfrom {\n    transform: translateX(0);\n}\nto {\n    transform: translateX(-100%);\n}\n}\n@media (max-width: 1024px) {\n.acu-visualizer-surface[data-v-da714d75] {\n    grid-template-columns: 220px minmax(0, 1fr);\n}\n.acu-visualizer-surface__card-grid[data-v-da714d75] {\n    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));\n}\n.acu-visualizer-surface__topbar[data-v-da714d75] {\n    flex-wrap: wrap;\n}\n.acu-visualizer-surface__mode-tabs[data-v-da714d75] {\n    order: 3;\n    width: min(420px, 100%);\n}\n}\n@media (max-width: 767px) {\n.acu-visualizer-surface[data-v-da714d75] {\n    grid-template-columns: 1fr;\n    grid-template-rows: minmax(0, 1fr);\n}\n.acu-visualizer-surface__sidebar[data-v-da714d75] {\n    display: none;\n}\n.acu-visualizer-surface__topbar[data-v-da714d75] {\n    display: grid;\n    grid-template-columns: minmax(0, 1fr) auto;\n    gap: 8px;\n    min-height: 0;\n    padding: 8px;\n}\n.acu-visualizer-surface__topbar-context[data-v-da714d75] {\n    grid-column: 1;\n    display: grid;\n    grid-template-columns: auto minmax(0, 1fr) auto;\n    align-items: center;\n    gap: 8px;\n    min-width: 0;\n}\n.acu-visualizer-surface__mobile-menu[data-v-da714d75] {\n    display: inline-flex;\n}\n.acu-visualizer-surface__context-items[data-v-da714d75] {\n    display: grid;\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n    gap: 8px;\n}\n.acu-visualizer-surface__context-item[data-v-da714d75]:first-child,\n  .acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-da714d75] {\n    max-width: none;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-da714d75] {\n    display: flex;\n}\n.acu-visualizer-surface__close[data-v-da714d75] {\n    grid-column: 2;\n    grid-row: 1;\n    align-self: center;\n}\n.acu-visualizer-surface__mode-tabs[data-v-da714d75] {\n    grid-column: 1 / -1;\n    width: 100%;\n}\n.acu-visualizer-surface__workspace[data-v-da714d75] {\n    padding: 10px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-da714d75],\n  .acu-visualizer-surface__database-toolbar[data-v-da714d75] {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-visualizer-surface__data-toolbar[data-v-da714d75] .acu-btn,\n  .acu-visualizer-surface__database-toolbar[data-v-da714d75] .acu-btn {\n    width: 100%;\n}\n.acu-visualizer-surface__data-toolbar-actions[data-v-da714d75] {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-visualizer-surface__pagination[data-v-da714d75] {\n    align-items: center;\n    flex-direction: row;\n    flex-wrap: wrap;\n    gap: 6px;\n    padding: 2px 0 6px;\n}\n.acu-visualizer-surface__pagination-pages[data-v-da714d75] {\n    flex: 0 1 auto;\n    align-items: center;\n    flex-direction: row;\n    flex-wrap: wrap;\n    gap: 5px;\n}\n.acu-visualizer-surface__page-button[data-v-da714d75] {\n    width: 36px;\n    min-width: 36px;\n    height: 34px;\n    flex: 0 0 36px;\n}\n.acu-visualizer-surface__page-jump[data-v-da714d75] {\n    flex: 0 0 54px;\n    width: 54px;\n}\n.acu-visualizer-surface__footer[data-v-da714d75] {\n    display: grid;\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\n    align-items: center;\n    gap: 8px;\n    padding: 8px;\n}\n.acu-visualizer-surface__footer > span[data-v-da714d75] {\n    min-width: 0;\n    overflow: hidden;\n    text-overflow: ellipsis;\n    white-space: nowrap;\n}\n.acu-visualizer-surface__footer-actions[data-v-da714d75] {\n    display: grid;\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n    gap: 6px;\n}\n.acu-visualizer-surface__footer-actions[data-v-da714d75] .acu-btn {\n    min-width: 0;\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-visualizer-surface__card-grid[data-v-da714d75] {\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__fields[data-v-da714d75] {\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__mode-tabs[data-v-da714d75] {\n    width: 100%;\n}\n.acu-visualizer-surface__conflict-actions[data-v-da714d75] {\n    display: flex;\n    margin: 8px 0 0;\n}\n.acu-visualizer-surface__footer[data-v-da714d75] {\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__footer > span[data-v-da714d75] {\n    display: none;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue#style-0-da714d75");
-    var VisualizerSurface_vue_vue_type_style_index_0_scoped_da714d75_lang = null;
+    injectSfcStyle("\n.acu-visualizer-surface[data-v-e0a3c10c] {\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n  display: grid;\n  grid-template-columns: 260px minmax(0, 1fr);\n  overflow: hidden;\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__sidebar[data-v-e0a3c10c] {\n  min-width: 0;\n  min-height: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  padding: 24px 12px 16px;\n  overflow-y: auto;\n  border-right: 1px solid var(--acu-border-2);\n  background: var(--acu-sidebar-bg);\n}\n.acu-visualizer-surface__main[data-v-e0a3c10c] {\n  min-width: 0;\n  min-height: 0;\n  display: flex;\n  flex-direction: column;\n  overflow: hidden;\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar[data-v-e0a3c10c] {\n  flex: 0 0 auto;\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  min-height: 50px;\n  padding: 8px 12px 8px 16px;\n  border-bottom: 1px solid var(--acu-border-2);\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar-context[data-v-e0a3c10c] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex: 1 1 auto;\n  gap: 10px;\n}\n.acu-visualizer-surface__mobile-menu[data-v-e0a3c10c] {\n  display: none;\n  flex: 0 0 auto;\n  background: transparent;\n  color: var(--acu-text-2);\n  box-shadow: none;\n}\n.acu-visualizer-surface__mobile-menu[data-v-e0a3c10c]:hover:not(:disabled) {\n  background: transparent;\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__context-items[data-v-e0a3c10c] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex: 1 1 auto;\n  justify-content: flex-start;\n  gap: 16px;\n}\n.acu-visualizer-surface__context-item[data-v-e0a3c10c] {\n  min-width: 0;\n  display: grid;\n  gap: 2px;\n}\n.acu-visualizer-surface__context-item[data-v-e0a3c10c]:first-child {\n  flex: 0 1 auto;\n  max-width: min(560px, 42vw);\n}\n.acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-e0a3c10c] {\n  flex: 0 0 auto;\n  max-width: min(260px, 20vw);\n}\n.acu-visualizer-surface__context-item span[data-v-e0a3c10c] {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.2;\n}\n.acu-visualizer-surface__context-item strong[data-v-e0a3c10c] {\n  min-width: 0;\n  overflow: hidden;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 600;\n  line-height: 1.25;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__context-item:first-child strong[data-v-e0a3c10c] {\n  overflow: visible;\n  text-overflow: clip;\n  white-space: normal;\n  word-break: break-word;\n}\n.acu-visualizer-surface__context-badge[data-v-e0a3c10c] {\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__conflict[data-v-e0a3c10c] {\n  flex: 0 0 auto;\n  margin: 12px 16px 0;\n}\n.acu-visualizer-surface__conflict-actions[data-v-e0a3c10c] {\n  display: inline-flex;\n  flex-wrap: wrap;\n  gap: 6px;\n  margin-left: 8px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-e0a3c10c],\n.acu-visualizer-surface__data-toolbar-actions[data-v-e0a3c10c],\n.acu-visualizer-surface__database-toolbar[data-v-e0a3c10c],\n.acu-visualizer-surface__pagination[data-v-e0a3c10c],\n.acu-visualizer-surface__pagination-pages[data-v-e0a3c10c],\n.acu-visualizer-surface__card-header[data-v-e0a3c10c] {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 8px;\n}\n.acu-visualizer-surface__workspace[data-v-e0a3c10c] {\n  flex: 1 1 auto;\n  min-height: 0;\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  overflow: auto;\n  padding: 16px;\n}\n.acu-visualizer-surface__loading[data-v-e0a3c10c] {\n  min-height: 140px;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  gap: 8px;\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__mode-tabs[data-v-e0a3c10c] {\n  flex: 0 0 auto;\n  width: min(360px, 42vw);\n}\n.acu-visualizer-surface__close[data-v-e0a3c10c] {\n  width: 30px;\n  height: 30px;\n  flex: 0 0 auto;\n  border: 0;\n  background: transparent;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-page-title, 22px);\n  line-height: 1;\n  border-radius: var(--acu-radius-sm);\n}\n.acu-visualizer-surface__close[data-v-e0a3c10c]:hover {\n  background: var(--acu-hover-overlay);\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__data-toolbar[data-v-e0a3c10c] {\n  flex: 0 0 auto;\n  justify-content: space-between;\n  padding: 4px 0 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__data-toolbar-actions[data-v-e0a3c10c] {\n  flex: 0 0 auto;\n  justify-content: flex-end;\n}\n.acu-visualizer-surface__pagination[data-v-e0a3c10c] {\n  flex: 0 0 auto;\n  justify-content: center;\n  gap: 14px;\n  padding: 6px 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-visualizer-surface__pagination-pages[data-v-e0a3c10c] {\n  min-width: 0;\n  flex-wrap: wrap;\n  justify-content: center;\n  gap: 8px;\n}\n.acu-visualizer-surface__page-button[data-v-e0a3c10c] {\n  width: 34px;\n  min-width: 34px;\n  height: 34px;\n  padding: 0;\n  border: 1px solid var(--acu-border);\n  background: var(--acu-bg-0);\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n}\n.acu-visualizer-surface__page-button[data-v-e0a3c10c]:hover:not(:disabled) {\n  border-color: var(--acu-accent);\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__page-button--active[data-v-e0a3c10c],\n.acu-visualizer-surface__page-button--active[data-v-e0a3c10c]:hover:not(:disabled) {\n  border-color: var(--acu-accent);\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-visualizer-surface__page-button[data-v-e0a3c10c]:disabled:not(\n    .acu-visualizer-surface__page-button--active\n  ) {\n  border-color: var(--acu-border);\n  background: var(--acu-bg-0);\n  color: var(--acu-text-2);\n  opacity: 1;\n  cursor: default;\n}\n.acu-visualizer-surface__page-jump[data-v-e0a3c10c] {\n  flex: 0 0 64px;\n  width: 64px;\n}\n.acu-visualizer-surface__page-jump[data-v-e0a3c10c] .acu-input {\n  min-height: 34px;\n  border: 1px solid var(--acu-border) !important;\n  background: var(--acu-bg-0) !important;\n  text-align: center;\n  font-size: var(--acu-font-size-body-lg, 13px) !important;\n  font-variant-numeric: tabular-nums;\n}\n.acu-visualizer-surface__data-range[data-v-e0a3c10c] {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__database-toolbar[data-v-e0a3c10c] {\n  flex: 0 0 auto;\n  padding: 0 0 4px;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar h2[data-v-e0a3c10c] {\n  margin: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-page-title, 22px);\n  font-weight: 700;\n  line-height: 1.2;\n}\n.acu-visualizer-surface__database-toolbar p[data-v-e0a3c10c] {\n  margin: 5px 0 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-readable, 1.55);\n}\n.acu-visualizer-surface__empty[data-v-e0a3c10c] {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-visualizer-surface__card-grid[data-v-e0a3c10c] {\n  display: grid;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));\n  gap: 12px;\n}\n.acu-visualizer-surface__data-card[data-v-e0a3c10c] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  height: 100%;\n  padding: 16px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-md);\n  background: var(--acu-bg-1);\n}\n.acu-visualizer-surface__card-header strong[data-v-e0a3c10c] {\n  color: var(--acu-text-1);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-visualizer-surface__card-header span[data-v-e0a3c10c] {\n  min-width: 0;\n  margin-right: auto;\n  overflow: hidden;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__card-header[data-v-e0a3c10c] .acu-icon-btn {\n  background: transparent;\n}\n.acu-visualizer-surface__card-header[data-v-e0a3c10c]\n  .acu-icon-btn--default:hover:not(:disabled) {\n  background:\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\n    transparent;\n}\n.acu-visualizer-surface__card-header[data-v-e0a3c10c] .acu-icon-btn--accent {\n  background: var(--acu-accent-glow);\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__card-header[data-v-e0a3c10c]\n  .acu-icon-btn--danger:hover:not(:disabled) {\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-visualizer-surface__fields[data-v-e0a3c10c] {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n.acu-visualizer-surface__field-row[data-v-e0a3c10c] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 8px;\n  align-items: stretch;\n}\n.acu-visualizer-surface__field-row.is-wide[data-v-e0a3c10c] {\n  grid-template-columns: minmax(0, 1fr);\n}\n.acu-visualizer-surface__field[data-v-e0a3c10c] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n  padding: 2px;\n  border: 1px solid transparent;\n  border-radius: var(--acu-radius-sm);\n  background: transparent;\n  transition:\n    background 0.15s ease,\n    border-color 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field[data-v-e0a3c10c] .acu-textarea {\n  flex: 1 1 auto;\n  min-height: 34px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.45;\n  white-space: pre-wrap;\n  word-break: break-word;\n  overflow-wrap: break-word;\n}\n.acu-visualizer-surface__field-preview[data-v-e0a3c10c] {\n  width: 100%;\n  min-height: 34px;\n  box-sizing: border-box;\n  padding: 8px 10px;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-2);\n  color: var(--acu-text-1);\n  cursor: text;\n  display: block;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.45;\n  white-space: pre-wrap;\n  word-break: break-word;\n  overflow-wrap: break-word;\n  transition:\n    background 0.15s ease,\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field-preview[data-v-e0a3c10c]:hover,\n.acu-visualizer-surface__field-preview[data-v-e0a3c10c]:focus-visible {\n  outline: none;\n  background:\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\n    var(--acu-bg-2);\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field-preview.is-empty[data-v-e0a3c10c] {\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__field-label[data-v-e0a3c10c] {\n  min-width: 0;\n  min-height: 24px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 6px;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 600;\n}\n.acu-visualizer-surface__field-label > span[data-v-e0a3c10c]:first-child {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-visualizer-surface__field-locks[data-v-e0a3c10c] {\n  flex: 0 0 auto;\n  min-width: 51px;\n  display: inline-flex;\n  align-items: center;\n  justify-content: flex-end;\n  gap: 3px;\n  opacity: 0.44;\n  transition: opacity 0.15s ease;\n}\n.acu-visualizer-surface__field:hover .acu-visualizer-surface__field-locks[data-v-e0a3c10c],\n.acu-visualizer-surface__field:focus-within\n  .acu-visualizer-surface__field-locks[data-v-e0a3c10c],\n.acu-visualizer-surface__field.is-actions-active\n  .acu-visualizer-surface__field-locks[data-v-e0a3c10c],\n.acu-visualizer-surface__field.is-locked .acu-visualizer-surface__field-locks[data-v-e0a3c10c],\n.acu-visualizer-surface__field.is-special-index\n  .acu-visualizer-surface__field-locks[data-v-e0a3c10c] {\n  opacity: 1;\n}\n.acu-visualizer-surface__field-locks[data-v-e0a3c10c] .acu-icon-btn {\n  --acu-icon-btn-size: 24px;\n  --acu-icon-btn-font-size: 11px;\n  width: 24px;\n  height: 24px;\n  background: transparent !important;\n}\n.acu-visualizer-surface__field-locks[data-v-e0a3c10c]\n  .acu-icon-btn--default:hover:not(:disabled) {\n  background:\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\n    transparent;\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__field-locks[data-v-e0a3c10c] .acu-icon-btn--accent {\n  color: var(--acu-warning) !important;\n  background: color-mix(in srgb, var(--acu-warning) 16%, transparent) !important;\n}\n.acu-visualizer-surface__field-locks[data-v-e0a3c10c]\n  .acu-icon-btn--accent:hover:not(:disabled) {\n  color: var(--acu-warning) !important;\n  background: color-mix(in srgb, var(--acu-warning) 22%, transparent) !important;\n}\n.acu-visualizer-surface__field.is-locked[data-v-e0a3c10c] {\n  border-color: var(--acu-border);\n  background: color-mix(in srgb, var(--acu-warning) 8%, transparent);\n}\n.acu-visualizer-surface__field.is-actions-active[data-v-e0a3c10c]:not(.is-locked) {\n  background: color-mix(in srgb, var(--acu-accent) 6%, transparent);\n}\n.acu-visualizer-surface__footer[data-v-e0a3c10c] {\n  flex: 0 0 auto;\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n  padding: 12px 16px;\n  border-top: 1px solid var(--acu-border-2);\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__footer-actions[data-v-e0a3c10c] {\n  display: flex;\n  gap: 8px;\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__footer-actions[data-v-e0a3c10c] .acu-btn {\n  min-width: 132px;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-e0a3c10c] {\n  position: fixed;\n  top: 0;\n  right: 0;\n  bottom: 0;\n  left: 0;\n  inset: 0;\n  width: 100%;\n  width: 100vw;\n  width: 100dvw;\n  height: 100%;\n  height: 100vh;\n  height: 100dvh;\n  min-height: 100vh;\n  min-height: 100dvh;\n  z-index: 9350;\n  display: none;\n  align-items: stretch;\n  justify-content: flex-start;\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\n  overflow: hidden;\n  background: rgba(0, 0, 0, 0.58);\n  pointer-events: auto;\n  overscroll-behavior: contain;\n  animation: visualizer-mobile-nav-layer-in-e0a3c10c 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing[data-v-e0a3c10c] {\n  pointer-events: auto;\n  animation: visualizer-mobile-nav-layer-out-e0a3c10c 0.15s ease-in both;\n}\n.acu-visualizer-surface__mobile-nav[data-v-e0a3c10c] {\n  width: 360px;\n  max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n  height: 100%;\n  max-height: 100%;\n  min-width: 0;\n  min-height: 0;\n  align-self: stretch;\n  flex: 0 1 360px;\n  display: flex;\n  flex-direction: column;\n  padding: 24px 12px 16px;\n  overflow-y: auto;\n  border-right: 0;\n  background: var(--acu-sidebar-bg);\n  box-shadow: var(--acu-shadow);\n  pointer-events: auto;\n  animation: visualizer-mobile-nav-drawer-in-e0a3c10c 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing\n  .acu-visualizer-surface__mobile-nav[data-v-e0a3c10c] {\n  animation: visualizer-mobile-nav-drawer-out-e0a3c10c 0.15s ease-in both;\n}\n@supports (width: min(360px, calc(100% - 24px))) {\n.acu-visualizer-surface__mobile-nav[data-v-e0a3c10c] {\n    width: min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n    flex: 0 0 min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n}\n}\n@supports (width: 100dvw) {\n.acu-visualizer-surface__mobile-nav[data-v-e0a3c10c] {\n    max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n}\n}\n@supports (height: 100dvh) {\n.acu-visualizer-surface__mobile-nav[data-v-e0a3c10c] {\n    height: 100%;\n    max-height: 100%;\n}\n}\n@keyframes visualizer-mobile-nav-layer-in-e0a3c10c {\nfrom {\n    opacity: 0;\n}\nto {\n    opacity: 1;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-in-e0a3c10c {\nfrom {\n    transform: translateX(-100%);\n}\nto {\n    transform: translateX(0);\n}\n}\n@keyframes visualizer-mobile-nav-layer-out-e0a3c10c {\nfrom {\n    opacity: 1;\n}\nto {\n    opacity: 0;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-out-e0a3c10c {\nfrom {\n    transform: translateX(0);\n}\nto {\n    transform: translateX(-100%);\n}\n}\n@media (max-width: 1024px) {\n.acu-visualizer-surface[data-v-e0a3c10c] {\n    grid-template-columns: 220px minmax(0, 1fr);\n}\n.acu-visualizer-surface__card-grid[data-v-e0a3c10c] {\n    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));\n}\n.acu-visualizer-surface__topbar[data-v-e0a3c10c] {\n    flex-wrap: wrap;\n}\n.acu-visualizer-surface__mode-tabs[data-v-e0a3c10c] {\n    order: 3;\n    width: min(420px, 100%);\n}\n}\n@media (max-width: 767px) {\n.acu-visualizer-surface[data-v-e0a3c10c] {\n    grid-template-columns: 1fr;\n    grid-template-rows: minmax(0, 1fr);\n}\n.acu-visualizer-surface__sidebar[data-v-e0a3c10c] {\n    display: none;\n}\n.acu-visualizer-surface__topbar[data-v-e0a3c10c] {\n    display: grid;\n    grid-template-columns: minmax(0, 1fr) auto;\n    gap: 8px;\n    min-height: 0;\n    padding: 8px;\n}\n.acu-visualizer-surface__topbar-context[data-v-e0a3c10c] {\n    grid-column: 1;\n    display: grid;\n    grid-template-columns: auto minmax(0, 1fr) auto;\n    align-items: center;\n    gap: 8px;\n    min-width: 0;\n}\n.acu-visualizer-surface__mobile-menu[data-v-e0a3c10c] {\n    display: inline-flex;\n}\n.acu-visualizer-surface__context-items[data-v-e0a3c10c] {\n    display: grid;\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n    gap: 8px;\n}\n.acu-visualizer-surface__context-item[data-v-e0a3c10c]:first-child,\n  .acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-e0a3c10c] {\n    max-width: none;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-e0a3c10c] {\n    display: flex;\n}\n.acu-visualizer-surface__close[data-v-e0a3c10c] {\n    grid-column: 2;\n    grid-row: 1;\n    align-self: center;\n}\n.acu-visualizer-surface__mode-tabs[data-v-e0a3c10c] {\n    grid-column: 1 / -1;\n    width: 100%;\n}\n.acu-visualizer-surface__workspace[data-v-e0a3c10c] {\n    padding: 10px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-e0a3c10c],\n  .acu-visualizer-surface__database-toolbar[data-v-e0a3c10c] {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-visualizer-surface__data-toolbar[data-v-e0a3c10c] .acu-btn,\n  .acu-visualizer-surface__database-toolbar[data-v-e0a3c10c] .acu-btn {\n    width: 100%;\n}\n.acu-visualizer-surface__data-toolbar-actions[data-v-e0a3c10c] {\n    align-items: stretch;\n    flex-direction: column;\n}\n.acu-visualizer-surface__pagination[data-v-e0a3c10c] {\n    align-items: center;\n    flex-direction: row;\n    flex-wrap: wrap;\n    gap: 6px;\n    padding: 2px 0 6px;\n}\n.acu-visualizer-surface__pagination-pages[data-v-e0a3c10c] {\n    flex: 0 1 auto;\n    align-items: center;\n    flex-direction: row;\n    flex-wrap: wrap;\n    gap: 5px;\n}\n.acu-visualizer-surface__page-button[data-v-e0a3c10c] {\n    width: 36px;\n    min-width: 36px;\n    height: 34px;\n    flex: 0 0 36px;\n}\n.acu-visualizer-surface__page-jump[data-v-e0a3c10c] {\n    flex: 0 0 54px;\n    width: 54px;\n}\n.acu-visualizer-surface__footer[data-v-e0a3c10c] {\n    display: grid;\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\n    align-items: center;\n    gap: 8px;\n    padding: 8px;\n}\n.acu-visualizer-surface__footer > span[data-v-e0a3c10c] {\n    min-width: 0;\n    overflow: hidden;\n    text-overflow: ellipsis;\n    white-space: nowrap;\n}\n.acu-visualizer-surface__footer-actions[data-v-e0a3c10c] {\n    display: grid;\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n    gap: 6px;\n}\n.acu-visualizer-surface__footer-actions[data-v-e0a3c10c] .acu-btn {\n    min-width: 0;\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-visualizer-surface__card-grid[data-v-e0a3c10c] {\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__fields[data-v-e0a3c10c] {\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__mode-tabs[data-v-e0a3c10c] {\n    width: 100%;\n}\n.acu-visualizer-surface__conflict-actions[data-v-e0a3c10c] {\n    display: flex;\n    margin: 8px 0 0;\n}\n.acu-visualizer-surface__footer[data-v-e0a3c10c] {\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__footer > span[data-v-e0a3c10c] {\n    display: none;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue#style-0-e0a3c10c");
+    var VisualizerSurface_vue_vue_type_style_index_0_scoped_e0a3c10c_lang = null;
 
     const _hoisted_1$1 = {
     	class: "acu-visualizer-surface__sidebar",
@@ -98583,38 +98640,57 @@ Expected function or array of functions, received type ${typeof value}.`
     					toDisplayString($setup.footerStatus),
     					1
     					/* TEXT */
-    				), createBaseVNode("div", _hoisted_28, [createVNode($setup["AcuButton"], {
-    					disabled: $setup.saveDisabled,
-    					loading: $setup.visualizer.isSaving,
-    					onClick: $setup.save.saveToChat
-    				}, {
-    					default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
-    						" 保存到当前聊天 ",
-    						-1
-    						/* CACHED */
-    					)])]),
-    					_: 1
-    				}, 8, [
-    					"disabled",
-    					"loading",
-    					"onClick"
-    				]), createVNode($setup["AcuButton"], {
-    					disabled: $setup.saveDisabled,
-    					loading: $setup.visualizer.isSaving,
-    					variant: "primary",
-    					onClick: $setup.save.saveToGlobal
-    				}, {
-    					default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
-    						" 保存到全局模板 ",
-    						-1
-    						/* CACHED */
-    					)])]),
-    					_: 1
-    				}, 8, [
-    					"disabled",
-    					"loading",
-    					"onClick"
-    				])])])
+    				), createBaseVNode("div", _hoisted_28, [
+    					createVNode($setup["AcuButton"], {
+    						disabled: $setup.saveDisabled,
+    						loading: $setup.visualizer.isSaving,
+    						variant: "primary",
+    						onClick: $setup.save.saveDataToCurrentMessage
+    					}, {
+    						default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
+    							" 保存数据到当前消息 ",
+    							-1
+    							/* CACHED */
+    						)])]),
+    						_: 1
+    					}, 8, [
+    						"disabled",
+    						"loading",
+    						"onClick"
+    					]),
+    					createVNode($setup["AcuButton"], {
+    						disabled: $setup.saveDisabled,
+    						loading: $setup.visualizer.isSaving,
+    						onClick: $setup.save.saveTemplateToCurrentChat
+    					}, {
+    						default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+    							" 保存模板到当前聊天 ",
+    							-1
+    							/* CACHED */
+    						)])]),
+    						_: 1
+    					}, 8, [
+    						"disabled",
+    						"loading",
+    						"onClick"
+    					]),
+    					createVNode($setup["AcuButton"], {
+    						disabled: $setup.saveDisabled,
+    						loading: $setup.visualizer.isSaving,
+    						onClick: $setup.save.saveTemplateToGlobal
+    					}, {
+    						default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
+    							" 保存模板到全局 ",
+    							-1
+    							/* CACHED */
+    						)])]),
+    						_: 1
+    					}, 8, [
+    						"disabled",
+    						"loading",
+    						"onClick"
+    					])
+    				])])
     			]),
     			$setup.isMobileNavRendered ? (openBlock(), createElementBlock(
     				"div",
@@ -98654,7 +98730,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		/* NEED_HYDRATION */
     	);
     }
-    var VisualizerSurface = /* @__PURE__ */ _export_sfc(_sfc_main$1, [["render", _sfc_render$1], ["__scopeId", "data-v-da714d75"]]);
+    var VisualizerSurface = /* @__PURE__ */ _export_sfc(_sfc_main$1, [["render", _sfc_render$1], ["__scopeId", "data-v-e0a3c10c"]]);
 
     const THEME_MENU_LEAVE_MS = 120;
     const MOBILE_NAV_LEAVE_MS = 150;
