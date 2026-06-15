@@ -95561,6 +95561,8 @@ Expected function or array of functions, received type ${typeof value}.`
                 }
                 const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder, visualizer.tableLockDrafts);
                 syncChatSheetGuide(orderedData, [...visualizer.sheetOrder], false);
+                applyTemplateScopeForCurrentChat_ACU();
+                _set_currentJsonTableData_ACU(cloneData$1(orderedData));
                 await saveChatToHost_ACU();
                 saveLockDrafts(visualizer.tableLockDrafts);
                 if (isSqliteMode())
