@@ -6859,7 +6859,7 @@ $CONTENT
          * @returns 所有语句的总受影响行数
          * @throws 任何一条语句失败时抛出，包含详细的错误定位信息
          */
-        runBatch(statements) {
+        runBatch(statements, paramsList) {
             this._ensureDb();
             if (statements.length === 0)
                 return { totalChanges: 0 };
@@ -6872,7 +6872,7 @@ $CONTENT
                     if (!stmt)
                         continue;
                     try {
-                        this.db.run(stmt);
+                        this.db.run(stmt, paramsList?.[i]);
                         totalChanges += this.db.getRowsModified();
                     }
                     catch (e) {
@@ -8317,14 +8317,8 @@ $CONTENT
         if (statements.length === 0)
             return;
         await ensureSqlReplayRuntime_ACU(runtime, state);
-        const params = Array.isArray(operation.params) ? operation.params : [];
-        if (params.length > 0) {
-            statements.forEach((statement, index) => {
-                runtime.engine.run(statement, params[index] || []);
-            });
-            return;
-        }
-        runtime.engine.runBatch(statements);
+        const params = Array.isArray(operation.params) ? operation.params : undefined;
+        runtime.engine.runBatch(statements, params);
     }
     function applyTablePatchV2_ACU(state, patch) {
         if (patch.kind === 'sheet_replace') {
@@ -12641,17 +12635,29 @@ $CONTENT
         applyEdits(sqlStatements, _updateMode) {
             return this.applyEditsBatch([sqlStatements], _updateMode);
         }
-        applyEditsBatch(sqlTexts, _updateMode) {
+        applyEditsBatch(sqlTexts, _updateMode, paramsList) {
             this._ensureInitialized();
             this._ensureTablesFromTemplate();
-            const userStatements = (Array.isArray(sqlTexts) ? sqlTexts : [])
-                .flatMap(sqlText => normalizeSqlStatementsForRuntimeLog_ACU(sqlText));
+            const userStatements = [];
+            const userParams = [];
+            (Array.isArray(sqlTexts) ? sqlTexts : []).forEach((sqlText, index) => {
+                const normalizedStatements = normalizeSqlStatementsForRuntimeLog_ACU(sqlText);
+                normalizedStatements.forEach(statement => {
+                    userStatements.push(statement);
+                    userParams.push(normalizedStatements.length === 1 ? paramsList?.[index] : undefined);
+                });
+            });
             if (userStatements.length === 0) {
                 return { success: true, modifiedKeys: [], appliedEdits: 0 };
             }
-            const statements = [...this._collectReseedInsertsForEmptyTables(), ...userStatements];
+            const reseedInserts = this._collectReseedInsertsForEmptyTables();
+            const statements = [...reseedInserts, ...userStatements];
+            const statementParams = [
+                ...reseedInserts.map(() => undefined),
+                ...userParams,
+            ];
             try {
-                const result = this.engine.runBatch(statements);
+                const result = this.engine.runBatch(statements, statementParams);
                 this._syncToJson();
                 const modifiedTables = extractTableNamesFromStatements(statements);
                 const modifiedKeys = this._tableNamesToSheetKeys(modifiedTables);
@@ -39735,6 +39741,383 @@ $CONTENT
         $list.append($addBtn);
     }
 
+    const TEMP_ROW_ID_PREFIX_ACU = '__acu_vis_tmp_row_';
+    function ensurePendingOps_ACU(state) {
+        var _a, _b, _c;
+        if (!state.pendingDataOps || typeof state.pendingDataOps !== 'object') {
+            resetVisualizerPendingDataOps_ACU(state);
+        }
+        (_a = state.pendingDataOps).updatesByRow || (_a.updatesByRow = {});
+        (_b = state.pendingDataOps).insertsByClientRowId || (_b.insertsByClientRowId = {});
+        (_c = state.pendingDataOps).deletesByRow || (_c.deletesByRow = {});
+        return state.pendingDataOps;
+    }
+    function quoteIdentifier_ACU$1(name) {
+        return `\`${String(name).replace(/`/g, '``')}\``;
+    }
+    function rowKey_ACU(sheetKey, rowId) {
+        return `${sheetKey}::${rowId}`;
+    }
+    function isTempRowId_ACU(rowId) {
+        return String(rowId || '').startsWith(TEMP_ROW_ID_PREFIX_ACU);
+    }
+    function getSheetByKey_ACU(data, sheetKey) {
+        return data && typeof data === 'object' ? data[sheetKey] : null;
+    }
+    function getRuntimeSheet_ACU(sheetKey) {
+        return getSheetByKey_ACU(currentJsonTableData_ACU, sheetKey);
+    }
+    function getEnglishTableName_ACU$1(sheet) {
+        const ddlName = sheet?.sourceData?.ddl ? parseDDLTableName(sheet.sourceData.ddl) : '';
+        return String(ddlName || sheet?.name || '').trim();
+    }
+    function resolveColumnForSheet_ACU(englishTableName, colName) {
+        const mapper = getNameMapper();
+        const englishColName = mapper.resolveColumnName(englishTableName, colName);
+        const chineseColName = mapper.getChineseColumnName(englishTableName, englishColName);
+        return { englishColName, chineseColName };
+    }
+    function toSqlValueParam_ACU$1(value) {
+        if (value === undefined || value === null)
+            return null;
+        if (typeof value === 'number')
+            return Number.isFinite(value) ? value : String(value);
+        if (typeof value === 'boolean')
+            return value ? 1 : 0;
+        return String(value);
+    }
+    function buildRowDataFromTemp_ACU(state, sheetKey, rowId) {
+        const sheet = getSheetByKey_ACU(state?.tempData, sheetKey);
+        const content = Array.isArray(sheet?.content) ? sheet.content : [];
+        const headers = Array.isArray(content[0]) ? content[0] : [];
+        const row = content.find((item, index) => index > 0 && Array.isArray(item) && String(item[0] ?? '') === rowId);
+        if (!row)
+            return null;
+        const out = {};
+        for (let col = 1; col < headers.length; col += 1) {
+            const columnName = String(headers[col] || '').trim();
+            if (!columnName)
+                continue;
+            out[columnName] = row[col] === undefined ? '' : row[col];
+        }
+        return out;
+    }
+    function createVisualizerTempRowId_ACU() {
+        return `${TEMP_ROW_ID_PREFIX_ACU}${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    }
+    function resetVisualizerPendingDataOps_ACU(state) {
+        state.pendingDataOps = {
+            updatesByRow: {},
+            insertsByClientRowId: {},
+            deletesByRow: {},
+        };
+    }
+    function recordVisualizerCellUpdate_ACU(state, sheetKey, rowId, columnName, value) {
+        const normalizedRowId = String(rowId ?? '').trim();
+        const normalizedColumnName = String(columnName ?? '').trim();
+        if (!sheetKey || !normalizedRowId || !normalizedColumnName || isTempRowId_ACU(normalizedRowId))
+            return;
+        const pending = ensurePendingOps_ACU(state);
+        const key = rowKey_ACU(sheetKey, normalizedRowId);
+        if (pending.deletesByRow[key])
+            return;
+        if (!pending.updatesByRow[key]) {
+            pending.updatesByRow[key] = { kind: 'updateRow', sheetKey, rowId: normalizedRowId, data: {} };
+        }
+        pending.updatesByRow[key].data[normalizedColumnName] = value === undefined ? '' : value;
+    }
+    function recordVisualizerRowInsert_ACU(state, sheetKey, clientRowId) {
+        if (!sheetKey || !clientRowId)
+            return;
+        const pending = ensurePendingOps_ACU(state);
+        pending.insertsByClientRowId[clientRowId] = { kind: 'insertRow', sheetKey, clientRowId };
+    }
+    function recordVisualizerRowDelete_ACU(state, sheetKey, rowId) {
+        const normalizedRowId = String(rowId ?? '').trim();
+        if (!sheetKey || !normalizedRowId)
+            return;
+        const pending = ensurePendingOps_ACU(state);
+        if (isTempRowId_ACU(normalizedRowId)) {
+            delete pending.insertsByClientRowId[normalizedRowId];
+            return;
+        }
+        const key = rowKey_ACU(sheetKey, normalizedRowId);
+        delete pending.updatesByRow[key];
+        pending.deletesByRow[key] = { kind: 'deleteRow', sheetKey, rowId: normalizedRowId };
+    }
+    function recordVisualizerSheetRowsUpdate_ACU(state, sheetKey) {
+        const sheet = getSheetByKey_ACU(state?.tempData, sheetKey);
+        const content = Array.isArray(sheet?.content) ? sheet.content : [];
+        const headers = Array.isArray(content[0]) ? content[0] : [];
+        for (let rowIndex = 1; rowIndex < content.length; rowIndex += 1) {
+            const row = content[rowIndex];
+            const rowId = String(row?.[0] ?? '').trim();
+            if (!rowId || isTempRowId_ACU(rowId))
+                continue;
+            for (let col = 1; col < headers.length; col += 1) {
+                recordVisualizerCellUpdate_ACU(state, sheetKey, rowId, headers[col], row[col] === undefined ? '' : row[col]);
+            }
+        }
+    }
+    function hasVisualizerPendingDataOps_ACU(state) {
+        const pending = ensurePendingOps_ACU(state);
+        return Object.keys(pending.deletesByRow).length > 0
+            || Object.keys(pending.updatesByRow).length > 0
+            || Object.keys(pending.insertsByClientRowId).length > 0;
+    }
+    function addWriteSet_ACU(writeSet, unit) {
+        const key = JSON.stringify(unit);
+        if (!writeSet.some(item => JSON.stringify(item) === key))
+            writeSet.push(unit);
+    }
+    function pushDeleteSql_ACU(statements, paramsList, writeSet, op) {
+        const sheet = getRuntimeSheet_ACU(op.sheetKey);
+        const englishTableName = getEnglishTableName_ACU$1(sheet);
+        if (!sheet || !englishTableName)
+            return `删除行失败：表 ${op.sheetKey} 在运行时不存在。`;
+        statements.push(`DELETE FROM ${quoteIdentifier_ACU$1(englishTableName)} WHERE ${quoteIdentifier_ACU$1('row_id')} = ?;`);
+        paramsList.push([toSqlValueParam_ACU$1(op.rowId)]);
+        addWriteSet_ACU(writeSet, { kind: 'row', sheetKey: op.sheetKey, rowId: op.rowId });
+        return null;
+    }
+    function pushUpdateSql_ACU(statements, paramsList, writeSet, op) {
+        const sheet = getRuntimeSheet_ACU(op.sheetKey);
+        const englishTableName = getEnglishTableName_ACU$1(sheet);
+        const headers = Array.isArray(sheet?.content?.[0]) ? sheet.content[0] : [];
+        if (!sheet || !englishTableName)
+            return `更新行失败：表 ${op.sheetKey} 在运行时不存在。`;
+        const setClauses = [];
+        const params = [];
+        for (const colName in op.data) {
+            const { englishColName, chineseColName } = resolveColumnForSheet_ACU(englishTableName, colName);
+            if (!headers.includes(chineseColName))
+                continue;
+            setClauses.push(`${quoteIdentifier_ACU$1(englishColName)} = ?`);
+            params.push(toSqlValueParam_ACU$1(op.data[colName]));
+            addWriteSet_ACU(writeSet, { kind: 'cell', sheetKey: op.sheetKey, rowId: op.rowId, columnKey: chineseColName });
+        }
+        if (setClauses.length === 0)
+            return null;
+        params.push(toSqlValueParam_ACU$1(op.rowId));
+        statements.push(`UPDATE ${quoteIdentifier_ACU$1(englishTableName)} SET ${setClauses.join(', ')} WHERE ${quoteIdentifier_ACU$1('row_id')} = ?;`);
+        paramsList.push(params);
+        return null;
+    }
+    function pushInsertSql_ACU(statements, paramsList, writeSet, state, op) {
+        const sheet = getRuntimeSheet_ACU(op.sheetKey);
+        const englishTableName = getEnglishTableName_ACU$1(sheet);
+        const headers = Array.isArray(sheet?.content?.[0]) ? sheet.content[0] : [];
+        const rowData = buildRowDataFromTemp_ACU(state, op.sheetKey, op.clientRowId);
+        if (!sheet || !englishTableName || !rowData)
+            return `新增行失败：表 ${op.sheetKey} 在运行时不存在，或临时行已丢失。`;
+        const columnNames = [];
+        const params = [];
+        for (const colName in rowData) {
+            const { englishColName, chineseColName } = resolveColumnForSheet_ACU(englishTableName, colName);
+            if (englishColName === 'row_id' || colName === 'row_id')
+                continue;
+            if (!headers.includes(chineseColName))
+                continue;
+            columnNames.push(quoteIdentifier_ACU$1(englishColName));
+            params.push(toSqlValueParam_ACU$1(rowData[colName]));
+        }
+        statements.push(columnNames.length > 0
+            ? `INSERT INTO ${quoteIdentifier_ACU$1(englishTableName)} (${columnNames.join(', ')}) VALUES (${columnNames.map(() => '?').join(', ')});`
+            : `INSERT INTO ${quoteIdentifier_ACU$1(englishTableName)} DEFAULT VALUES;`);
+        paramsList.push(params);
+        addWriteSet_ACU(writeSet, { kind: 'sheet', sheetKey: op.sheetKey });
+        return null;
+    }
+    function buildNativeWriteSet_ACU(pending) {
+        const writeSet = [];
+        Object.values(pending.deletesByRow).forEach(op => addWriteSet_ACU(writeSet, { kind: 'row', sheetKey: op.sheetKey, rowId: op.rowId }));
+        Object.values(pending.updatesByRow).forEach(op => {
+            Object.keys(op.data).forEach(columnKey => addWriteSet_ACU(writeSet, { kind: 'cell', sheetKey: op.sheetKey, rowId: op.rowId, columnKey }));
+        });
+        Object.values(pending.insertsByClientRowId).forEach(op => addWriteSet_ACU(writeSet, { kind: 'sheet', sheetKey: op.sheetKey }));
+        return writeSet;
+    }
+    function getTargetSheetKeysFromWriteSet_ACU(writeSet) {
+        return [...new Set(writeSet.flatMap(unit => 'sheetKey' in unit ? [unit.sheetKey] : []))];
+    }
+    function findRowIndexById_ACU(sheet, rowId) {
+        const content = Array.isArray(sheet?.content) ? sheet.content : [];
+        for (let index = 1; index < content.length; index += 1) {
+            if (String(content[index]?.[0] ?? '') === rowId)
+                return index;
+        }
+        return -1;
+    }
+    function buildNativeInsertCells_ACU(state, sheetKey, clientRowId, runtimeSheet) {
+        const tempSheet = getSheetByKey_ACU(state?.tempData, sheetKey);
+        const tempContent = Array.isArray(tempSheet?.content) ? tempSheet.content : [];
+        const tempRow = tempContent.find((row, index) => index > 0 && Array.isArray(row) && String(row[0] ?? '') === clientRowId);
+        if (!Array.isArray(tempRow))
+            return null;
+        const headers = Array.isArray(runtimeSheet?.content?.[0]) ? runtimeSheet.content[0] : [];
+        const cells = headers.map((_, index) => tempRow[index] ?? '');
+        let nextRowId = String(Array.isArray(runtimeSheet?.content) ? runtimeSheet.content.length : 1);
+        const usedIds = new Set((runtimeSheet?.content || []).slice(1).map((row) => String(row?.[0] ?? '')));
+        while (usedIds.has(nextRowId))
+            nextRowId = String(Number(nextRowId) + 1);
+        cells[0] = nextRowId;
+        return cells;
+    }
+    async function applyNativeVisualizerPendingDataOps_ACU(state, pending) {
+        const writeSet = buildNativeWriteSet_ACU(pending);
+        if (writeSet.length === 0)
+            return { success: true, changed: false };
+        const isolationKey = getCurrentIsolationKey_ACU();
+        const appendTargetIndex = getLatestTableAppendMessageIndexFromChat_ACU(getChatArray_ACU(), isolationKey, settings_ACU);
+        if (appendTargetIndex === -1) {
+            return { success: false, changed: false, error: '找不到可写入 V2 增量日志的 AI 楼层，已阻止保存。' };
+        }
+        const targetSheetKeys = getTargetSheetKeysFromWriteSet_ACU(writeSet);
+        const commitResult = await runTableUpdateCommit_ACU({
+            source: 'manual_crud',
+            reason: 'visualizer_save_native_batch',
+            isolationKey,
+            writeSet,
+            revisionWriteSet: writeSet,
+            initialData: currentJsonTableData_ACU,
+            targetMessageIndex: appendTargetIndex,
+            targetSheetKeys,
+            updateGroupKeys: null,
+            trackingSheetKeys: [],
+            trackAsUpdate: false,
+        }, ({ workingData }) => {
+            const data = workingData;
+            const operations = [];
+            let changes = 0;
+            for (const op of Object.values(pending.deletesByRow)) {
+                const sheet = data?.[op.sheetKey];
+                if (!sheet || !Array.isArray(sheet.content))
+                    return { success: false, error: `删除行失败：表 ${op.sheetKey} 在运行时不存在。` };
+                const beforeLength = sheet.content.length;
+                sheet.content = sheet.content.filter((row, index) => index === 0 || String(row?.[0] ?? '') !== op.rowId);
+                if (sheet.content.length === beforeLength)
+                    return { success: false, error: `删除行失败：表 ${op.sheetKey} 的行 ${op.rowId} 不存在。` };
+                operations.push({ kind: 'row_delete', sheetKey: op.sheetKey, rowId: op.rowId });
+                changes += 1;
+            }
+            for (const op of Object.values(pending.updatesByRow)) {
+                const sheet = data?.[op.sheetKey];
+                if (!sheet || !Array.isArray(sheet.content))
+                    return { success: false, error: `更新行失败：表 ${op.sheetKey} 在运行时不存在。` };
+                const rowIndex = findRowIndexById_ACU(sheet, op.rowId);
+                if (rowIndex < 1)
+                    return { success: false, error: `更新行失败：表 ${op.sheetKey} 的行 ${op.rowId} 不存在。` };
+                const headers = Array.isArray(sheet.content[0]) ? sheet.content[0] : [];
+                const row = sheet.content[rowIndex];
+                let updated = 0;
+                Object.keys(op.data).forEach(columnName => {
+                    const colIndex = headers.indexOf(columnName);
+                    if (colIndex < 1)
+                        return;
+                    row[colIndex] = op.data[columnName];
+                    updated += 1;
+                });
+                if (updated > 0) {
+                    operations.push({ kind: 'row_upsert', sheetKey: op.sheetKey, rowId: op.rowId, cells: [...row] });
+                    changes += 1;
+                }
+            }
+            for (const op of Object.values(pending.insertsByClientRowId)) {
+                const sheet = data?.[op.sheetKey];
+                if (!sheet || !Array.isArray(sheet.content))
+                    return { success: false, error: `新增行失败：表 ${op.sheetKey} 在运行时不存在。` };
+                const cells = buildNativeInsertCells_ACU(state, op.sheetKey, op.clientRowId, sheet);
+                if (!cells)
+                    return { success: false, error: `新增行失败：表 ${op.sheetKey} 的临时行已丢失。` };
+                sheet.content.push(cells);
+                operations.push({ kind: 'row_upsert', sheetKey: op.sheetKey, rowId: String(cells[0] ?? ''), cells: [...cells] });
+                changes += 1;
+            }
+            return {
+                success: true,
+                value: { changes },
+                tableData: data,
+                mutationResult: { changes, errors: [] },
+                persist: { operations },
+            };
+        });
+        if (!commitResult.success) {
+            return { success: false, changed: false, error: commitResult.error || '可视化编辑器原生模式增量保存失败。' };
+        }
+        resetVisualizerPendingDataOps_ACU(state);
+        return { success: true, changed: true };
+    }
+    async function applyVisualizerPendingDataOps_ACU(state) {
+        const pending = ensurePendingOps_ACU(state);
+        if (!hasVisualizerPendingDataOps_ACU(state))
+            return { success: true, changed: false };
+        if (!isSqliteMode())
+            return applyNativeVisualizerPendingDataOps_ACU(state, pending);
+        const statements = [];
+        const paramsList = [];
+        const writeSet = [];
+        for (const op of Object.values(pending.deletesByRow)) {
+            const error = pushDeleteSql_ACU(statements, paramsList, writeSet, op);
+            if (error)
+                return { success: false, changed: false, error };
+        }
+        for (const op of Object.values(pending.updatesByRow)) {
+            const error = pushUpdateSql_ACU(statements, paramsList, writeSet, op);
+            if (error)
+                return { success: false, changed: false, error };
+        }
+        for (const op of Object.values(pending.insertsByClientRowId)) {
+            const error = pushInsertSql_ACU(statements, paramsList, writeSet, state, op);
+            if (error)
+                return { success: false, changed: false, error };
+        }
+        if (statements.length === 0)
+            return { success: true, changed: false };
+        const provider = getStorageProvider();
+        if (typeof provider.applyEditsBatch !== 'function') {
+            return { success: false, changed: false, error: '当前运行时不支持批量 SQL 保存，已阻止可视化编辑器数据写入。' };
+        }
+        const isolationKey = getCurrentIsolationKey_ACU();
+        const appendTargetIndex = getLatestTableAppendMessageIndexFromChat_ACU(getChatArray_ACU(), isolationKey, settings_ACU);
+        if (appendTargetIndex === -1) {
+            return { success: false, changed: false, error: '找不到可写入 V2 增量日志的 AI 楼层，已阻止保存。' };
+        }
+        const targetSheetKeys = [...new Set(writeSet.flatMap(unit => 'sheetKey' in unit ? [unit.sheetKey] : []))];
+        const commitResult = await runTableUpdateCommit_ACU({
+            source: 'manual_crud',
+            reason: 'visualizer_save_sql_batch',
+            isolationKey,
+            writeSet: writeSet.length > 0 ? writeSet : [{ kind: 'all' }],
+            revisionWriteSet: writeSet.length > 0 ? writeSet : [{ kind: 'all' }],
+            initialData: currentJsonTableData_ACU,
+            targetMessageIndex: appendTargetIndex,
+            targetSheetKeys,
+            updateGroupKeys: null,
+            trackingSheetKeys: [],
+            trackAsUpdate: false,
+            operations: [{ kind: 'sql_batch', statements, params: paramsList }],
+        }, () => {
+            const batchResult = provider.applyEditsBatch(statements, 'visualizer_save', paramsList);
+            if (!batchResult.success) {
+                return { success: false, error: batchResult.error || 'visualizer_save_sql_batch failed' };
+            }
+            const tableData = provider.getCurrentData();
+            if (!tableData)
+                return { success: false, error: 'SQLite runtime data export failed' };
+            return {
+                success: true,
+                value: { appliedEdits: batchResult.appliedEdits, changes: batchResult.appliedEdits },
+                tableData,
+                mutationResult: { changes: batchResult.appliedEdits, errors: [] },
+            };
+        });
+        if (!commitResult.success) {
+            return { success: false, changed: false, error: commitResult.error || '可视化编辑器批量 SQL 保存失败。' };
+        }
+        resetVisualizerPendingDataOps_ACU(state);
+        return { success: true, changed: true };
+    }
+
     /**
      * DDL 校验纯函数 — 从 jQuery 事件处理器中提取，方便单元测试
      * @returns { valid: boolean; message: string } 校验结果
@@ -40137,6 +40520,7 @@ $CONTENT
                 setSpecialIndexLockEnabled_ACU(sheetKey, enabled);
                 if (enabled) {
                     applySpecialIndexSequenceToSummaryTables_ACU(_acuVisState.tempData);
+                    recordVisualizerSheetRowsUpdate_ACU(_acuVisState, sheetKey);
                 }
                 renderVisualizerMain_ACU();
             });
@@ -40508,24 +40892,35 @@ $CONTENT
             const val = jQuery_API_ACU(this).text(); // Use text() to avoid HTML injection
             // Update temp data (rIdx + 1 because row 0 is header)
             if (sheet.content[rIdx + 1]) {
+                const rowId = sheet.content[rIdx + 1][0];
+                const columnName = headers[cIdx + 1];
                 sheet.content[rIdx + 1][cIdx + 1] = val;
+                if (sheetKey)
+                    recordVisualizerCellUpdate_ACU(_acuVisState, sheetKey, rowId, columnName, val);
             }
         });
         $container.find('#acu-vis-add-row').on('click', () => {
             const newRow = new Array(headers.length).fill('');
-            newRow[0] = null; // convention
+            newRow[0] = createVisualizerTempRowId_ACU();
             sheet.content.push(newRow);
+            if (sheetKey)
+                recordVisualizerRowInsert_ACU(_acuVisState, sheetKey, String(newRow[0]));
             if (isSummaryTable && sheetKey && isSpecialIndexLockEnabled_ACU(sheetKey)) {
                 applySpecialIndexSequenceToSummaryTables_ACU(_acuVisState.tempData);
+                recordVisualizerSheetRowsUpdate_ACU(_acuVisState, sheetKey);
             }
             renderVisualizerDataMode_ACU($container, sheet);
         });
         $container.find('.acu-vis-del-row').on('click', function () {
             const rIdx = parseInt(jQuery_API_ACU(this).data('idx'));
             if (confirm('确定删除此行吗？')) {
+                const rowId = sheet.content[rIdx + 1]?.[0];
+                if (sheetKey)
+                    recordVisualizerRowDelete_ACU(_acuVisState, sheetKey, rowId);
                 sheet.content.splice(rIdx + 1, 1);
                 if (isSummaryTable && sheetKey && isSpecialIndexLockEnabled_ACU(sheetKey)) {
                     applySpecialIndexSequenceToSummaryTables_ACU(_acuVisState.tempData);
+                    recordVisualizerSheetRowsUpdate_ACU(_acuVisState, sheetKey);
                 }
                 renderVisualizerDataMode_ACU($container, sheet);
             }
@@ -40571,6 +40966,7 @@ $CONTENT
             setSpecialIndexLockEnabled_ACU(sheetKey, next);
             if (next) {
                 applySpecialIndexSequenceToSummaryTables_ACU(_acuVisState.tempData);
+                recordVisualizerSheetRowsUpdate_ACU(_acuVisState, sheetKey);
             }
             renderVisualizerDataMode_ACU($container, sheet);
         });
@@ -42535,325 +42931,340 @@ $CONTENT
      * presentation/pages/visualizer-main-save.ts
      * 可视化编辑器保存变更
      */
-    /**
-     * presentation/pages/visualizer-main.ts — 可视化编辑器主区域 + 保存
-     * 从 visualizer.ts 拆出
-     */
-    async function saveVisualizerChanges_ACU(saveToTemplate = false) {
-        // 1. Check for Inheritance (Structure Mismatch)
-        // Compare _acuVisState.tempData with original TABLE_TEMPLATE_ACU
-        // But user might have just edited tempData to be different from template.
-        // The requirement says: "check mismatch between new current table data and the CURRENTLY USED TEMPLATE".
-        // If mismatch, prompt inheritance.
-        // [新增] 按照用户调整的顺序重新组织数据
+    function cloneData_ACU(value) {
+        return JSON.parse(JSON.stringify(value || {}));
+    }
+    function cloneMaybe_ACU(value) {
+        return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+    }
+    function getDataSheetKeys_ACU(data) {
+        return data && typeof data === 'object' ? Object.keys(data).filter(key => key.startsWith('sheet_')) : [];
+    }
+    function prepareOrderedVisualizerData_ACU() {
         const orderedData = {};
         const orderedKeys = getOrderedSheetKeys_ACU();
-        // 先添加非表格数据（如 mate）
-        Object.keys(_acuVisState.tempData).forEach((key) => {
-            if (!key.startsWith('sheet_')) {
+        Object.keys(_acuVisState.tempData || {}).forEach((key) => {
+            if (!key.startsWith('sheet_'))
                 orderedData[key] = _acuVisState.tempData[key];
-            }
         });
-        // 按顺序添加表格数据
         orderedKeys.forEach((key) => {
-            if (_acuVisState.tempData[key]) {
+            if (_acuVisState.tempData?.[key])
                 orderedData[key] = _acuVisState.tempData[key];
+        });
+        applySheetOrderNumbers_ACU(orderedData, orderedKeys);
+        applySpecialIndexSequenceToSummaryTables_ACU(orderedData);
+        return orderedData;
+    }
+    function hasTemplateStructureChanges_ACU(templateData) {
+        const runtimeData = currentJsonTableData_ACU || {};
+        const sheetKeys = new Set([...getDataSheetKeys_ACU(runtimeData), ...getDataSheetKeys_ACU(templateData)]);
+        if (JSON.stringify(runtimeData?.mate?.globalInjectionConfig || {}) !== JSON.stringify(templateData?.mate?.globalInjectionConfig || {}))
+            return true;
+        for (const sheetKey of sheetKeys) {
+            const before = runtimeData[sheetKey];
+            const after = templateData[sheetKey];
+            if (!before || !after)
+                return true;
+            const fields = ['name', 'sourceData', 'updateConfig', 'exportConfig', TABLE_ORDER_FIELD_ACU];
+            for (const field of fields) {
+                if (JSON.stringify(before[field]) !== JSON.stringify(after[field]))
+                    return true;
+            }
+            const beforeHeader = Array.isArray(before?.content?.[0]) ? before.content[0] : [];
+            const afterHeader = Array.isArray(after?.content?.[0]) ? after.content[0] : [];
+            if (JSON.stringify(beforeHeader) !== JSON.stringify(afterHeader))
+                return true;
+        }
+        return false;
+    }
+    function buildTemplateCompatibilityCandidate_ACU(templateData, options) {
+        const runtimeData = options.includeRuntimeRows ? (currentJsonTableData_ACU || {}) : {};
+        const candidate = cloneData_ACU(templateData);
+        const issues = [];
+        getDataSheetKeys_ACU(candidate).forEach((sheetKey) => {
+            const nextSheet = candidate[sheetKey];
+            const oldSheet = runtimeData[sheetKey];
+            const nextHeader = Array.isArray(nextSheet?.content?.[0]) ? cloneData_ACU(nextSheet.content[0]) : ['row_id'];
+            const oldHeader = Array.isArray(oldSheet?.content?.[0]) ? oldSheet.content[0] : [];
+            const oldRows = Array.isArray(oldSheet?.content) ? oldSheet.content.slice(1) : [];
+            const oldHeaderIndex = new Map();
+            oldHeader.forEach((header, index) => {
+                const key = String(header ?? '').trim();
+                if (key && !oldHeaderIndex.has(key))
+                    oldHeaderIndex.set(key, index);
+            });
+            const nextRows = oldRows.map((oldRow) => nextHeader.map((header, index) => {
+                if (index === 0)
+                    return Array.isArray(oldRow) ? (oldRow[0] ?? null) : null;
+                const oldIndex = oldHeaderIndex.get(String(header ?? '').trim());
+                return oldIndex === undefined || !Array.isArray(oldRow) ? '' : (oldRow[oldIndex] ?? '');
+            }));
+            nextSheet.content = [nextHeader, ...nextRows];
+            if (isSqliteMode()) {
+                const ddl = String(nextSheet?.sourceData?.ddl || '').trim();
+                if (!ddl) {
+                    issues.push(`表「${nextSheet?.name || sheetKey}」缺少 DDL，SQLite 模式下不能保存该模板。`);
+                }
+                else {
+                    const validation = validateDDLTextAgainstHeaders_ACU(ddl, nextHeader);
+                    if (!validation.valid)
+                        issues.push(`表「${nextSheet?.name || sheetKey}」DDL 与表头不兼容：${validation.message}`);
+                }
             }
         });
-        // [新机制] 保存前统一重编号：编号随当前顺序变化，并写入当前数据（可随导出/导入迁移）
-        applySheetOrderNumbers_ACU(orderedData, orderedKeys);
-        // [新增] 若开启“编码索引列特殊锁定”，保存时强制按 AM 序列重排
-        applySpecialIndexSequenceToSummaryTables_ACU(orderedData);
-        // First, apply changes to local variable (使用排序后的数据)
-        _set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(orderedData)));
-        // [修复] 可视化编辑器属于"用户显式修改表结构/表名/顺序"的入口：
-        // 覆盖式更新聊天第一层的"空白指导表"（仅表头+参数，无数据行），让后续合并/显示/填表参数都以此为准。
-        // [Bug Fix] 无论"保存到当前聊天"还是"保存到全局"，都必须更新指导表，
-        // 否则"保存到全局"后点击填表时，指导表中的旧表头会覆盖用户的修改。
+        return { data: candidate, issues };
+    }
+    async function validateTemplateCompatibleWithRuntimeData_ACU(templateData, options) {
+        const candidate = buildTemplateCompatibilityCandidate_ACU(templateData, options);
+        if (candidate.issues.length > 0) {
+            return { success: false, error: candidate.issues.slice(0, 5).join('\n') };
+        }
+        if (!isSqliteMode())
+            return { success: true, data: candidate.data };
+        const engine = new SqliteEngine();
+        const syncBridge = new SyncBridge(engine);
         try {
-            const guideIsolationKey = getCurrentIsolationKey_ACU();
-            // 需求4（澄清版）：可视化编辑器触发指导表更新时，只更新表名/表头/表格参数，不修改指导表基础数据（seedRows）。
-            // - 若当前聊天/标签已存在指导表：必须继承其 seedRows
-            // - 若不存在指导表：从当前模板提取预置数据作为 seedRows（需求1）
-            const existingGuide = getChatSheetGuideDataForIsolationKey_ACU(guideIsolationKey);
-            const templateObjForSeed = parseTableTemplateJson_ACU({ stripSeedRows: false });
-            const guideData = buildChatSheetGuideDataFromData_ACU(currentJsonTableData_ACU, {
-                preserveSeedRowsFromGuideData: existingGuide,
-                seedRowsFromTemplateObj: templateObjForSeed,
-            });
-            if (guideData && Object.keys(guideData).some(k => k.startsWith('sheet_'))) {
-                const syncTemplateScope = !saveToTemplate; // "保存到全局"时不同步模板作用域（由 applyTemplatePresetToCurrent 处理）
-                const templateScopeSource = materializeDataFromSheetGuide_ACU(guideData, { includeSeedRows: true });
-                setChatSheetGuideDataForIsolationKey_ACU(guideIsolationKey, guideData, {
-                    reason: 'visualizer_save',
-                    syncTemplateScope,
-                    templateSource: templateScopeSource,
-                    presetName: resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true, isolationKey: guideIsolationKey }),
-                    source: 'visualizer_save',
-                });
-                logDebug_ACU(`[SheetGuide] Overwrote chat sheet guide from visualizer for tag [${guideIsolationKey || '无标签'}] (tables=${Object.keys(guideData).filter(k => k.startsWith('sheet_')).length}, saveToTemplate=${saveToTemplate}).`);
+            await engine.init();
+            syncBridge.loadFromTableData(candidate.data, { strict: true });
+            return { success: true, data: candidate.data };
+        }
+        catch (error) {
+            return { success: false, error: error?.message || String(error) };
+        }
+        finally {
+            engine.dispose();
+        }
+    }
+    function buildTemplateObjectFromVisualizerData_ACU(templateData, orderedKeys) {
+        let templateObj = null;
+        try {
+            templateObj = JSON.parse(TABLE_TEMPLATE_ACU);
+        }
+        catch (_) {
+            templateObj = {};
+        }
+        if (!templateObj || typeof templateObj !== 'object')
+            templateObj = {};
+        const tempGlobalCfg = getGlobalInjectionConfigFromData_ACU(templateData, { ensureWriteBack: true });
+        const prevGlobalCfgStr = safeJsonStringify_ACU(templateObj?.mate?.globalInjectionConfig || {}, '{}');
+        const nextGlobalCfgStr = safeJsonStringify_ACU(tempGlobalCfg || {}, '{}');
+        if (!templateObj.mate || typeof templateObj.mate !== 'object')
+            templateObj.mate = { type: 'chatSheets', version: 1 };
+        if (!templateObj.mate.type)
+            templateObj.mate.type = 'chatSheets';
+        if (!Number.isFinite(templateObj.mate.version))
+            templateObj.mate.version = 1;
+        templateObj.mate.globalInjectionConfig = tempGlobalCfg;
+        let changed = prevGlobalCfgStr !== nextGlobalCfgStr;
+        getDataSheetKeys_ACU(templateData).forEach((key) => {
+            const currentTable = templateData[key];
+            if (!templateObj[key]) {
+                const newTemplateTable = cloneData_ACU(currentTable);
+                if (Array.isArray(newTemplateTable.content) && newTemplateTable.content.length > 1) {
+                    newTemplateTable.content = [newTemplateTable.content[0]];
+                }
+                newTemplateTable[TABLE_ORDER_FIELD_ACU] = currentTable[TABLE_ORDER_FIELD_ACU];
+                templateObj[key] = newTemplateTable;
+                changed = true;
+                return;
             }
+            const templateTable = templateObj[key];
+            let tableChanged = false;
+            const fields = ['name', 'sourceData', 'updateConfig', 'exportConfig', TABLE_ORDER_FIELD_ACU];
+            fields.forEach((field) => {
+                if (JSON.stringify(templateTable[field]) !== JSON.stringify(currentTable[field])) {
+                    if (currentTable[field] === undefined)
+                        delete templateTable[field];
+                    else
+                        templateTable[field] = cloneMaybe_ACU(currentTable[field]);
+                    tableChanged = true;
+                }
+            });
+            if (Array.isArray(currentTable.content?.[0])) {
+                if (!Array.isArray(templateTable.content))
+                    templateTable.content = [];
+                if (JSON.stringify(templateTable.content[0]) !== JSON.stringify(currentTable.content[0])) {
+                    templateTable.content[0] = cloneData_ACU(currentTable.content[0]);
+                    templateChangedRowsOnly_ACU(templateTable);
+                    tableChanged = true;
+                }
+            }
+            templateChangedRowsOnly_ACU(templateTable);
+            if (tableChanged)
+                changed = true;
+        });
+        getDataSheetKeys_ACU(templateObj).forEach((key) => {
+            if (!templateData[key]) {
+                delete templateObj[key];
+                changed = true;
+            }
+        });
+        ensureSheetOrderNumbers_ACU(templateObj, { baseOrderKeys: orderedKeys, forceRebuild: false });
+        return { templateObj, changed };
+    }
+    function templateChangedRowsOnly_ACU(templateTable) {
+        if (Array.isArray(templateTable?.content) && templateTable.content.length > 1) {
+            templateTable.content = [templateTable.content[0]];
         }
-        catch (e) {
-            logWarn_ACU('[SheetGuide] Failed to overwrite sheet guide from visualizer:', e);
-        }
-        const shouldSyncSummaryVectorIndexAfterSave_ACU = getSortedSheetKeys_ACU(currentJsonTableData_ACU).some((sheetKey) => {
+    }
+    async function runPostSaveRefresh_ACU(reason, targetMessageIndex) {
+        await refreshMergedDataAndNotifyWithUI_ACU();
+        const shouldSyncSummaryVectorIndexAfterSave = getSortedSheetKeys_ACU(currentJsonTableData_ACU).some((sheetKey) => {
             const table = currentJsonTableData_ACU?.[sheetKey];
             return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
         });
-        // [新机制] 不再使用 settings_ACU.tableKeyOrder 强制固定顺序（顺序由每张表的 orderNo 决定）
-        // 记录本次需要彻底清理的 key（真正清理会在“写回所有楼层”之后执行，防止后续写回把旧表带回）
-        const deletedKeysToPurge_ACU = Array.isArray(_acuVisState.deletedSheetKeys) ? [..._acuVisState.deletedSheetKeys] : [];
-        // Update template only if saveToTemplate is true
-        // “保存到全局”会把当前编辑结果同步进全局模板预设；“保存到当前聊天”只沉淀聊天级预设/数据
-        if (saveToTemplate) {
-            let templateObj = null;
+        if (shouldSyncSummaryVectorIndexAfterSave && getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
             try {
-                templateObj = JSON.parse(TABLE_TEMPLATE_ACU);
-                if (!templateObj || typeof templateObj !== 'object')
-                    templateObj = {};
-                // 同步全局注入配置（存入模板 mate，不走 settings）
-                const tempGlobalCfg = getGlobalInjectionConfigFromData_ACU(currentJsonTableData_ACU, { ensureWriteBack: true });
-                const prevGlobalCfgStr = safeJsonStringify_ACU(templateObj?.mate?.globalInjectionConfig || {}, '{}');
-                const nextGlobalCfgStr = safeJsonStringify_ACU(tempGlobalCfg || {}, '{}');
-                if (!templateObj.mate || typeof templateObj.mate !== 'object')
-                    templateObj.mate = { type: 'chatSheets', version: 1 };
-                if (!templateObj.mate.type)
-                    templateObj.mate.type = 'chatSheets';
-                if (!Number.isFinite(templateObj.mate.version))
-                    templateObj.mate.version = 1;
-                templateObj.mate.globalInjectionConfig = tempGlobalCfg;
-                let templateChanged = false;
-                if (prevGlobalCfgStr !== nextGlobalCfgStr)
-                    templateChanged = true;
-                // [优化] 全量同步：不仅更新现有表，也处理新增和删除的表
-                // 1. 同步 currentJsonTableData_ACU 中的所有表到 templateObj
-                Object.keys(currentJsonTableData_ACU).forEach(key => {
-                    if (!key.startsWith('sheet_'))
-                        return;
-                    const currentTable = currentJsonTableData_ACU[key];
-                    // 如果模板中没有这个表，或者有这个key但名字变了(虽然key是唯一标识，但为了保险起见)，则新建/覆盖
-                    // 这里的逻辑是：以 currentJsonTableData_ACU 为准
-                    if (!templateObj[key]) {
-                        // 新增表格：克隆整个结构，但清空数据行（保留表头）
-                        const newTemplateTable = JSON.parse(JSON.stringify(currentTable));
-                        if (newTemplateTable.content && newTemplateTable.content.length > 1) {
-                            newTemplateTable.content = [newTemplateTable.content[0]]; // 只保留表头
-                        }
-                        // [新机制] 同步顺序编号
-                        newTemplateTable[TABLE_ORDER_FIELD_ACU] = currentTable[TABLE_ORDER_FIELD_ACU];
-                        templateObj[key] = newTemplateTable;
-                        templateChanged = true;
-                        logDebug_ACU(`Added new table "${currentTable.name}" to template.`);
-                    }
-                    else {
-                        // 更新现有表格
-                        const templateTable = templateObj[key];
-                        // 检查是否有实质性变更 (参数、表头、名称)
-                        let hasChanges = false;
-                        if (templateTable.name !== currentTable.name) {
-                            templateTable.name = currentTable.name;
-                            hasChanges = true;
-                        }
-                        // Deep compare and update sourceData
-                        if (JSON.stringify(templateTable.sourceData) !== JSON.stringify(currentTable.sourceData)) {
-                            templateTable.sourceData = currentTable.sourceData ? JSON.parse(JSON.stringify(currentTable.sourceData)) : {};
-                            hasChanges = true;
-                        }
-                        // Deep compare and update updateConfig
-                        if (JSON.stringify(templateTable.updateConfig) !== JSON.stringify(currentTable.updateConfig)) {
-                            templateTable.updateConfig = currentTable.updateConfig ? JSON.parse(JSON.stringify(currentTable.updateConfig)) : {};
-                            hasChanges = true;
-                        }
-                        // Deep compare and update exportConfig
-                        if (JSON.stringify(templateTable.exportConfig) !== JSON.stringify(currentTable.exportConfig)) {
-                            templateTable.exportConfig = currentTable.exportConfig ? JSON.parse(JSON.stringify(currentTable.exportConfig)) : {};
-                            hasChanges = true;
-                        }
-                        // [新机制] 同步顺序编号（顺序变化也属于模板变更）
-                        if (templateTable[TABLE_ORDER_FIELD_ACU] !== currentTable[TABLE_ORDER_FIELD_ACU]) {
-                            templateTable[TABLE_ORDER_FIELD_ACU] = currentTable[TABLE_ORDER_FIELD_ACU];
-                            hasChanges = true;
-                        }
-                        // Update headers (content[0])
-                        if (currentTable.content && Array.isArray(currentTable.content) && currentTable.content.length > 0) {
-                            const currentHeaders = currentTable.content[0];
-                            const templateHeaders = templateTable.content[0];
-                            if (JSON.stringify(currentHeaders) !== JSON.stringify(templateHeaders)) {
-                                templateTable.content[0] = JSON.parse(JSON.stringify(currentHeaders));
-                                hasChanges = true;
-                            }
-                        }
-                        if (hasChanges) {
-                            templateChanged = true;
-                        }
-                    }
+                const queueResult = await enqueueSummaryVectorIndexFlush_ACU({
+                    targetMessageIndex,
+                    mode: 'sync',
+                    reason,
                 });
-                // 2. 删除模板中存在但在 currentJsonTableData_ACU 中已不存在的表
-                Object.keys(templateObj).forEach(key => {
-                    if (key.startsWith('sheet_') && !currentJsonTableData_ACU[key]) {
-                        delete templateObj[key];
-                        templateChanged = true;
-                        logDebug_ACU(`Removed table key "${key}" from template.`);
-                    }
-                });
-                // [新机制] 再做一次兜底：按当前顺序补齐/重建模板编号（避免极端情况下编号缺失/重复）
-                ensureSheetOrderNumbers_ACU(templateObj, { baseOrderKeys: orderedKeys, forceRebuild: false });
-                if (templateChanged) {
-                    const isolationKey = getCurrentIsolationKey_ACU();
-                    const activePresetName = normalizeTemplatePresetSelectionValue_ACU(resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true, isolationKey }));
-                    let finalGlobalPresetName = activePresetName;
-                    if (isDefaultTemplatePresetSelection_ACU(finalGlobalPresetName)) {
-                        const promptedName = prompt('请输入要保存到全局的模板预设名称：', '新模板预设');
-                        if (!promptedName)
-                            return;
-                        finalGlobalPresetName = normalizeTemplatePresetSelectionValue_ACU(String(promptedName).trim());
-                    }
-                    else if (!confirm(`确定要用当前编辑结果覆盖全局预设 "${finalGlobalPresetName}" 吗？`)) {
-                        return;
-                    }
-                    if (!finalGlobalPresetName)
-                        return;
-                    const preparedSnapshot = sanitizeTemplateSnapshotForChat_ACU(templateObj);
-                    if (!preparedSnapshot?.templateStr) {
-                        throw new Error('可视化编辑器保存到全局失败：无法生成模板快照。');
-                    }
-                    const presetSaved = upsertTemplatePreset_ACU(finalGlobalPresetName, preparedSnapshot.templateStr);
-                    if (!presetSaved) {
-                        throw new Error('可视化编辑器保存到全局失败：无法写入全局预设库。');
-                    }
-                    const appliedGlobalTemplate = await applyTemplatePresetToCurrent_ACU(finalGlobalPresetName, {
-                        source: 'visualizer_save_to_global',
-                        updateGlobal: true,
-                        save: true,
-                        persistChatScope: false,
-                    });
-                    if (!appliedGlobalTemplate) {
-                        throw new Error('可视化编辑器保存到全局失败：模板快照应用失败。');
-                    }
-                    logDebug_ACU('Template fully synchronized via Visualizer.');
-                    showToastr_ACU('success', `更改已保存到全局预设：${finalGlobalPresetName}；当前聊天的本地预设不会被自动清除。`);
-                }
-                else {
-                    showToastr_ACU('info', '模板无变化，无需保存。');
+                if (!queueResult.queued && !queueResult.skipped) {
+                    logWarn_ACU('[VisualizerVectorIndex] 交火索引防抖归档入队失败:', queueResult.reason);
+                    showToastr_ACU('warning', `表格已保存，但交火索引防抖归档入队失败：${queueResult.reason || 'unknown'}`);
                 }
             }
-            catch (e) {
-                logError_ACU('Error updating template from visualizer:', e);
+            catch (error) {
+                logWarn_ACU('[VisualizerVectorIndex] 交火索引防抖归档入队异常:', error);
+                showToastr_ACU('warning', '表格已保存，但交火索引防抖归档入队异常，请查看控制台日志。');
             }
         }
-        // 2. Save to Chat History (append to current effective latest AI floor)
-        const chat = getChatArray_ACU();
-        if (!chat.length) {
-            showToastr_ACU('warning', '聊天记录为空，更改仅保存在内存，未持久化。');
-        }
-        else {
-            // 2.1 预先获取当前隔离标签与所有表
-            const isolationKey = getCurrentIsolationKey_ACU();
-            const allSheetKeys = getSortedSheetKeys_ACU(currentJsonTableData_ACU);
-            // 2.2 计算当前有效追加楼层：所有 V2 追加日志必须落在最新可承载表数据的 AI 楼，不能按单表历史楼层回写。
-            const latestAiIndex = getLatestAiMessageIndexFromChat_ACU(chat);
-            const appendTargetIndex = getLatestTableAppendMessageIndexFromChat_ACU(chat, isolationKey, settings_ACU);
-            if (appendTargetIndex === -1) {
-                showToastr_ACU('warning', '找不到AI消息，更改仅保存到内存，未持久化到聊天记录。');
-            }
-            else {
-                // 2.4 统一保存到当前有效追加楼层，维护 V2 operation log 的时间顺序
-                const sheetKeys = [...allSheetKeys];
-                const idx = appendTargetIndex;
-                const writeSet = sheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
-                const commitResult = await runTableUpdateCommit_ACU({
-                    source: 'manual_crud',
-                    reason: 'visualizer_save',
-                    isolationKey,
-                    writeSet,
-                    revisionWriteSet: writeSet,
-                    initialData: currentJsonTableData_ACU,
-                    targetMessageIndex: idx,
-                    targetSheetKeys: sheetKeys,
-                    updateGroupKeys: null,
-                    trackingSheetKeys: [],
-                    trackAsUpdate: false,
-                    operations: sheetKeys
-                        .filter(sheetKey => Boolean(currentJsonTableData_ACU?.[sheetKey]))
-                        .map(sheetKey => ({ kind: 'sheet_replace', sheetKey, sheet: currentJsonTableData_ACU[sheetKey], reason: 'manual_crud' })),
-                }, () => ({
-                    success: true,
-                    value: null,
-                    tableData: currentJsonTableData_ACU,
-                    mutationResult: { changes: sheetKeys.length, errors: [] },
-                }));
-                if (!commitResult.success) {
-                    logWarn_ACU(`[VisualizerSave] 保存楼层 ${idx} 失败: ${commitResult.error || 'unknown error'}`);
-                }
-            }
-            // 2.4.5 [关键] 如果本次在可视化编辑器删除了表格，则此处追溯整个聊天记录做“硬删除”
-            // 说明：saveIndependentTableToChatHistory_ACU 只会覆盖/追加 keys，不会自动移除旧 keys，因此必须额外做一次全局清理。
-            if (typeof purgeSheetKeysFromChatHistoryHard_ACU === 'function' && deletedKeysToPurge_ACU.length > 0) {
-                try {
-                    const r = await purgeSheetKeysFromChatHistoryHard_ACU(deletedKeysToPurge_ACU);
-                    if (r?.changed) {
-                        logDebug_ACU(`[VisualizerDelete] Hard-purged ${deletedKeysToPurge_ACU.length} keys from ${r.changedCount} AI messages.`);
-                        if (topLevelWindow_ACU?.AutoCardUpdaterAPI) {
-                            topLevelWindow_ACU.AutoCardUpdaterAPI._notifyTableUpdate();
-                        }
-                        // SQLite 模式下重建运行时数据库实例，确保模板切换时不会残留旧表结构或旧数据
-                        if (isSqliteMode()) {
-                            try {
-                                await reloadStorageProvider();
-                                logDebug_ACU('[VisualizerDelete] SQLite 运行时数据库已重建');
-                            }
-                            catch (reloadError) {
-                                logWarn_ACU(`[VisualizerDelete] reloadStorageProvider 失败: ${reloadError?.message}，继续使用当前 provider`);
-                            }
-                        }
-                    }
-                    _acuVisState.deletedSheetKeys = [];
-                }
-                catch (e) {
-                    logWarn_ACU('[VisualizerDelete] Hard purge failed:', e);
-                    // 不清空队列，让用户再次保存时有机会重试
-                }
-            }
-            // 2.5 所有保存完成后再统一刷新，确保读取最新数据再进行后续操作
-            await refreshMergedDataAndNotifyWithUI_ACU();
-            if (shouldSyncSummaryVectorIndexAfterSave_ACU && getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
-                try {
-                    const queueResult = await enqueueSummaryVectorIndexFlush_ACU({
-                        targetMessageIndex: appendTargetIndex !== -1 ? appendTargetIndex : (latestAiIndex !== -1 ? latestAiIndex : undefined),
-                        mode: 'sync',
-                        reason: 'visualizer_save',
-                    });
-                    if (!queueResult.queued && !queueResult.skipped) {
-                        logWarn_ACU('[VisualizerVectorIndex] 交火索引防抖归档入队失败:', queueResult.reason);
-                        showToastr_ACU('warning', `表格已保存，但交火索引防抖归档入队失败：${queueResult.reason || 'unknown'}`);
-                    }
-                    else if (queueResult.skipped) {
-                        logDebug_ACU(`[VisualizerVectorIndex] 交火索引防抖归档入队跳过: ${queueResult.reason || 'skipped'}`);
-                    }
-                    else {
-                        logDebug_ACU(`[VisualizerVectorIndex] 交火索引防抖归档已入队: scope=${queueResult.scopeKey || ''}`);
-                    }
-                }
-                catch (error) {
-                    logWarn_ACU('[VisualizerVectorIndex] 交火索引防抖归档入队异常:', error);
-                    showToastr_ACU('warning', '表格已保存，但交火索引防抖归档入队异常，请查看控制台日志。');
-                }
-            }
-            if ($popupInstance_ACU && $popupInstance_ACU.length) {
-                loadTemplatePresetSelect_ACU({ keepGlobalValue: false });
-            }
-            showToastr_ACU('success', '更改已追加保存到当前最新有效楼层！');
-        }
-        // 3. Trigger UI Update & Worldbook Injection
         await updateReadableLorebookEntry_ACU(true);
-        topLevelWindow_ACU.AutoCardUpdaterAPI._notifyTableUpdate();
+        topLevelWindow_ACU.AutoCardUpdaterAPI?._notifyTableUpdate?.();
         if (typeof updateCardUpdateStatusDisplay_ACU === 'function')
             updateCardUpdateStatusDisplay_ACU();
-        // 4. Inheritance Check (已移除旧逻辑)
-        // await checkAndPerformInheritance_ACU(templateObj);
-        // Close
+        if ($popupInstance_ACU && $popupInstance_ACU.length)
+            loadTemplatePresetSelect_ACU({ keepGlobalValue: false });
+    }
+    async function saveVisualizerDataChanges_ACU() {
+        const orderedData = prepareOrderedVisualizerData_ACU();
+        if (hasTemplateStructureChanges_ACU(orderedData)) {
+            showToastr_ACU('error', '存在未保存的模板/结构变更；本次是数据保存，已阻止混合提交。请先保存模板，或刷新后只保存数据。');
+            return;
+        }
+        const result = await applyVisualizerPendingDataOps_ACU(_acuVisState);
+        if (!result.success) {
+            showToastr_ACU('error', result.error || '可视化编辑器保存失败：批量 SQL 写入运行时失败。');
+            return;
+        }
+        if (!result.changed) {
+            showToastr_ACU('info', '没有需要保存的数据增量。');
+            return;
+        }
+        const chat = getChatArray_ACU();
+        const isolationKey = getCurrentIsolationKey_ACU();
+        const latestAiIndex = getLatestAiMessageIndexFromChat_ACU(chat);
+        const appendTargetIndex = getLatestTableAppendMessageIndexFromChat_ACU(chat, isolationKey, settings_ACU);
+        await runPostSaveRefresh_ACU('visualizer_save_data', appendTargetIndex !== -1 ? appendTargetIndex : (latestAiIndex !== -1 ? latestAiIndex : undefined));
+        showToastr_ACU('success', '数据增量已通过批量 SQL 保存到当前消息。');
         closeACUWindow(`${SCRIPT_ID_PREFIX_ACU}-visualizer-window`);
+    }
+    async function saveVisualizerTemplateChanges_ACU(scope) {
+        if (hasVisualizerPendingDataOps_ACU(_acuVisState)) {
+            showToastr_ACU('error', '存在未保存的数据增量；本次是模板保存，已阻止混合提交。请先保存数据，或刷新后只保存模板。');
+            return;
+        }
+        const orderedData = prepareOrderedVisualizerData_ACU();
+        const orderedKeys = getOrderedSheetKeys_ACU();
+        const hasCurrentChat = getChatArray_ACU().length > 0;
+        if (scope === 'chat' && !hasCurrentChat) {
+            showToastr_ACU('error', '当前没有聊天，不能保存模板到当前聊天。');
+            return;
+        }
+        const shouldValidateRuntimeRecovery = hasCurrentChat && isSqliteMode();
+        const compatibility = await validateTemplateCompatibleWithRuntimeData_ACU(orderedData, { includeRuntimeRows: shouldValidateRuntimeRecovery });
+        if (!compatibility.success || !compatibility.data) {
+            const prefix = shouldValidateRuntimeRecovery ? '模板与当前聊天旧数据不兼容，已阻止保存。' : '模板自身校验失败，已阻止保存。';
+            showToastr_ACU('error', `${prefix}\n${compatibility.error || ''}`);
+            return;
+        }
+        const templateData = compatibility.data;
+        _acuVisState.tempData = orderedData;
+        if (scope === 'chat') {
+            const isolationKey = getCurrentIsolationKey_ACU();
+            const existingGuide = getChatSheetGuideDataForIsolationKey_ACU(isolationKey);
+            const templateObjForSeed = parseTableTemplateJson_ACU({ stripSeedRows: false });
+            const guideData = buildChatSheetGuideDataFromData_ACU(templateData, {
+                preserveSeedRowsFromGuideData: existingGuide,
+                seedRowsFromTemplateObj: templateObjForSeed,
+                orderedKeys,
+            });
+            if (!guideData || !Object.keys(guideData).some(key => key.startsWith('sheet_'))) {
+                showToastr_ACU('error', '保存当前聊天模板失败：无法生成模板指导表。');
+                return;
+            }
+            const templateScopeSource = materializeDataFromSheetGuide_ACU(guideData, { includeSeedRows: true });
+            const saved = setChatSheetGuideDataForIsolationKey_ACU(isolationKey, guideData, {
+                reason: 'visualizer_template_save_chat',
+                syncTemplateScope: true,
+                templateSource: templateScopeSource,
+                presetName: resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true, isolationKey }),
+                source: 'visualizer_template_save_chat',
+            });
+            if (!saved) {
+                showToastr_ACU('error', '保存当前聊天模板失败：无法写入指导表。');
+                return;
+            }
+            await saveChatToHost_ACU();
+            if (isSqliteMode())
+                await reloadStorageProvider();
+            await runPostSaveRefresh_ACU('visualizer_save_template_chat');
+            showToastr_ACU('success', '模板/结构已保存到当前聊天。');
+            closeACUWindow(`${SCRIPT_ID_PREFIX_ACU}-visualizer-window`);
+            return;
+        }
+        const { templateObj, changed } = buildTemplateObjectFromVisualizerData_ACU(templateData, orderedKeys);
+        if (!changed) {
+            showToastr_ACU('info', '全局模板无变化，无需保存。');
+            return;
+        }
+        const isolationKey = getCurrentIsolationKey_ACU();
+        const activePresetName = normalizeTemplatePresetSelectionValue_ACU(resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true, isolationKey }));
+        let finalGlobalPresetName = activePresetName;
+        if (isDefaultTemplatePresetSelection_ACU(finalGlobalPresetName)) {
+            const promptedName = prompt('请输入要保存到全局的模板预设名称：', '新模板预设');
+            if (!promptedName)
+                return;
+            finalGlobalPresetName = normalizeTemplatePresetSelectionValue_ACU(String(promptedName).trim());
+        }
+        else if (!confirm(`确定要用当前编辑结果覆盖全局预设 "${finalGlobalPresetName}" 吗？`)) {
+            return;
+        }
+        if (!finalGlobalPresetName)
+            return;
+        const preparedSnapshot = sanitizeTemplateSnapshotForChat_ACU(templateObj);
+        if (!preparedSnapshot?.templateStr) {
+            showToastr_ACU('error', '保存全局模板失败：无法生成模板快照。');
+            return;
+        }
+        const presetSaved = upsertTemplatePreset_ACU(finalGlobalPresetName, preparedSnapshot.templateStr);
+        if (!presetSaved) {
+            showToastr_ACU('error', '保存全局模板失败：无法写入全局预设库。');
+            return;
+        }
+        const appliedGlobalTemplate = await applyTemplatePresetToCurrent_ACU(finalGlobalPresetName, {
+            source: 'visualizer_save_template_global',
+            updateGlobal: true,
+            save: true,
+            persistChatScope: false,
+        });
+        if (!appliedGlobalTemplate) {
+            showToastr_ACU('error', '保存全局模板失败：模板快照应用失败。');
+            return;
+        }
+        if (isSqliteMode())
+            await reloadStorageProvider();
+        await runPostSaveRefresh_ACU('visualizer_save_template_global');
+        showToastr_ACU('success', `模板/结构已保存到全局预设：${finalGlobalPresetName}。`);
+        closeACUWindow(`${SCRIPT_ID_PREFIX_ACU}-visualizer-window`);
+    }
+    async function saveVisualizerChanges_ACU(saveToTemplate = false) {
+        if (saveToTemplate) {
+            await saveVisualizerTemplateChanges_ACU('global');
+            return;
+        }
+        await saveVisualizerDataChanges_ACU();
     }
     // --- [Inheritance Logic (Legacy Removed)] ---
 
@@ -44476,6 +44887,7 @@ $CONTENT
         currentSheetKey: null,
         mode: 'data', // 'data' or 'config'
         tempData: null, // Deep copy of currentJsonTableData_ACU
+        pendingDataOps: null, // 用户在数据模式产生的显式增量 CRUD 操作队列
         sheetOrder: null, // 有序表格键列表
         deletedSheetKeys: [] // 在可视化编辑器中删除的表格key列表
     };
@@ -44494,6 +44906,7 @@ $CONTENT
             // 如果失败，回退到使用当前内存数据（如果存在）
             if (currentJsonTableData_ACU) {
                 _acuVisState.tempData = JSON.parse(JSON.stringify(currentJsonTableData_ACU));
+                resetVisualizerPendingDataOps_ACU(_acuVisState);
             }
             else {
                 return;
@@ -44504,6 +44917,7 @@ $CONTENT
             const stableKeys = getSortedSheetKeys_ACU(freshData);
             _set_currentJsonTableData_ACU(reorderDataBySheetKeys_ACU(freshData, stableKeys));
             _acuVisState.tempData = JSON.parse(JSON.stringify(currentJsonTableData_ACU));
+            resetVisualizerPendingDataOps_ACU(_acuVisState);
         }
         // 2. Validate current sheet key
         if (_acuVisState.currentSheetKey && !_acuVisState.tempData[_acuVisState.currentSheetKey]) {
@@ -44534,6 +44948,7 @@ $CONTENT
         }
         // Initial Load
         _acuVisState.tempData = JSON.parse(JSON.stringify(currentJsonTableData_ACU));
+        resetVisualizerPendingDataOps_ACU(_acuVisState);
         _acuVisState.currentSheetKey = getSortedSheetKeys_ACU(_acuVisState.tempData)[0] || null; // Default to first sheet
         const activeTemplateMeta_ACU = getActiveTemplatePresetMeta_ACU();
         const activeTemplatePresetText_ACU = `当前生效模板预设：${activeTemplateMeta_ACU.displayName}（${activeTemplateMeta_ACU.scopeLabel}）`;
@@ -44553,10 +44968,11 @@ $CONTENT
                           <div id="acu-vis-template-preset-indicator" class="acu-hint" style="font-size: 12px; color: var(--vis-text-mute);">${escapeHtml_ACU$1(activeTemplatePresetText_ACU)}</div>
                       </div>
                   </div>
-                  <div class="acu-vis-actions" style="display: flex; gap: 10px;">
+                  <div class="acu-vis-actions" style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end;">
                       <button id="acu-vis-theme-btn" class="acu-btn-secondary acu-vis-theme-btn" title="切换主题"><span class="acu-theme-toggle-text">素纱</span></button>
-                      <button id="acu-vis-save-btn" class="acu-btn-primary"><i class="fa-solid fa-save"></i> 保存到当前聊天</button>
-                      <button id="acu-vis-save-template-btn" class="acu-btn-secondary"><i class="fa-solid fa-save"></i> 保存到全局</button>
+                      <button id="acu-vis-save-data-btn" class="acu-btn-primary"><i class="fa-solid fa-database"></i> 保存数据到当前消息</button>
+                      <button id="acu-vis-save-template-chat-btn" class="acu-btn-secondary"><i class="fa-solid fa-layer-group"></i> 保存模板到当前聊天</button>
+                      <button id="acu-vis-save-template-global-btn" class="acu-btn-secondary"><i class="fa-solid fa-globe"></i> 保存模板到全局</button>
                   </div>
               </div>
               <div class="acu-vis-content" style="flex: 1; display: flex; overflow: hidden;">
@@ -44589,12 +45005,15 @@ $CONTENT
                 }
             },
             onReady: ($window) => {
-                // 绑定事件
-                $window.find('#acu-vis-save-btn').on('click', async () => {
-                    await saveVisualizerChanges_ACU(false);
+                // 绑定事件：数据保存与模板保存彻底分离
+                $window.find('#acu-vis-save-data-btn').on('click', async () => {
+                    await saveVisualizerDataChanges_ACU();
                 });
-                $window.find('#acu-vis-save-template-btn').on('click', async () => {
-                    await saveVisualizerChanges_ACU(true);
+                $window.find('#acu-vis-save-template-chat-btn').on('click', async () => {
+                    await saveVisualizerTemplateChanges_ACU('chat');
+                });
+                $window.find('#acu-vis-save-template-global-btn').on('click', async () => {
+                    await saveVisualizerTemplateChanges_ACU('global');
                 });
                 $window.find('.acu-mode-btn').on('click', function () {
                     $window.find('.acu-mode-btn').removeClass('active');
