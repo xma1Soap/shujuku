@@ -12732,11 +12732,40 @@ $CONTENT
         // 内部方法
         // ═══════════════════════════════════════════════════════════════
         _buildInitialRuntimeTableData_ACU(sourceData) {
+            const shouldIncludeSeedRows = shouldUseInitialSeedRows_ACU();
+            const templateData = this._resolveCurrentChatTemplate(!shouldIncludeSeedRows);
             const baseData = sourceData
                 ? JSON.parse(JSON.stringify(sourceData))
-                : this._resolveCurrentChatTemplate(!shouldUseInitialSeedRows_ACU());
+                : templateData;
             if (!baseData || typeof baseData !== 'object')
                 return null;
+            if (templateData && typeof templateData === 'object') {
+                for (const key of Object.keys(templateData).filter(k => k.startsWith('sheet_'))) {
+                    const templateSheet = templateData[key];
+                    if (!templateSheet || typeof templateSheet !== 'object')
+                        continue;
+                    const targetSheet = baseData[key];
+                    if (!targetSheet || typeof targetSheet !== 'object')
+                        continue;
+                    if (templateSheet.uid)
+                        targetSheet.uid = templateSheet.uid;
+                    if (templateSheet.name)
+                        targetSheet.name = templateSheet.name;
+                    if (templateSheet.sourceData && typeof templateSheet.sourceData === 'object')
+                        targetSheet.sourceData = JSON.parse(JSON.stringify(templateSheet.sourceData));
+                    if (templateSheet.updateConfig && typeof templateSheet.updateConfig === 'object')
+                        targetSheet.updateConfig = JSON.parse(JSON.stringify(templateSheet.updateConfig));
+                    if (templateSheet.exportConfig && typeof templateSheet.exportConfig === 'object')
+                        targetSheet.exportConfig = JSON.parse(JSON.stringify(templateSheet.exportConfig));
+                    if (templateSheet.orderNo !== undefined)
+                        targetSheet.orderNo = templateSheet.orderNo;
+                    if (Array.isArray(templateSheet.content?.[0])) {
+                        if (!Array.isArray(targetSheet.content))
+                            targetSheet.content = [];
+                        targetSheet.content[0] = JSON.parse(JSON.stringify(templateSheet.content[0]));
+                    }
+                }
+            }
             let hasSheet = false;
             for (const key of Object.keys(baseData).filter(k => k.startsWith('sheet_'))) {
                 const sheet = baseData[key];
@@ -12918,37 +12947,17 @@ $CONTENT
             }
             // 收集当前聊天模板中所有表的 sheetKey 和表名，找出 SQLite 中缺失的
             const sheetKeys = Object.keys(templateData).filter(k => k.startsWith('sheet_'));
-            const templateSheetKeySet = new Set(sheetKeys);
             const missingSheets = {};
             for (const key of sheetKeys) {
-                // 优先从 currentJsonTableData_ACU 获取 sheet 数据（可能包含指导表中用户修改过的 DDL），
-                // fallback 到当前聊天模板。这样用户在可视化编辑器中修改 DDL 后，建表时用的是新 DDL。
+                // 当前聊天模板是建表结构权威；currentJsonTableData_ACU 可能是旧运行时快照，不能让旧 DDL/CHECK 覆盖模板。
                 const liveSheet = currentJsonTableData_ACU?.[key];
-                const sheet = liveSheet || templateData[key];
+                const sheet = templateData[key] || liveSheet;
                 if (!sheet)
                     continue;
                 const ddl = generateDDL(sheet);
                 const tableName = parseDDLTableName(ddl);
                 if (tableName && !existingTables.has(tableName)) {
                     missingSheets[key] = sheet;
-                }
-            }
-            // [修复] 检查 currentJsonTableData_ACU 中是否有当前聊天模板中存在但上面未处理的表
-            // 注意：只允许建当前聊天模板中存在的表，不建其他来源的表
-            if (currentJsonTableData_ACU) {
-                const liveSheetKeys = Object.keys(currentJsonTableData_ACU).filter(k => k.startsWith('sheet_'));
-                for (const key of liveSheetKeys) {
-                    if (missingSheets[key])
-                        continue; // 已在上面处理过
-                    if (!templateSheetKeySet.has(key))
-                        continue; // 不在当前聊天模板中，跳过
-                    const sheet = currentJsonTableData_ACU[key];
-                    if (!sheet?.sourceData?.ddl)
-                        continue;
-                    const tableName = parseDDLTableName(sheet.sourceData.ddl);
-                    if (tableName && !existingTables.has(tableName)) {
-                        missingSheets[key] = sheet;
-                    }
                 }
             }
             // 所有表都已存在，无需建表
@@ -34339,6 +34348,7 @@ $CONTENT
                 };
             });
             if (!commitResult.success || !commitResult.value) {
+                _set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(baseSnapshot || {})));
                 return { success: false, modifiedKeys: [], error: commitResult.error || '统一提交失败。' };
             }
             if (!options.isImportMode && commitResult.tableData) {
