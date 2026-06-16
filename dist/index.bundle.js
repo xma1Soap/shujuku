@@ -3243,6 +3243,9 @@ $CONTENT
             ? chat[0]
             : null;
     }
+    function cloneContainer_ACU(container) {
+        return cloneScopedConfigData_ACU(container, {});
+    }
     function getChatMetadata_ACU() {
         const metadata = SillyTavern_API_ACU?.chatMetadata;
         return metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : null;
@@ -3268,22 +3271,70 @@ $CONTENT
         }
         catch (_) { }
     }
+    function mergeObjectSlots_ACU(target, fallback) {
+        let changed = false;
+        Object.entries(fallback).forEach(([key, value]) => {
+            if (!Object.prototype.hasOwnProperty.call(target, key)) {
+                target[key] = cloneScopedConfigData_ACU(value, value);
+                changed = true;
+            }
+        });
+        return changed;
+    }
+    function mergeLegacyScopedConfigIntoMetadata_ACU(metadataContainer, legacyContainer) {
+        if (!metadataContainer && !legacyContainer)
+            return { container: null, changed: false };
+        if (!metadataContainer)
+            return { container: cloneContainer_ACU(legacyContainer), changed: true };
+        if (!legacyContainer)
+            return { container: cloneContainer_ACU(metadataContainer), changed: false };
+        const merged = cloneContainer_ACU(metadataContainer);
+        let changed = false;
+        Object.entries(legacyContainer).forEach(([key, value]) => {
+            if (key === 'version')
+                return;
+            const targetValue = merged[key];
+            if (value && typeof value === 'object' && !Array.isArray(value)
+                && targetValue && typeof targetValue === 'object' && !Array.isArray(targetValue)) {
+                changed = mergeObjectSlots_ACU(targetValue, value) || changed;
+            }
+            else if (!Object.prototype.hasOwnProperty.call(merged, key)) {
+                merged[key] = cloneScopedConfigData_ACU(value, value);
+                changed = true;
+            }
+        });
+        return { container: merged, changed };
+    }
+    function mergeLegacyGuideIntoMetadata_ACU(metadataContainer, legacyContainer) {
+        if (!metadataContainer && !legacyContainer)
+            return { container: null, changed: false };
+        if (!metadataContainer)
+            return { container: cloneContainer_ACU(legacyContainer), changed: true };
+        if (!legacyContainer)
+            return { container: cloneContainer_ACU(metadataContainer), changed: false };
+        const merged = cloneContainer_ACU(metadataContainer);
+        const legacyTags = legacyContainer.tags;
+        if (legacyTags && typeof legacyTags === 'object' && !Array.isArray(legacyTags)) {
+            if (!merged.tags || typeof merged.tags !== 'object' || Array.isArray(merged.tags))
+                merged.tags = {};
+            const changed = mergeObjectSlots_ACU(merged.tags, legacyTags);
+            return { container: merged, changed };
+        }
+        return { container: merged, changed: false };
+    }
     /**
-     * 从 chat_metadata 优先读取作用域配置容器；兼容旧版 chat[0] 字段。
+     * 读取作用域配置容器；chat_metadata 为权威源，chat[0] 只补齐 metadata 缺失的旧槽位。
      * @param chat SillyTavern 聊天数组
      * @returns 解析后的配置对象，或 null
      */
     function getChatScopedConfigContainer_ACU(chat) {
         const metadataContainer = readContainer_ACU(getChatMetadata_ACU()?.[CHAT_SCOPED_CONFIG_FIELD_ACU]);
-        if (metadataContainer)
-            return metadataContainer;
         const first = getChatFirstLayerMessageLocal_ACU(chat);
-        if (!first)
-            return null;
-        const legacyContainer = readContainer_ACU(first[CHAT_SCOPED_CONFIG_FIELD_ACU]);
-        if (legacyContainer)
-            writeChatMetadataField_ACU(CHAT_SCOPED_CONFIG_FIELD_ACU, legacyContainer);
-        return legacyContainer;
+        const legacyContainer = first ? readContainer_ACU(first[CHAT_SCOPED_CONFIG_FIELD_ACU]) : null;
+        const merged = mergeLegacyScopedConfigIntoMetadata_ACU(metadataContainer, legacyContainer);
+        if (merged.changed && merged.container)
+            writeChatMetadataField_ACU(CHAT_SCOPED_CONFIG_FIELD_ACU, merged.container);
+        return merged.container;
     }
     /**
      * 规范化作用域配置容器（确保 version 字段存在且合法）
@@ -3302,21 +3353,18 @@ $CONTENT
         return normalized;
     }
     /**
-     * 从 chat[0] 读取 Sheet Guide 容器
+     * 读取 Sheet Guide 容器；chat_metadata 为权威源，chat[0] 只补齐 metadata 缺失的旧标签槽位。
      * @param chat SillyTavern 聊天数组
      * @returns 解析后的 guide 对象，或 null
      */
     function getChatSheetGuideContainer_ACU(chat) {
         const metadataContainer = readContainer_ACU(getChatMetadata_ACU()?.[CHAT_SHEET_GUIDE_FIELD_ACU]);
-        if (metadataContainer)
-            return metadataContainer;
         const first = getChatFirstLayerMessageLocal_ACU(chat);
-        if (!first)
-            return null;
-        const legacyContainer = readContainer_ACU(first[CHAT_SHEET_GUIDE_FIELD_ACU]);
-        if (legacyContainer)
-            writeChatMetadataField_ACU(CHAT_SHEET_GUIDE_FIELD_ACU, legacyContainer);
-        return legacyContainer;
+        const legacyContainer = first ? readContainer_ACU(first[CHAT_SHEET_GUIDE_FIELD_ACU]) : null;
+        const merged = mergeLegacyGuideIntoMetadata_ACU(metadataContainer, legacyContainer);
+        if (merged.changed && merged.container)
+            writeChatMetadataField_ACU(CHAT_SHEET_GUIDE_FIELD_ACU, merged.container);
+        return merged.container;
     }
     function setChatScopedConfigContainer_ACU(chat, container) {
         writeChatMetadataField_ACU(CHAT_SCOPED_CONFIG_FIELD_ACU, container);
@@ -8689,7 +8737,10 @@ $CONTENT
         }
         const checkpoint = checkpointRef.frame.checkpoint;
         const state = deepClone_ACU$3(checkpoint.data);
-        applyGuideStructureBeforeReplay_ACU(state, getReplayGuideData_ACU(chat, isolationKey));
+        const replayGuideData = Object.prototype.hasOwnProperty.call(options, 'guideDataOverride')
+            ? options.guideDataOverride || null
+            : getReplayGuideData_ACU(chat, isolationKey);
+        applyGuideStructureBeforeReplay_ACU(state, replayGuideData);
         const replayStartMessageIndex = checkpointRef.messageIndex;
         replayCheckpointSchedule_ACU(checkpoint, checkpointRef.aiFloor);
         const runtime = {
@@ -8734,6 +8785,23 @@ $CONTENT
         }
         finally {
             runtime.engine.dispose();
+        }
+    }
+    async function validateCurrentChatTableRecoveryWithGuide_ACU(guideData, options = {}) {
+        const chat = options.chat || getChatArray_ACU();
+        if (!Array.isArray(chat) || chat.length === 0)
+            return { success: true };
+        try {
+            await loadTableStateFromFramesV2_ACU(chat, options.isolationKey ?? getCurrentIsolationKey_ACU(), {
+                guideDataOverride: guideData || null,
+            });
+            return { success: true };
+        }
+        catch (error) {
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : String(error || '未知错误'),
+            };
         }
     }
 
@@ -19346,6 +19414,20 @@ $CONTENT
         // 新逻辑：如果收到的 chatFileName 无效，则记录一个警告并忽略此事件，
         // 以保留当前的数据库状态，等待一个有效的 CHAT_CHANGED 事件。
         if (!chatFileName || typeof chatFileName !== 'string' || chatFileName.trim() === '' || chatFileName.trim() === 'null') {
+            if (!Array.isArray(getChatArray_ACU()) || getChatArray_ACU().length === 0) {
+                logDebug_ACU(`ACU: Received invalid chat file name "${chatFileName}" with no active chat. Clearing runtime state.`);
+                _set_currentChatFileIdentifier_ACU('');
+                _set_currentJsonTableData_ACU(null);
+                _set_independentTableStates_ACU({});
+                _set_allChatMessages_ACU([]);
+                _set_lastTotalAiMessages_ACU(0);
+                generationGate_ACU.lastUserMessageId = null;
+                generationGate_ACU.lastUserMessageText = '';
+                generationGate_ACU.lastUserMessageAt = 0;
+                generationGate_ACU.lastUserSendIntentAt = 0;
+                generationGate_ACU.lastGeneration = null;
+                return;
+            }
             logWarn_ACU(`ACU: Received invalid chat file name: "${chatFileName}". This can happen after an update error. Ignoring event to preserve current state.`);
             // 保持当前状态不变，防止数据库被意外清除
             return;
@@ -19356,6 +19438,8 @@ $CONTENT
         // [FIX] Reload all settings to ensure template is not stale for new chats.
         // MUST be called AFTER setting currentChatFileIdentifier_ACU so it loads the correct character settings.
         loadSettings_ACU();
+        _set_currentJsonTableData_ACU(null);
+        _set_independentTableStates_ACU({});
         _set_allChatMessages_ACU([]);
         _set_lastTotalAiMessages_ACU(0); // 重置 AI 消息计数
         // [重构] 切换聊天时重置触发门控状态（从 init.ts CHAT_CHANGED 回调搬入 service 层）
@@ -19365,10 +19449,9 @@ $CONTENT
         generationGate_ACU.lastUserSendIntentAt = 0;
         generationGate_ACU.lastGeneration = null;
         logDebug_ACU(`ACU: currentChatFileIdentifier FINAL set to: "${currentChatFileIdentifier_ACU}" (Source: CHAT_CHANGED event)`);
-        await loadAllChatMessages_ACU();
-        applyTemplateScopeForCurrentChat_ACU();
+        // 持久化聊天数据读取由 presentation/bootstrap/init.ts 的延迟 CHAT_CHANGED 阶段统一执行。
+        // 这里绝不从当前内存缓存派生表格/模板，避免在宿主 chatMetadata 尚未切换完成时读到旧上下文。
         // updateCardUpdateStatusDisplay 由 presentation 层的 init.ts CHAT_CHANGED 回调执行
-        await loadOrCreateJsonTableFromChatHistory_ACU();
         // [核心修复] 切换聊天时，强制刷新可视化编辑器数据
         // 这确保了无论编辑器是否打开（即是否绑定了事件），数据源都被更新，并且如果有监听者则触发
         // [优化] 增加短暂延迟，确保 DOM 渲染完成（尽管是数据层面的刷新）
@@ -26439,46 +26522,64 @@ $CONTENT
         catch (e) {
             logWarn_ACU('[模板作用域] ensureCurrentChatPresetEntry 失败:', e);
         }
+        let appliedFromLocalSnapshot = false;
         if (localEntry?.templateStr) {
             persistTemplateScopeSelectionState_ACU(normalizedPresetName, {
                 source,
                 updateGlobal: false,
-                save,
+                save: false,
                 persistChatScope: true,
                 templateSource: localEntry.templateStr,
                 guideData: localEntry.guideData,
                 scopeMode: 'chat_override',
                 registerChatPresetEntry: false,
             });
+            if (localEntry.guideData) {
+                setChatSheetGuideDataForIsolationKey_ACU(normalizedKey, localEntry.guideData, {
+                    reason: `template_scope_${source}`,
+                    syncTemplateScope: false,
+                });
+            }
+            appliedFromLocalSnapshot = true;
         }
         else {
             if (!hasGlobalPreset)
                 return false;
-            const linkState = buildChatTemplatePresetLinkState_ACU({
+            const snapshot = !normalizedPresetName
+                ? getDefaultTemplateSnapshot_ACU()
+                : sanitizeTemplateSnapshotForChat_ACU(getTemplatePreset_ACU(normalizedPresetName)?.templateStr || null);
+            if (!snapshot?.templateStr || !snapshot?.templateObj)
+                return false;
+            const guideData = buildChatSheetGuideDataFromTemplateObj_ACU(snapshot.templateObj, { stripSeedRows: false });
+            const templateState = buildChatTemplateScopeStateFromCurrent_ACU({
                 isolationKey: normalizedKey,
                 presetName: normalizedPresetName,
                 source,
                 originGlobalName: getCurrentTemplatePresetName_ACU(settings_ACU, { requireExisting: false }),
                 originGlobalRevision: 0,
                 updatedAt: Date.now(),
+                templateSource: snapshot.templateStr,
+                guideData,
             });
-            setCurrentChatTemplateScopeState_ACU(linkState, {
+            if (!templateState)
+                return false;
+            setCurrentChatTemplateScopeState_ACU(templateState, {
                 isolationKey: normalizedKey,
                 reason: `template_scope_${source}`,
             });
+            if (guideData) {
+                setChatSheetGuideDataForIsolationKey_ACU(normalizedKey, guideData, {
+                    reason: `template_scope_${source}`,
+                    syncTemplateScope: false,
+                });
+            }
+        }
+        if (save) {
             try {
-                clearChatSheetGuideDataForIsolationKey_ACU({ isolationKey: normalizedKey });
+                await saveChatToHost_ACU();
             }
-            catch (e) {
-                logWarn_ACU('[模板作用域] clearChatSheetGuide 失败:', e);
-            }
-            if (save) {
-                try {
-                    await saveChatToHost_ACU();
-                }
-                catch (error) {
-                    logWarn_ACU('[TemplateScope] 保存聊天级模板预设引用失败:', error);
-                }
+            catch (error) {
+                logWarn_ACU('[TemplateScope] 保存聊天级模板预设快照失败:', error);
             }
         }
         applyTemplateScopeForCurrentChat_ACU({ isolationKey: normalizedKey });
@@ -26488,8 +26589,8 @@ $CONTENT
         catch (e) { }
         return {
             presetName: normalizedPresetName,
-            mode: localEntry?.templateStr ? 'chat_override' : 'preset_link',
-            fromLocalSnapshot: !!localEntry?.templateStr,
+            mode: 'chat_override',
+            fromLocalSnapshot: appliedFromLocalSnapshot,
         };
     }
     function buildChatTemplateArchiveFingerprint_ACU(templateState, { isolationKey = getCurrentIsolationKey_ACU() } = {}) {
@@ -45346,8 +45447,10 @@ $CONTENT
         // 调用 service 层核心逻辑执行数据删除
         const deletedCount = await deleteLocalDataInChatCore_ACU(mode, startFloor, endFloor);
         if (deletedCount > 0) {
-            // 刷新内存和UI
+            // 刷新内存和UI：删除楼层数据后，SQLite 运行时必须从当前聊天持久化模板/guide 重建
             await loadOrCreateJsonTableFromChatHistory_ACU();
+            if (isSqliteMode())
+                await reloadStorageProvider();
             await refreshMergedDataAndNotifyWithUI_ACU();
             // [重构] 调用 service 层清理世界书条目
             await cleanupWorldbookEntriesAfterDataDeletion_ACU();
@@ -53846,6 +53949,38 @@ $CONTENT
             return false;
         }
     }
+    function isValidChatFileName_ACU(chatFileName) {
+        return typeof chatFileName === 'string' && chatFileName.trim() !== '' && chatFileName.trim() !== 'null';
+    }
+    function hasActiveChatMessages_ACU() {
+        return Array.isArray(SillyTavern_API_ACU?.chat) && SillyTavern_API_ACU.chat.length > 0;
+    }
+    function notifyRuntimeTableCleared_ACU() {
+        try {
+            topLevelWindow_ACU.AutoCardUpdaterAPI?._notifyTableUpdate?.();
+        }
+        catch (_) { }
+        if (typeof updateCardUpdateStatusDisplay_ACU === 'function')
+            updateCardUpdateStatusDisplay_ACU();
+    }
+    function clearDerivedRuntimeState_ACU() {
+        disposeStorageProvider();
+        _set_currentJsonTableData_ACU(null);
+        _set_independentTableStates_ACU({});
+        _set_allChatMessages_ACU([]);
+        _set_lastTotalAiMessages_ACU(0);
+    }
+    function clearRuntimeForNoActiveChat_ACU(chatFileName) {
+        clearDerivedRuntimeState_ACU();
+        _set_currentChatFileIdentifier_ACU('');
+        generationGate_ACU.lastUserMessageId = null;
+        generationGate_ACU.lastUserMessageText = '';
+        generationGate_ACU.lastUserMessageAt = 0;
+        generationGate_ACU.lastUserSendIntentAt = 0;
+        generationGate_ACU.lastGeneration = null;
+        notifyRuntimeTableCleared_ACU();
+        logDebug_ACU(`ACU: No active chat after CHAT_CHANGED (${String(chatFileName)}), runtime table state cleared.`);
+    }
     function installSendIntentCaptureHooks_ACU() {
         try {
             const parentDoc = (window.parent || window).document;
@@ -53913,14 +54048,18 @@ $CONTENT
                 }
                 SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_CHANGED, async (chatFileName) => {
                     logDebug_ACU(`ACU CHAT_CHANGED event: ${chatFileName}`);
-                    // [修复] 换卡/换聊天时，立即销毁旧的 SQLite 数据库实例
-                    // 必须在 resetScriptStateForNewChat 之前执行，避免 1200ms 延迟窗口内的数据不一致
-                    // 仅在 chatFileName 有效时才销毁（无效时 resetScriptState 会直接 return 保留现有状态）
-                    if (chatFileName && typeof chatFileName === 'string' && chatFileName.trim() !== '' && chatFileName.trim() !== 'null') {
-                        if (isSqliteMode()) {
-                            disposeStorageProvider();
+                    const hasValidChatFileName_ACU = isValidChatFileName_ACU(chatFileName);
+                    if (!hasValidChatFileName_ACU && !hasActiveChatMessages_ACU()) {
+                        clearRuntimeForNoActiveChat_ACU(chatFileName);
+                        return;
+                    }
+                    // [修复] 换卡/换聊天时立即丢弃所有派生缓存。
+                    // 后续延迟阶段只从当前聊天持久化 metadata / 消息日志重建，避免旧表和旧模板在窗口期继续显示。
+                    if (hasValidChatFileName_ACU) {
+                        clearDerivedRuntimeState_ACU();
+                        notifyRuntimeTableCleared_ACU();
+                        if (isSqliteMode())
                             logDebug_ACU('[SQLite] CHAT_CHANGED: 立即销毁旧数据库实例');
-                        }
                     }
                     await resetScriptStateForNewChat_ACU(chatFileName);
                     // [触发门控] generationGate 重置已搬到 service 层的 resetScriptStateForNewChat_ACU 中
@@ -53991,6 +54130,13 @@ $CONTENT
                             logDebug_ACU(`ACU: Skip delayed chat refresh because active chat already changed to "${currentChatFileIdentifier_ACU || '未知'}".`);
                             return;
                         }
+                        if (!hasActiveChatMessages_ACU()) {
+                            clearRuntimeForNoActiveChat_ACU(chatFileName);
+                            return;
+                        }
+                        // 先重新读取当前聊天持久化消息，再应用 chat_metadata 中的聊天模板快照。
+                        // 此处是“持久化 → 派生缓存”的唯一重建入口，不能依赖切换前遗留的 TABLE_TEMPLATE/currentJsonTableData。
+                        await loadAllChatMessages_ACU();
                         applyTemplateScopeForCurrentChat_ACU();
                         // [6.7.3] SQLite 模式下，切换聊天后需要重建内存数据库（初始化 SQLite 引擎）
                         if (isSqliteMode()) {
@@ -83370,6 +83516,37 @@ Expected function or array of functions, received type ${typeof value}.`
         };
     }
 
+    function buildTemplateRecoveryConfirmMessage_ACU(action, error) {
+        const actionText = action === 'save-template' ? '保存这次聊天模板修改' : '切换并保存当前聊天模板';
+        const confirmText = action === 'save-template' ? '继续保存模板' : '继续切换模板';
+        const detail = error ? `\n\n底层恢复错误：${error}` : '';
+        return `高风险：本次模板变更会导致当前标识的旧表格数据无法按新模板恢复。\n\n系统已尝试用新模板回放当前聊天里的本地表格数据，但验证失败。继续操作会立即删除“当前标识本地数据”（不可恢复），然后${actionText}。\n\n删除后当前标识下已有表格数据会被清空，后续必须重新填表。\n\n如果你还需要旧数据，请先取消并备份/导出聊天。\n\n确认要删除当前标识本地数据并${confirmText}吗？${detail}`;
+    }
+    async function ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU(guideData, action) {
+        const validation = await validateCurrentChatTableRecoveryWithGuide_ACU(guideData);
+        if (validation.success)
+            return { success: true, dataWasReset: false };
+        const dialogStore = useDialogStore();
+        const toast = useToastStore();
+        const confirmed = await dialogStore.confirm({
+            title: '高风险：旧表数据无法按新模板恢复',
+            message: buildTemplateRecoveryConfirmMessage_ACU(action, 'error' in validation ? validation.error : undefined),
+            dangerMessage: '确认后会删除当前标识本地数据，此操作不可恢复。',
+            confirmLabel: action === 'save-template' ? '删除数据并保存模板' : '删除数据并切换模板',
+            cancelLabel: '取消，保留旧数据',
+            confirmVariant: 'danger',
+        });
+        if (!confirmed)
+            return { success: false, dataWasReset: false };
+        const deletedCount = await deleteLocalDataInChatCore_ACU('current');
+        if (deletedCount <= 0) {
+            toast.error('未删除任何当前标识本地数据，模板操作已取消。', { muteable: false });
+            return { success: false, dataWasReset: false };
+        }
+        toast.warning('已删除当前标识本地数据；模板操作将继续，后续必须重新填表。', { muteable: false });
+        return { success: true, dataWasReset: true };
+    }
+
     function defaultPresetItem(label, meta) {
         return { value: '', label, meta };
     }
@@ -83405,6 +83582,20 @@ Expected function or array of functions, received type ${typeof value}.`
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
     }
+    function resolveGuideDataForPresetSelection(name) {
+        const normalized = normalizeTemplatePresetSelectionValue_ACU(name);
+        const localEntry = listChatTemplatePresetEntries_ACU()
+            .find(entry => normalizeTemplatePresetSelectionValue_ACU(entry?.presetName || '') === normalized);
+        if (localEntry?.guideData && typeof localEntry.guideData === 'object')
+            return localEntry.guideData;
+        const snapshot = normalized
+            ? getTemplatePreset_ACU(normalized)?.templateStr
+            : getDefaultTemplateSnapshot_ACU()?.templateObj;
+        const templateObj = typeof snapshot === 'string'
+            ? safeJsonParse_ACU(snapshot, null)
+            : snapshot;
+        return buildChatSheetGuideDataFromTemplateObj_ACU(templateObj, { stripSeedRows: false });
+    }
     function useTableTemplatePresets() {
         const dialogStore = useDialogStore();
         const toast = useToastStore();
@@ -83415,7 +83606,8 @@ Expected function or array of functions, received type ${typeof value}.`
         const selectedGlobalPreset = ref('');
         const selectedChatPreset = ref('');
         const chatPresetItems = ref([]);
-        const isChatOverridden = computed(() => selectedChatPreset.value !== selectedGlobalPreset.value);
+        const activeTemplateScope = ref('global');
+        const isChatOverridden = computed(() => activeTemplateScope.value === 'chat');
         function buildChatPresetItems(globalNames, chatEntries, currentGlobalPreset) {
             const seen = new Set(['']);
             const defaultSnapshot = currentGlobalPreset ? null : getDefaultTemplateSnapshot_ACU();
@@ -83443,11 +83635,13 @@ Expected function or array of functions, received type ${typeof value}.`
             const nextGlobalNames = listTemplatePresetNames_ACU();
             const nextChatEntries = listChatTemplatePresetEntries_ACU();
             const nextSelectedGlobal = normalizeTemplatePresetSelectionValue_ACU(getCurrentTemplatePresetName_ACU(settings_ACU, { requireExisting: false }));
-            const nextSelectedChat = normalizeTemplatePresetSelectionValue_ACU(resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true }));
+            const activeMeta = getActiveTemplatePresetMeta_ACU();
+            const nextSelectedChat = normalizeTemplatePresetSelectionValue_ACU(activeMeta.presetName || resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true }));
             globalPresetNames.value = nextGlobalNames;
             chatPresetEntries.value = nextChatEntries;
             selectedGlobalPreset.value = nextSelectedGlobal;
             selectedChatPreset.value = nextSelectedChat;
+            activeTemplateScope.value = activeMeta.scope === 'chat' ? 'chat' : 'global';
             chatPresetItems.value = buildChatPresetItems(nextGlobalNames, nextChatEntries, nextSelectedGlobal);
         }
         async function run(action) {
@@ -83481,9 +83675,17 @@ Expected function or array of functions, received type ${typeof value}.`
                 message.value = null;
             });
         }
+        async function ensureTemplateSwitchCanProceed(guideData) {
+            const recoveryGuard = await ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU(guideData, 'switch-template');
+            return recoveryGuard.success;
+        }
         async function selectChatPreset(name) {
             const normalized = normalizeTemplatePresetSelectionValue_ACU(name);
             await run(async () => {
+                const guideData = resolveGuideDataForPresetSelection(normalized);
+                const canProceed = await ensureTemplateSwitchCanProceed(guideData);
+                if (!canProceed)
+                    return;
                 const result = await applyTemplatePresetToCurrent_ACU(normalized, {
                     source: 'v2_table_chat_select',
                     updateGlobal: false,
@@ -83492,6 +83694,8 @@ Expected function or array of functions, received type ${typeof value}.`
                 });
                 if (!result)
                     throw new Error('当前聊天模板预设切换失败。');
+                if (isSqliteMode())
+                    await reloadStorageProvider();
                 message.value = null;
             });
         }
@@ -83611,6 +83815,9 @@ Expected function or array of functions, received type ${typeof value}.`
                 const finalName = ensureUniqueTemplatePresetName_ACU(baseName);
                 if (!upsertTemplatePreset_ACU(finalName, prepared.templateStr))
                     throw new Error('模板已解析，但保存到预设库失败。');
+                const canProceed = await ensureTemplateSwitchCanProceed(buildChatSheetGuideDataFromTemplateObj_ACU(prepared.templateObj, { stripSeedRows: false }));
+                if (!canProceed)
+                    return;
                 const result = await applyTemplatePresetToCurrent_ACU(finalName, {
                     source: 'v2_table_import_current',
                     updateGlobal: false,
@@ -83619,6 +83826,8 @@ Expected function or array of functions, received type ${typeof value}.`
                 });
                 if (!result)
                     throw new Error('模板已保存，但切换到当前聊天失败。');
+                if (isSqliteMode())
+                    await reloadStorageProvider();
                 message.value = null;
                 toast.success(`模板已保存并切换为「${finalName}」。`, { muteable: false });
             });
@@ -91025,6 +91234,8 @@ Expected function or array of functions, received type ${typeof value}.`
                 const deletedCount = await deleteLocalDataInChatCore_ACU(mode, start, end);
                 if (deletedCount > 0) {
                     await loadOrCreateJsonTableFromChatHistory_ACU();
+                    if (isSqliteMode())
+                        await reloadStorageProvider();
                     await refreshMergedDataAndNotify_ACU();
                     const worldbookDeleted = await cleanupWorldbookEntriesAfterDataDeletion_ACU();
                     refresh();
@@ -95408,30 +95619,35 @@ Expected function or array of functions, received type ${typeof value}.`
             setSpecialIndexLockEnabled_ACU(sheetKey, draft.specialIndexLocked !== false);
         });
     }
-    function syncChatSheetGuide(orderedData, orderedKeys, saveToTemplate) {
+    function buildChatSheetGuideSyncPayload(orderedData, orderedKeys) {
+        const guideIsolationKey = getCurrentIsolationKey_ACU();
+        const existingGuide = getChatSheetGuideDataForIsolationKey_ACU(guideIsolationKey);
+        const templateObjForSeed = parseTableTemplateJson_ACU({ stripSeedRows: false });
+        const guideData = buildChatSheetGuideDataFromData_ACU(orderedData, {
+            preserveSeedRowsFromGuideData: existingGuide,
+            seedRowsFromTemplateObj: templateObjForSeed,
+            orderedKeys,
+        });
+        if (!guideData || !Object.keys(guideData).some(key => key.startsWith('sheet_')))
+            return null;
+        return { isolationKey: guideIsolationKey, guideData };
+    }
+    function persistChatSheetGuideSyncPayload(payload, saveToTemplate) {
+        if (!payload)
+            return;
         try {
-            const guideIsolationKey = getCurrentIsolationKey_ACU();
-            const existingGuide = getChatSheetGuideDataForIsolationKey_ACU(guideIsolationKey);
-            const templateObjForSeed = parseTableTemplateJson_ACU({ stripSeedRows: false });
-            const guideData = buildChatSheetGuideDataFromData_ACU(orderedData, {
-                preserveSeedRowsFromGuideData: existingGuide,
-                seedRowsFromTemplateObj: templateObjForSeed,
-                orderedKeys,
+            const syncTemplateScope = !saveToTemplate;
+            const templateScopeSource = materializeDataFromSheetGuide_ACU(payload.guideData, { includeSeedRows: true });
+            setChatSheetGuideDataForIsolationKey_ACU(payload.isolationKey, payload.guideData, {
+                reason: 'visualizer_v2_save',
+                syncTemplateScope,
+                templateSource: templateScopeSource,
+                presetName: resolveActiveTemplatePresetName_ACU({
+                    fallbackToGlobal: true,
+                    isolationKey: payload.isolationKey,
+                }),
+                source: 'visualizer_v2_save',
             });
-            if (guideData && Object.keys(guideData).some(key => key.startsWith('sheet_'))) {
-                const syncTemplateScope = !saveToTemplate;
-                const templateScopeSource = materializeDataFromSheetGuide_ACU(guideData, { includeSeedRows: true });
-                setChatSheetGuideDataForIsolationKey_ACU(guideIsolationKey, guideData, {
-                    reason: 'visualizer_v2_save',
-                    syncTemplateScope,
-                    templateSource: templateScopeSource,
-                    presetName: resolveActiveTemplatePresetName_ACU({
-                        fallbackToGlobal: true,
-                        isolationKey: guideIsolationKey,
-                    }),
-                    source: 'visualizer_v2_save',
-                });
-            }
         }
         catch (error) {
             logWarn_ACU('[ACU-V2 Visualizer] Failed to sync chat sheet guide:', error);
@@ -95692,9 +95908,16 @@ Expected function or array of functions, received type ${typeof value}.`
                     return false;
                 }
                 const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder, visualizer.tableLockDrafts);
-                syncChatSheetGuide(orderedData, [...visualizer.sheetOrder], false);
+                const guidePayload = buildChatSheetGuideSyncPayload(orderedData, [...visualizer.sheetOrder]);
+                const recoveryGuard = await ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU(guidePayload?.guideData || null, 'save-template');
+                if (!recoveryGuard.success)
+                    return false;
+                const dataWasResetForTemplateSave = recoveryGuard.dataWasReset;
+                persistChatSheetGuideSyncPayload(guidePayload, false);
                 applyTemplateScopeForCurrentChat_ACU();
-                _set_currentJsonTableData_ACU(cloneData$1(orderedData));
+                _set_currentJsonTableData_ACU(dataWasResetForTemplateSave && guidePayload
+                    ? materializeDataFromSheetGuide_ACU(guidePayload.guideData, { includeSeedRows: true })
+                    : cloneData$1(orderedData));
                 await saveChatToHost_ACU();
                 saveLockDrafts(visualizer.tableLockDrafts);
                 if (isSqliteMode())
