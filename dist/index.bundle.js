@@ -3200,6 +3200,20 @@ $CONTENT
     }
 
     /**
+     * shared/host-api.ts — 宿主平台 API 引用
+     * SillyTavern、TavernHelper、jQuery、toastr 的运行时引用。
+     * 属于 shared 层，任何层均可 import。
+     */
+    let SillyTavern_API_ACU;
+    let TavernHelper_API_ACU;
+    let jQuery_API_ACU;
+    let toastr_API_ACU;
+    function _set_SillyTavern_API_ACU(v) { SillyTavern_API_ACU = v; }
+    function _set_TavernHelper_API_ACU(v) { TavernHelper_API_ACU = v; }
+    function _set_jQuery_API_ACU(v) { jQuery_API_ACU = v; }
+    function _set_toastr_API_ACU(v) { toastr_API_ACU = v; }
+
+    /**
      * data/storage/chat-history.ts — 聊天消息自定义字段读写
      *
      * 从 src/core/04_shared_helpers.js 迁移而来。
@@ -3224,20 +3238,52 @@ $CONTENT
     /** 每个隔离标签下最大归档数 */
     const MAX_CHAT_TEMPLATE_ARCHIVES_PER_TAG_ACU = 8;
     // ── 底层容器读取函数 ──
-    /**
-     * 从 chat[0] 读取作用域配置容器
-     * @param chat SillyTavern 聊天数组
-     * @returns 解析后的配置对象，或 null
-     */
-    function getChatScopedConfigContainer_ACU(chat) {
-        const first = getChatFirstLayerMessage_ACU(chat);
-        if (!first)
-            return null;
-        const raw = first[CHAT_SCOPED_CONFIG_FIELD_ACU];
+    function getChatFirstLayerMessageLocal_ACU(chat) {
+        return Array.isArray(chat) && chat.length > 0 && chat[0] && typeof chat[0] === 'object'
+            ? chat[0]
+            : null;
+    }
+    function getChatMetadata_ACU() {
+        const metadata = SillyTavern_API_ACU?.chatMetadata;
+        return metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : null;
+    }
+    function readContainer_ACU(raw) {
         if (!raw)
             return null;
         const obj = (typeof raw === 'string') ? safeJsonParse_ACU(raw, null) : raw;
         return (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : null;
+    }
+    function writeChatMetadataField_ACU(field, value) {
+        const metadata = getChatMetadata_ACU();
+        if (!metadata)
+            return;
+        if (value && Object.keys(value).length > 0)
+            metadata[field] = value;
+        else
+            delete metadata[field];
+        try {
+            const updater = SillyTavern_API_ACU?.updateChatMetadata;
+            if (typeof updater === 'function')
+                updater({ [field]: value || undefined }, false);
+        }
+        catch (_) { }
+    }
+    /**
+     * 从 chat_metadata 优先读取作用域配置容器；兼容旧版 chat[0] 字段。
+     * @param chat SillyTavern 聊天数组
+     * @returns 解析后的配置对象，或 null
+     */
+    function getChatScopedConfigContainer_ACU(chat) {
+        const metadataContainer = readContainer_ACU(getChatMetadata_ACU()?.[CHAT_SCOPED_CONFIG_FIELD_ACU]);
+        if (metadataContainer)
+            return metadataContainer;
+        const first = getChatFirstLayerMessageLocal_ACU(chat);
+        if (!first)
+            return null;
+        const legacyContainer = readContainer_ACU(first[CHAT_SCOPED_CONFIG_FIELD_ACU]);
+        if (legacyContainer)
+            writeChatMetadataField_ACU(CHAT_SCOPED_CONFIG_FIELD_ACU, legacyContainer);
+        return legacyContainer;
     }
     /**
      * 规范化作用域配置容器（确保 version 字段存在且合法）
@@ -3261,14 +3307,40 @@ $CONTENT
      * @returns 解析后的 guide 对象，或 null
      */
     function getChatSheetGuideContainer_ACU(chat) {
-        const first = getChatFirstLayerMessage_ACU(chat);
+        const metadataContainer = readContainer_ACU(getChatMetadata_ACU()?.[CHAT_SHEET_GUIDE_FIELD_ACU]);
+        if (metadataContainer)
+            return metadataContainer;
+        const first = getChatFirstLayerMessageLocal_ACU(chat);
         if (!first)
             return null;
-        const raw = first[CHAT_SHEET_GUIDE_FIELD_ACU];
-        if (!raw)
-            return null;
-        const obj = (typeof raw === 'string') ? safeJsonParse_ACU(raw, null) : raw;
-        return (obj && typeof obj === 'object') ? obj : null;
+        const legacyContainer = readContainer_ACU(first[CHAT_SHEET_GUIDE_FIELD_ACU]);
+        if (legacyContainer)
+            writeChatMetadataField_ACU(CHAT_SHEET_GUIDE_FIELD_ACU, legacyContainer);
+        return legacyContainer;
+    }
+    function setChatScopedConfigContainer_ACU(chat, container) {
+        writeChatMetadataField_ACU(CHAT_SCOPED_CONFIG_FIELD_ACU, container);
+        const first = getChatFirstLayerMessageLocal_ACU(chat);
+        if (!first)
+            return;
+        if (container && Object.keys(container).length > 0) {
+            first[CHAT_SCOPED_CONFIG_FIELD_ACU] = container;
+        }
+        else {
+            delete first[CHAT_SCOPED_CONFIG_FIELD_ACU];
+        }
+    }
+    function setChatSheetGuideContainer_ACU(chat, container) {
+        writeChatMetadataField_ACU(CHAT_SHEET_GUIDE_FIELD_ACU, container);
+        const first = getChatFirstLayerMessageLocal_ACU(chat);
+        if (!first)
+            return;
+        if (container && Object.keys(container).length > 0) {
+            first[CHAT_SHEET_GUIDE_FIELD_ACU] = container;
+        }
+        else {
+            delete first[CHAT_SHEET_GUIDE_FIELD_ACU];
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -3685,20 +3757,6 @@ $CONTENT
         const out = s.replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim();
         return out.length > 80 ? out.slice(0, 80).trim() : out;
     }
-
-    /**
-     * shared/host-api.ts — 宿主平台 API 引用
-     * SillyTavern、TavernHelper、jQuery、toastr 的运行时引用。
-     * 属于 shared 层，任何层均可 import。
-     */
-    let SillyTavern_API_ACU;
-    let TavernHelper_API_ACU;
-    let jQuery_API_ACU;
-    let toastr_API_ACU;
-    function _set_SillyTavern_API_ACU(v) { SillyTavern_API_ACU = v; }
-    function _set_TavernHelper_API_ACU(v) { TavernHelper_API_ACU = v; }
-    function _set_jQuery_API_ACU(v) { jQuery_API_ACU = v; }
-    function _set_toastr_API_ACU(v) { toastr_API_ACU = v; }
 
     /**
      * data/gateways/chat-gateway.ts — 聊天数组访问网关
@@ -8247,6 +8305,77 @@ $CONTENT
         Object.keys(state).forEach(key => delete state[key]);
         Object.assign(state, deepClone_ACU$3(next));
     }
+    function getReplayGuideData_ACU(chat, isolationKey) {
+        const container = getChatSheetGuideContainer_ACU(chat);
+        const slot = container?.tags && typeof container.tags === 'object'
+            ? container.tags[String(isolationKey ?? '')]
+            : null;
+        if (slot?.data && typeof slot.data === 'object')
+            return slot.data;
+        return null;
+    }
+    function applyGuideStructureBeforeReplay_ACU(state, guideData) {
+        if (!guideData || typeof guideData !== 'object')
+            return;
+        const guided = materializeDataFromSheetGuide_ACU(guideData, { includeSeedRows: false });
+        const guideKeys = getSortedSheetKeys_ACU(guided, { ignoreChatGuide: true, includeMissingFromGuide: true });
+        for (const sheetKey of guideKeys) {
+            if (!sheetKey || !String(sheetKey).startsWith('sheet_'))
+                continue;
+            const guideSheet = guided[sheetKey];
+            if (!guideSheet || typeof guideSheet !== 'object')
+                continue;
+            const targetSheet = state[sheetKey];
+            if (!targetSheet || typeof targetSheet !== 'object') {
+                state[sheetKey] = deepClone_ACU$3(guideSheet);
+                continue;
+            }
+            if (guideSheet.uid)
+                targetSheet.uid = guideSheet.uid;
+            if (guideSheet.name)
+                targetSheet.name = guideSheet.name;
+            if (guideSheet.sourceData && typeof guideSheet.sourceData === 'object') {
+                targetSheet.sourceData = deepClone_ACU$3(guideSheet.sourceData);
+            }
+            if (guideSheet.updateConfig && typeof guideSheet.updateConfig === 'object') {
+                targetSheet.updateConfig = deepClone_ACU$3(guideSheet.updateConfig);
+            }
+            if (guideSheet.exportConfig && typeof guideSheet.exportConfig === 'object') {
+                targetSheet.exportConfig = deepClone_ACU$3(guideSheet.exportConfig);
+            }
+            if (guideSheet.orderNo !== undefined)
+                targetSheet.orderNo = guideSheet.orderNo;
+            if (Array.isArray(guideSheet.content?.[0])) {
+                if (!Array.isArray(targetSheet.content))
+                    targetSheet.content = [];
+                targetSheet.content[0] = deepClone_ACU$3(guideSheet.content[0]);
+                const targetLen = targetSheet.content[0].length;
+                for (let rowIndex = 1; rowIndex < targetSheet.content.length; rowIndex += 1) {
+                    const row = targetSheet.content[rowIndex];
+                    if (!Array.isArray(row))
+                        continue;
+                    const hasAutoMergedTag = row.length > 0 && row[row.length - 1] === 'auto_merged';
+                    if (row.length < targetLen) {
+                        while (row.length < targetLen)
+                            row.push('');
+                        if (hasAutoMergedTag && row[row.length - 1] !== 'auto_merged')
+                            row.push('auto_merged');
+                    }
+                    else if (row.length > targetLen) {
+                        row.splice(targetLen);
+                        if (hasAutoMergedTag)
+                            row.push('auto_merged');
+                    }
+                }
+            }
+            if (Array.isArray(guideSheet.seedRows))
+                targetSheet.seedRows = deepClone_ACU$3(guideSheet.seedRows);
+        }
+        for (const sheetKey of Object.keys(state)) {
+            if (sheetKey.startsWith('sheet_') && !guideKeys.includes(sheetKey))
+                delete state[sheetKey];
+        }
+    }
     function splitSqlStatementsForReplay_ACU(sql) {
         const statements = [];
         let current = '';
@@ -8560,6 +8689,7 @@ $CONTENT
         }
         const checkpoint = checkpointRef.frame.checkpoint;
         const state = deepClone_ACU$3(checkpoint.data);
+        applyGuideStructureBeforeReplay_ACU(state, getReplayGuideData_ACU(chat, isolationKey));
         const replayStartMessageIndex = checkpointRef.messageIndex;
         replayCheckpointSchedule_ACU(checkpoint, checkpointRef.aiFloor);
         const runtime = {
@@ -25773,11 +25903,11 @@ $CONTENT
             nextContainer.tags = {};
         delete nextContainer.tags[normalizedKey];
         if (Object.keys(nextContainer.tags).length === 0) {
-            delete first[CHAT_SHEET_GUIDE_FIELD_ACU];
+            setChatSheetGuideContainer_ACU(chat, null);
         }
         else {
             nextContainer.version = CHAT_SHEET_GUIDE_VERSION_ACU;
-            first[CHAT_SHEET_GUIDE_FIELD_ACU] = nextContainer;
+            setChatSheetGuideContainer_ACU(chat, nextContainer);
         }
         return true;
     }
@@ -25844,7 +25974,7 @@ $CONTENT
             reason: String(reason || ''),
             templateScopeMode: shouldSyncTemplateScope ? 'chat_override' : 'inherit_global',
         };
-        first[CHAT_SHEET_GUIDE_FIELD_ACU] = container;
+        setChatSheetGuideContainer_ACU(chat, container);
         if (shouldSyncTemplateScope) {
             const fallbackTemplateSource = existingTemplateScopeState?.templateStr || materializeDataFromSheetGuide_ACU(normalized, { includeSeedRows: true });
             const resolvedTemplateSource = templateSource || fallbackTemplateSource;
@@ -26441,12 +26571,7 @@ $CONTENT
                 delete container.templateArchives;
         }
         const hasPayload = Object.keys(container).some(key => key !== 'version');
-        if (hasPayload) {
-            first[CHAT_SCOPED_CONFIG_FIELD_ACU] = container;
-        }
-        else {
-            delete first[CHAT_SCOPED_CONFIG_FIELD_ACU];
-        }
+        setChatScopedConfigContainer_ACU(chat, hasPayload ? container : null);
         return getChatTemplateArchiveEntries_ACU({ chat, isolationKey: normalizedKey });
     }
     function archiveCurrentChatTemplateScopeState_ACU({ chat = getChatArray_ACU(), isolationKey = getCurrentIsolationKey_ACU(), nextTemplateState = null, reason = '' } = {}) {
@@ -26599,12 +26724,7 @@ $CONTENT
             }
         }
         const hasPayload = Object.keys(container).some(key => key !== 'version');
-        if (hasPayload) {
-            first[CHAT_SCOPED_CONFIG_FIELD_ACU] = container;
-        }
-        else {
-            delete first[CHAT_SCOPED_CONFIG_FIELD_ACU];
-        }
+        setChatScopedConfigContainer_ACU(chat, hasPayload ? container : null);
         return getCurrentChatTemplateScopeState_ACU({ chat, isolationKey: normalizedKey });
     }
     function clearLegacyHeaderGuideForIsolationKey_ACU({ chat = getChatArray_ACU(), isolationKey = getCurrentIsolationKey_ACU() } = {}) {
@@ -26658,7 +26778,7 @@ $CONTENT
         };
         if (!first)
             return result;
-        const hadScopedConfigField = Object.prototype.hasOwnProperty.call(first, CHAT_SCOPED_CONFIG_FIELD_ACU);
+        const hadScopedConfigField = !!getChatScopedConfigContainer_ACU(chat);
         const container = normalizeChatScopedConfigContainer_ACU(getChatScopedConfigContainer_ACU(chat));
         let scopedConfigChanged = false;
         if (clearCurrentOverride) {
@@ -26702,10 +26822,10 @@ $CONTENT
         }
         const hasScopedPayload = Object.keys(container).some(key => key !== 'version');
         if (scopedConfigChanged && hasScopedPayload) {
-            first[CHAT_SCOPED_CONFIG_FIELD_ACU] = container;
+            setChatScopedConfigContainer_ACU(chat, container);
         }
         else if (!hasScopedPayload && hadScopedConfigField) {
-            delete first[CHAT_SCOPED_CONFIG_FIELD_ACU];
+            setChatScopedConfigContainer_ACU(chat, null);
             result.changed = true;
         }
         if (clearGuide) {
