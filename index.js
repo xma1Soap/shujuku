@@ -3243,6 +3243,50 @@ $CONTENT
             ? chat[0]
             : null;
     }
+    function getActiveChatId_ACU() {
+        const api = SillyTavern_API_ACU;
+        try {
+            if (typeof api?.getCurrentChatId === 'function') {
+                const id = String(api.getCurrentChatId() ?? '').trim();
+                return id && id !== 'null' ? id : '';
+            }
+            if (api && Object.prototype.hasOwnProperty.call(api, 'chatId')) {
+                const id = String(api.chatId ?? '').trim();
+                return id && id !== 'null' ? id : '';
+            }
+        }
+        catch (_) {
+            return '';
+        }
+        return '';
+    }
+    function hasActiveChatContext_ACU(chat) {
+        if (!getChatFirstLayerMessageLocal_ACU(chat))
+            return false;
+        const api = SillyTavern_API_ACU;
+        if (api && (typeof api.getCurrentChatId === 'function' || Object.prototype.hasOwnProperty.call(api, 'chatId'))) {
+            return !!getActiveChatId_ACU();
+        }
+        return true;
+    }
+    function getChatMetadataOwnerField_ACU(field) {
+        return `${field}__chatId`;
+    }
+    function getChatMetadataOwner_ACU(field) {
+        const metadata = getChatMetadata_ACU();
+        return String(metadata?.[getChatMetadataOwnerField_ACU(field)] ?? '').trim();
+    }
+    function shouldUseChatMetadataContainer_ACU(field, metadataContainer, legacyContainer) {
+        if (!metadataContainer)
+            return false;
+        const activeChatId = getActiveChatId_ACU();
+        if (!activeChatId)
+            return true;
+        const owner = getChatMetadataOwner_ACU(field);
+        if (owner)
+            return owner === activeChatId;
+        return true;
+    }
     function cloneContainer_ACU(container) {
         return cloneScopedConfigData_ACU(container, {});
     }
@@ -3260,14 +3304,24 @@ $CONTENT
         const metadata = getChatMetadata_ACU();
         if (!metadata)
             return;
-        if (value && Object.keys(value).length > 0)
+        const ownerField = getChatMetadataOwnerField_ACU(field);
+        const activeChatId = getActiveChatId_ACU();
+        const ownerValue = value && Object.keys(value).length > 0 && activeChatId ? activeChatId : undefined;
+        if (value && Object.keys(value).length > 0) {
             metadata[field] = value;
-        else
+            if (ownerValue)
+                metadata[ownerField] = ownerValue;
+            else
+                delete metadata[ownerField];
+        }
+        else {
             delete metadata[field];
+            delete metadata[ownerField];
+        }
         try {
             const updater = SillyTavern_API_ACU?.updateChatMetadata;
             if (typeof updater === 'function')
-                updater({ [field]: value || undefined }, false);
+                updater({ [field]: value || undefined, [ownerField]: ownerValue }, false);
         }
         catch (_) { }
     }
@@ -3328,9 +3382,14 @@ $CONTENT
      * @returns 解析后的配置对象，或 null
      */
     function getChatScopedConfigContainer_ACU(chat) {
-        const metadataContainer = readContainer_ACU(getChatMetadata_ACU()?.[CHAT_SCOPED_CONFIG_FIELD_ACU]);
+        if (!hasActiveChatContext_ACU(chat))
+            return null;
+        const rawMetadataContainer = readContainer_ACU(getChatMetadata_ACU()?.[CHAT_SCOPED_CONFIG_FIELD_ACU]);
         const first = getChatFirstLayerMessageLocal_ACU(chat);
         const legacyContainer = first ? readContainer_ACU(first[CHAT_SCOPED_CONFIG_FIELD_ACU]) : null;
+        const metadataContainer = shouldUseChatMetadataContainer_ACU(CHAT_SCOPED_CONFIG_FIELD_ACU, rawMetadataContainer, legacyContainer)
+            ? rawMetadataContainer
+            : null;
         const merged = mergeLegacyScopedConfigIntoMetadata_ACU(metadataContainer, legacyContainer);
         if (merged.changed && merged.container)
             writeChatMetadataField_ACU(CHAT_SCOPED_CONFIG_FIELD_ACU, merged.container);
@@ -3358,19 +3417,26 @@ $CONTENT
      * @returns 解析后的 guide 对象，或 null
      */
     function getChatSheetGuideContainer_ACU(chat) {
-        const metadataContainer = readContainer_ACU(getChatMetadata_ACU()?.[CHAT_SHEET_GUIDE_FIELD_ACU]);
+        if (!hasActiveChatContext_ACU(chat))
+            return null;
+        const rawMetadataContainer = readContainer_ACU(getChatMetadata_ACU()?.[CHAT_SHEET_GUIDE_FIELD_ACU]);
         const first = getChatFirstLayerMessageLocal_ACU(chat);
         const legacyContainer = first ? readContainer_ACU(first[CHAT_SHEET_GUIDE_FIELD_ACU]) : null;
+        const metadataContainer = shouldUseChatMetadataContainer_ACU(CHAT_SHEET_GUIDE_FIELD_ACU, rawMetadataContainer, legacyContainer)
+            ? rawMetadataContainer
+            : null;
         const merged = mergeLegacyGuideIntoMetadata_ACU(metadataContainer, legacyContainer);
         if (merged.changed && merged.container)
             writeChatMetadataField_ACU(CHAT_SHEET_GUIDE_FIELD_ACU, merged.container);
         return merged.container;
     }
     function setChatScopedConfigContainer_ACU(chat, container) {
-        writeChatMetadataField_ACU(CHAT_SCOPED_CONFIG_FIELD_ACU, container);
+        if (!hasActiveChatContext_ACU(chat))
+            return;
         const first = getChatFirstLayerMessageLocal_ACU(chat);
         if (!first)
             return;
+        writeChatMetadataField_ACU(CHAT_SCOPED_CONFIG_FIELD_ACU, container);
         if (container && Object.keys(container).length > 0) {
             first[CHAT_SCOPED_CONFIG_FIELD_ACU] = container;
         }
@@ -3379,10 +3445,12 @@ $CONTENT
         }
     }
     function setChatSheetGuideContainer_ACU(chat, container) {
-        writeChatMetadataField_ACU(CHAT_SHEET_GUIDE_FIELD_ACU, container);
+        if (!hasActiveChatContext_ACU(chat))
+            return;
         const first = getChatFirstLayerMessageLocal_ACU(chat);
         if (!first)
             return;
+        writeChatMetadataField_ACU(CHAT_SHEET_GUIDE_FIELD_ACU, container);
         if (container && Object.keys(container).length > 0) {
             first[CHAT_SHEET_GUIDE_FIELD_ACU] = container;
         }
@@ -11069,7 +11137,7 @@ $CONTENT
         };
     }
     // ═══ 模板作用域持久化（纯数据操作） ═══
-    function persistTemplateScopeSelectionState_ACU(presetName, { source = 'ui', updateGlobal = false, save = true, persistChatScope = undefined, templateSource = TABLE_TEMPLATE_ACU, guideData = null, archivePreviousChatScope = false, scopeMode = undefined, registerChatPresetEntry = undefined } = {}) {
+    function persistTemplateScopeSelectionState_ACU(presetName, { source = 'ui', updateGlobal = false, save = true, persistChatScope = undefined, templateSource = null, guideData = null, archivePreviousChatScope = false, scopeMode = undefined, registerChatPresetEntry = undefined } = {}) {
         const _persistChatScope = persistChatScope ?? !updateGlobal;
         const _scopeMode = scopeMode ?? (_persistChatScope ? 'chat_override' : 'inherit_global');
         const _registerChatPresetEntry = registerChatPresetEntry ?? (!updateGlobal && !!_persistChatScope && normalizeTemplateScopeMode_ACU(_scopeMode) === 'chat_override');
@@ -11086,6 +11154,7 @@ $CONTENT
             const normalizedScopeMode = normalizeTemplateScopeMode_ACU(_scopeMode);
             let templateState = null;
             if (normalizedScopeMode === 'chat_override') {
+                const resolvedTemplateSource = templateSource || getGlobalTemplateSnapshotForCurrentProfile_ACU()?.templateStr || DEFAULT_TABLE_TEMPLATE_ACU;
                 templateState = buildChatTemplateScopeStateFromCurrent_ACU({
                     isolationKey: normalizedKey,
                     presetName: normalizedPresetName,
@@ -11093,7 +11162,7 @@ $CONTENT
                     originGlobalName: getCurrentTemplatePresetName_ACU(settings_ACU, { requireExisting: false }),
                     originGlobalRevision: 0,
                     updatedAt: Date.now(),
-                    templateSource,
+                    templateSource: resolvedTemplateSource,
                     guideData,
                 });
             }
@@ -11179,11 +11248,29 @@ $CONTENT
             templateObj: snapshot.templateObj,
         };
     }
-    async function applyTemplatePresetToCurrent_ACU(presetName, { source = 'ui', updateGlobal = true, save = true, persistChatScope = undefined } = {}) {
+    async function applyTemplatePresetToCurrent_ACU(presetName, { source = 'ui', updateGlobal = true, save = true, persistChatScope = undefined, chatSelectionSource = 'auto' } = {}) {
         const _persistChatScope = persistChatScope ?? !updateGlobal;
         const name = normalizeTemplatePresetSelectionValue_ACU(presetName);
         const isDefaultPreset = isDefaultTemplatePresetSelection_ACU(name);
         if (!updateGlobal) {
+            if (chatSelectionSource === 'global') {
+                if (!isDefaultPreset && !getTemplatePreset_ACU(name)?.templateStr)
+                    return false;
+                const linkedPresetName = persistTemplateScopeSelectionState_ACU(name, {
+                    source,
+                    updateGlobal: false,
+                    save,
+                    persistChatScope: true,
+                    scopeMode: 'preset_link',
+                    registerChatPresetEntry: false,
+                });
+                applyTemplateScopeForCurrentChat_ACU();
+                try {
+                    await refreshMergedDataAndNotify_ACU();
+                }
+                catch (e) { }
+                return { presetName: linkedPresetName, mode: 'preset_link', fromGlobalPreset: true, isDefault: isDefaultPreset };
+            }
             const activated = await activateChatTemplatePresetSelection_ACU(name, {
                 source,
                 save,
@@ -11244,8 +11331,9 @@ $CONTENT
                     logWarn_ACU('[模板预设] resolveTemplateData: 从预设加载模板失败:', e);
                 }
             }
-            // fallback: 全局快照
             if (!jsonData || typeof jsonData !== 'object') {
+                if (selectedPresetName)
+                    return null;
                 const globalSnapshot = getGlobalTemplateSnapshotForCurrentProfile_ACU();
                 if (globalSnapshot?.templateObj && typeof globalSnapshot.templateObj === 'object') {
                     jsonData = JSON.parse(JSON.stringify(globalSnapshot.templateObj));
@@ -11257,21 +11345,22 @@ $CONTENT
             // chat scope
             const chatScopeState = getCurrentChatTemplateScopeState_ACU() || migrateLegacyTemplateScopeForCurrentChat_ACU();
             const effectivePresetName = normalizeTemplatePresetSelectionValue_ACU(resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true }));
-            const chatSnapshot = chatScopeState?.mode === 'chat_override' && chatScopeState?.templateStr
-                ? sanitizeTemplateSnapshotForChat_ACU(chatScopeState.templateStr)
-                : (sanitizeTemplateSnapshotForChat_ACU(TABLE_TEMPLATE_ACU) || getGlobalTemplateSnapshotForCurrentProfile_ACU());
+            let chatSnapshot = null;
+            if (chatScopeState?.mode === 'chat_override' && chatScopeState?.templateStr) {
+                chatSnapshot = sanitizeTemplateSnapshotForChat_ACU(chatScopeState.templateStr);
+            }
+            else if (chatScopeState?.mode === 'preset_link') {
+                const linkedPresetName = normalizeTemplatePresetSelectionValue_ACU(chatScopeState.presetName || '');
+                chatSnapshot = linkedPresetName
+                    ? sanitizeTemplateSnapshotForChat_ACU(getTemplatePreset_ACU(linkedPresetName)?.templateStr || null)
+                    : getDefaultTemplateSnapshot_ACU();
+            }
+            else {
+                chatSnapshot = getGlobalTemplateSnapshotForCurrentProfile_ACU();
+            }
             if (chatSnapshot?.templateObj && typeof chatSnapshot.templateObj === 'object') {
                 jsonData = JSON.parse(JSON.stringify(chatSnapshot.templateObj));
                 fromPresetName = normalizeTemplatePresetSelectionValue_ACU(chatScopeState?.presetName || effectivePresetName);
-            }
-        }
-        // 最终 fallback
-        if (!jsonData || typeof jsonData !== 'object') {
-            const fallbackSnapshot = normalizedScope === 'chat'
-                ? sanitizeTemplateSnapshotForChat_ACU(TABLE_TEMPLATE_ACU)
-                : getGlobalTemplateSnapshotForCurrentProfile_ACU();
-            if (fallbackSnapshot?.templateObj && typeof fallbackSnapshot.templateObj === 'object') {
-                jsonData = JSON.parse(JSON.stringify(fallbackSnapshot.templateObj));
             }
         }
         if (!jsonData || typeof jsonData !== 'object') {
@@ -24167,6 +24256,7 @@ $CONTENT
         }
         let deletedCount = 0;
         const targetIdentity = settings_ACU.dataIsolationEnabled ? settings_ACU.dataIsolationCode : null;
+        const currentIsolationKey = getCurrentIsolationKey_ACU();
         // 计算AI消息索引列表（只计算AI楼层）
         const aiMessageIndices = chat
             .map((msg, index) => (!msg.is_user) ? index : -1)
@@ -24186,7 +24276,11 @@ $CONTENT
                 shouldDelete = true;
             }
             else {
-                if (settings_ACU.dataIsolationEnabled) {
+                const isolatedData = msg.TavernDB_ACU_IsolatedData;
+                if (isolatedData && typeof isolatedData === 'object' && !Array.isArray(isolatedData) && isolatedData[currentIsolationKey]) {
+                    shouldDelete = true;
+                }
+                else if (settings_ACU.dataIsolationEnabled) {
                     if (msg.TavernDB_ACU_Identity === targetIdentity) {
                         shouldDelete = true;
                     }
@@ -24225,7 +24319,6 @@ $CONTENT
                         modified = true;
                     }
                     else {
-                        const currentIsolationKey = getCurrentIsolationKey_ACU();
                         if (msg.TavernDB_ACU_IsolatedData[currentIsolationKey]) {
                             await deleteVectorIndexManifestFromTagData_ACU(msg.TavernDB_ACU_IsolatedData[currentIsolationKey]);
                             delete msg.TavernDB_ACU_IsolatedData[currentIsolationKey];
@@ -26024,10 +26117,6 @@ $CONTENT
                 return linkedGuideData;
             }
         }
-        const activeTemplateGuideData = buildGuideDataFromTemplateSource_ACU(TABLE_TEMPLATE_ACU);
-        if (activeTemplateGuideData) {
-            return activeTemplateGuideData;
-        }
         const globalSnapshot = getGlobalTemplateSnapshotForCurrentProfile_ACU();
         const globalGuideData = buildChatSheetGuideDataFromTemplateObj_ACU(globalSnapshot?.templateObj, { stripSeedRows: false });
         if (globalGuideData && Object.keys(globalGuideData).some(k => k.startsWith('sheet_'))) {
@@ -26102,10 +26191,16 @@ $CONTENT
     let _seedRowsTemplateCacheObj_ACU = null;
     function getTemplateObjForSeedRows_ACU() {
         try {
-            if (_seedRowsTemplateCacheStr_ACU === TABLE_TEMPLATE_ACU && _seedRowsTemplateCacheObj_ACU)
+            const snapshot = getGlobalTemplateSnapshotForCurrentProfile_ACU();
+            if (snapshot?.templateStr && _seedRowsTemplateCacheStr_ACU === snapshot.templateStr && _seedRowsTemplateCacheObj_ACU)
                 return _seedRowsTemplateCacheObj_ACU;
+            if (snapshot?.templateObj) {
+                _seedRowsTemplateCacheStr_ACU = snapshot.templateStr || '';
+                _seedRowsTemplateCacheObj_ACU = JSON.parse(JSON.stringify(snapshot.templateObj));
+                return _seedRowsTemplateCacheObj_ACU;
+            }
             const obj = parseTableTemplateJson_ACU({ stripSeedRows: false });
-            _seedRowsTemplateCacheStr_ACU = TABLE_TEMPLATE_ACU;
+            _seedRowsTemplateCacheStr_ACU = JSON.stringify(obj || {});
             _seedRowsTemplateCacheObj_ACU = obj;
             return obj;
         }
@@ -26775,8 +26870,13 @@ $CONTENT
         }
         return normalizedState;
     }
-    function buildChatTemplateScopeStateFromCurrent_ACU({ isolationKey = getCurrentIsolationKey_ACU(), presetName = '', source = 'ui', originGlobalName = '', originGlobalRevision = 0, updatedAt = Date.now(), templateSource = TABLE_TEMPLATE_ACU, guideData = null } = {}) {
+    function buildChatTemplateScopeStateFromCurrent_ACU(options = {}) {
+        const { isolationKey = getCurrentIsolationKey_ACU(), presetName = '', source = 'ui', originGlobalName = '', originGlobalRevision = 0, updatedAt = Date.now(), templateSource = null, guideData = null, } = options || {};
         const normalizedKey = normalizeTemplateScopeIsolationKey_ACU(isolationKey);
+        if (!Object.prototype.hasOwnProperty.call(options || {}, 'templateSource')) {
+            logWarn_ACU('[TemplateScope] buildChatTemplateScopeStateFromCurrent_ACU 缺少 templateSource，已拒绝隐式使用运行时模板。');
+            return null;
+        }
         const templateSnapshot = sanitizeTemplateSnapshotForChat_ACU(templateSource);
         if (!templateSnapshot?.templateStr)
             return null;
@@ -26985,7 +27085,7 @@ $CONTENT
         const code = normalizeIsolationCode_ACU(settings_ACU?.dataIsolationCode || '');
         const previousTemplate = TABLE_TEMPLATE_ACU;
         const savedTemplate = readProfileTemplateFromStorage_ACU(code);
-        let snapshot = sanitizeTemplateSnapshotForChat_ACU(savedTemplate || previousTemplate);
+        let snapshot = sanitizeTemplateSnapshotForChat_ACU(savedTemplate || DEFAULT_TABLE_TEMPLATE_ACU);
         if (snapshot?.templateStr) {
             return snapshot;
         }
@@ -27000,7 +27100,7 @@ $CONTENT
         finally {
             _set_TABLE_TEMPLATE_ACU(previousTemplate);
         }
-        return snapshot || sanitizeTemplateSnapshotForChat_ACU(previousTemplate);
+        return snapshot || sanitizeTemplateSnapshotForChat_ACU(DEFAULT_TABLE_TEMPLATE_ACU);
     }
 
     /**
@@ -55912,10 +56012,16 @@ $CONTENT
                     return { success: false, message: `导入失败: ${e.message}` };
                 }
             },
-            getTableTemplate: function () {
+            getTableTemplate: function (options = {}) {
                 try {
-                    if (TABLE_TEMPLATE_ACU) {
-                        return JSON.parse(TABLE_TEMPLATE_ACU);
+                    const scope = normalizeTemplateOperationScope_ACU(options?.scope || 'chat');
+                    const resolved = resolveTemplateForExport_ACU(scope, options?.presetName);
+                    if (resolved?.jsonData)
+                        return resolved.jsonData;
+                    if (scope !== 'global') {
+                        const fallbackGlobal = resolveTemplateForExport_ACU('global', options?.presetName);
+                        if (fallbackGlobal?.jsonData)
+                            return fallbackGlobal.jsonData;
                     }
                     return null;
                 }
@@ -56152,6 +56258,16 @@ $CONTENT
                     if (options.injectTemplate !== false) {
                         logDebug_ACU('[游戏初始化] 开始注入数据库模板...');
                         try {
+                            if (options.resetExistingTableData !== false) {
+                                await deleteLocalDataInChatCore_ACU('current');
+                                await clearCurrentChatTemplateSnapshots_ACU({
+                                    clearCurrentOverride: true,
+                                    clearArchives: true,
+                                    clearGuide: true,
+                                    clearLegacyGuide: true,
+                                    save: false,
+                                });
+                            }
                             let templateData;
                             if (options.templateData) {
                                 logDebug_ACU('[游戏初始化] 使用传入的模板数据');
@@ -83610,8 +83726,25 @@ Expected function or array of functions, received type ${typeof value}.`
         return { success: true, dataWasReset: true };
     }
 
-    function defaultPresetItem(label, meta) {
-        return { value: '', label, meta };
+    const CHAT_GLOBAL_PRESET_VALUE_PREFIX = 'global:';
+    const CHAT_SNAPSHOT_PRESET_VALUE_PREFIX = 'snapshot:';
+    function encodeChatPresetValue(kind, name) {
+        return `${kind === 'snapshot' ? CHAT_SNAPSHOT_PRESET_VALUE_PREFIX : CHAT_GLOBAL_PRESET_VALUE_PREFIX}${encodeURIComponent(name || '')}`;
+    }
+    function decodeChatPresetValue(value, chatEntries = []) {
+        const raw = String(value || '');
+        if (raw.startsWith(CHAT_SNAPSHOT_PRESET_VALUE_PREFIX)) {
+            return { kind: 'snapshot', name: normalizeTemplatePresetSelectionValue_ACU(decodeURIComponent(raw.slice(CHAT_SNAPSHOT_PRESET_VALUE_PREFIX.length))) };
+        }
+        if (raw.startsWith(CHAT_GLOBAL_PRESET_VALUE_PREFIX)) {
+            return { kind: 'global', name: normalizeTemplatePresetSelectionValue_ACU(decodeURIComponent(raw.slice(CHAT_GLOBAL_PRESET_VALUE_PREFIX.length))) };
+        }
+        const normalized = normalizeTemplatePresetSelectionValue_ACU(raw);
+        const hasLocalSnapshot = chatEntries.some(entry => normalizeTemplatePresetSelectionValue_ACU(entry?.presetName || '') === normalized);
+        return { kind: hasLocalSnapshot ? 'snapshot' : 'global', name: normalized };
+    }
+    function defaultPresetItem(label, meta, value = '') {
+        return { value, label, meta };
     }
     function countTemplateSheets(templateSource) {
         const templateObj = typeof templateSource === 'string'
@@ -83645,15 +83778,16 @@ Expected function or array of functions, received type ${typeof value}.`
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
     }
-    function resolveGuideDataForPresetSelection(name) {
-        const normalized = normalizeTemplatePresetSelectionValue_ACU(name);
-        const localEntry = listChatTemplatePresetEntries_ACU()
-            .find(entry => normalizeTemplatePresetSelectionValue_ACU(entry?.presetName || '') === normalized);
+    function resolveGuideDataForPresetSelection(selection) {
+        const normalized = normalizeTemplatePresetSelectionValue_ACU(selection.name);
+        const localEntry = selection.kind === 'snapshot'
+            ? listChatTemplatePresetEntries_ACU().find(entry => normalizeTemplatePresetSelectionValue_ACU(entry?.presetName || '') === normalized)
+            : null;
         if (localEntry?.guideData && typeof localEntry.guideData === 'object')
             return localEntry.guideData;
-        const snapshot = normalized
-            ? getTemplatePreset_ACU(normalized)?.templateStr
-            : getDefaultTemplateSnapshot_ACU()?.templateObj;
+        const snapshot = selection.kind === 'snapshot' && localEntry?.templateStr
+            ? localEntry.templateStr
+            : (normalized ? getTemplatePreset_ACU(normalized)?.templateStr : getDefaultTemplateSnapshot_ACU()?.templateObj);
         const templateObj = typeof snapshot === 'string'
             ? safeJsonParse_ACU(snapshot, null)
             : snapshot;
@@ -83667,45 +83801,60 @@ Expected function or array of functions, received type ${typeof value}.`
         const globalPresetNames = ref([]);
         const chatPresetEntries = ref([]);
         const selectedGlobalPreset = ref('');
-        const selectedChatPreset = ref('');
+        const selectedGlobalPresetValue = ref(encodeChatPresetValue('global', ''));
+        const selectedChatPreset = ref(encodeChatPresetValue('global', ''));
+        const selectedChatPresetLabel = ref('默认预设（全局）');
         const chatPresetItems = ref([]);
         const activeTemplateScope = ref('global');
         const isChatOverridden = computed(() => activeTemplateScope.value === 'chat');
-        function buildChatPresetItems(globalNames, chatEntries, currentGlobalPreset) {
-            const seen = new Set(['']);
-            const defaultSnapshot = currentGlobalPreset ? null : getDefaultTemplateSnapshot_ACU();
-            const currentGlobalTemplateSource = currentGlobalPreset
-                ? getTemplatePreset_ACU(currentGlobalPreset)?.templateStr
-                : (defaultSnapshot?.templateObj || defaultSnapshot?.templateStr);
-            const items = [defaultPresetItem('默认预设', formatSheetCountMeta(currentGlobalTemplateSource))];
+        function buildChatPresetItems(globalNames, chatEntries, _currentGlobalPreset) {
+            const seen = new Set();
+            const defaultSnapshot = getDefaultTemplateSnapshot_ACU();
+            const items = [defaultPresetItem('默认预设（全局）', formatSheetCountMeta(defaultSnapshot?.templateObj || defaultSnapshot?.templateStr), encodeChatPresetValue('global', ''))];
+            seen.add(encodeChatPresetValue('global', ''));
             for (const name of globalNames) {
                 const normalized = normalizeTemplatePresetSelectionValue_ACU(name);
-                if (!normalized || seen.has(normalized))
+                if (!normalized)
                     continue;
-                seen.add(normalized);
-                items.push({ value: normalized, label: normalized, meta: formatSheetCountMeta(getTemplatePreset_ACU(normalized)?.templateStr) });
+                const value = encodeChatPresetValue('global', normalized);
+                if (seen.has(value))
+                    continue;
+                seen.add(value);
+                items.push({ value, label: `${normalized}（全局预设）`, meta: formatSheetCountMeta(getTemplatePreset_ACU(normalized)?.templateStr) });
             }
             for (const entry of chatEntries) {
                 const normalized = normalizeTemplatePresetSelectionValue_ACU(entry?.presetName || '');
-                if (!normalized || seen.has(normalized))
+                const value = encodeChatPresetValue('snapshot', normalized);
+                if (seen.has(value))
                     continue;
-                seen.add(normalized);
-                items.push({ value: normalized, label: normalized, meta: formatSheetCountMeta(entry?.templateStr) });
+                seen.add(value);
+                items.push({ value, label: `${normalized || '默认预设'}（当前聊天快照）`, meta: formatSheetCountMeta(entry?.templateStr) });
             }
             return items;
+        }
+        function resolveSelectedChatPresetValue(activeMeta, currentGlobalPreset) {
+            const activeName = normalizeTemplatePresetSelectionValue_ACU(activeMeta.presetName || resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true }));
+            if (activeMeta.mode === 'chat_override')
+                return encodeChatPresetValue('snapshot', activeName);
+            if (activeMeta.mode === 'preset_link')
+                return encodeChatPresetValue('global', activeName);
+            return encodeChatPresetValue('global', currentGlobalPreset || '');
         }
         function refresh() {
             const nextGlobalNames = listTemplatePresetNames_ACU();
             const nextChatEntries = listChatTemplatePresetEntries_ACU();
             const nextSelectedGlobal = normalizeTemplatePresetSelectionValue_ACU(getCurrentTemplatePresetName_ACU(settings_ACU, { requireExisting: false }));
             const activeMeta = getActiveTemplatePresetMeta_ACU();
-            const nextSelectedChat = normalizeTemplatePresetSelectionValue_ACU(activeMeta.presetName || resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true }));
+            const nextItems = buildChatPresetItems(nextGlobalNames, nextChatEntries, nextSelectedGlobal);
+            const nextSelectedChat = resolveSelectedChatPresetValue(activeMeta, nextSelectedGlobal);
             globalPresetNames.value = nextGlobalNames;
             chatPresetEntries.value = nextChatEntries;
             selectedGlobalPreset.value = nextSelectedGlobal;
+            selectedGlobalPresetValue.value = encodeChatPresetValue('global', nextSelectedGlobal || '');
             selectedChatPreset.value = nextSelectedChat;
+            selectedChatPresetLabel.value = nextItems.find(item => item.value === nextSelectedChat)?.label || '默认预设（全局）';
             activeTemplateScope.value = activeMeta.scope === 'chat' ? 'chat' : 'global';
-            chatPresetItems.value = buildChatPresetItems(nextGlobalNames, nextChatEntries, nextSelectedGlobal);
+            chatPresetItems.value = nextItems;
         }
         async function run(action) {
             busy.value = true;
@@ -83725,7 +83874,8 @@ Expected function or array of functions, received type ${typeof value}.`
             }
         }
         async function selectGlobalPreset(name) {
-            const normalized = normalizeTemplatePresetSelectionValue_ACU(name);
+            const decoded = decodeChatPresetValue(name, chatPresetEntries.value);
+            const normalized = normalizeTemplatePresetSelectionValue_ACU(decoded.name);
             await run(async () => {
                 const result = await applyTemplatePresetToCurrent_ACU(normalized, {
                     source: 'v2_table_global_select',
@@ -83743,17 +83893,19 @@ Expected function or array of functions, received type ${typeof value}.`
             return recoveryGuard.success;
         }
         async function selectChatPreset(name) {
-            const normalized = normalizeTemplatePresetSelectionValue_ACU(name);
+            const selection = decodeChatPresetValue(name, chatPresetEntries.value);
+            const normalized = normalizeTemplatePresetSelectionValue_ACU(selection.name);
             await run(async () => {
-                const guideData = resolveGuideDataForPresetSelection(normalized);
+                const guideData = resolveGuideDataForPresetSelection(selection);
                 const canProceed = await ensureTemplateSwitchCanProceed(guideData);
                 if (!canProceed)
                     return;
                 const result = await applyTemplatePresetToCurrent_ACU(normalized, {
-                    source: 'v2_table_chat_select',
+                    source: selection.kind === 'snapshot' ? 'v2_table_chat_select_snapshot' : 'v2_table_chat_select_global',
                     updateGlobal: false,
                     save: true,
                     persistChatScope: true,
+                    chatSelectionSource: selection.kind,
                 });
                 if (!result)
                     throw new Error('当前聊天模板预设切换失败。');
@@ -83896,7 +84048,9 @@ Expected function or array of functions, received type ${typeof value}.`
             });
         }
         function exportTemplate(scope) {
-            const selectedPresetName = scope === 'global' ? selectedGlobalPreset.value : selectedChatPreset.value;
+            const selectedPresetName = scope === 'global'
+                ? selectedGlobalPreset.value
+                : decodeChatPresetValue(selectedChatPreset.value, chatPresetEntries.value).name;
             const resolved = resolveTemplateForExport_ACU(scope, selectedPresetName);
             if (!resolved) {
                 const text = '无法解析当前模板。';
@@ -83918,7 +84072,9 @@ Expected function or array of functions, received type ${typeof value}.`
             busy,
             message,
             selectedGlobalPreset,
+            selectedGlobalPresetValue,
             selectedChatPreset,
+            selectedChatPresetLabel,
             isChatOverridden,
             chatPresetItems,
             refresh,
@@ -83972,8 +84128,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-table-template-panel__status-line[data-v-f19bcd27] {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-table-template-panel__preset-row[data-v-f19bcd27] {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) repeat(2, max-content);\n  gap: 6px;\n  align-items: stretch;\n  min-width: 0;\n}\n.acu-table-template-panel__action-area[data-v-f19bcd27] {\n  margin-top: 10px;\n}\n.acu-table-template-panel__visualizer-button[data-v-f19bcd27] {\n  width: 100%;\n}\n\n", "src/presentation-v2/components/TableTemplatePresetPanel.vue#style-0-f19bcd27");
-    var TableTemplatePresetPanel_vue_vue_type_style_index_0_scoped_f19bcd27_lang = null;
+    injectSfcStyle("\n.acu-table-template-panel__status-line[data-v-6a829872] {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-table-template-panel__preset-row[data-v-6a829872] {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) repeat(2, max-content);\n  gap: 6px;\n  align-items: stretch;\n  min-width: 0;\n}\n.acu-table-template-panel__action-area[data-v-6a829872] {\n  margin-top: 10px;\n}\n.acu-table-template-panel__visualizer-button[data-v-6a829872] {\n  width: 100%;\n}\n\n", "src/presentation-v2/components/TableTemplatePresetPanel.vue#style-0-6a829872");
+    var TableTemplatePresetPanel_vue_vue_type_style_index_0_scoped_6a829872_lang = null;
 
     const _hoisted_1$B = { class: "acu-text__value" };
     const _hoisted_2$u = { class: "acu-text__value" };
@@ -84020,7 +84176,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					createBaseVNode(
     						"strong",
     						_hoisted_1$B,
-    						toDisplayString($setup.templates.selectedChatPreset.value || "默认预设"),
+    						toDisplayString($setup.templates.selectedChatPresetLabel.value),
     						1
     						/* TEXT */
     					),
@@ -84072,7 +84228,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				createVNode($setup["AcuPresetDropdown"], {
     					items: $setup.templates.chatPresetItems.value,
     					"model-value": $setup.templates.selectedChatPreset.value,
-    					"default-name": $setup.templates.selectedGlobalPreset.value,
+    					"default-name": $setup.templates.selectedGlobalPresetValue.value,
     					disabled: $setup.templates.busy.value || $setup.management.busy.value,
     					placeholder: "默认预设",
     					"onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => $setup.templates.selectChatPreset($event)),
@@ -84154,7 +84310,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	}, 8, ["title", "description"]);
     }
-    var TableTemplatePresetPanel = /* @__PURE__ */ _export_sfc(_sfc_main$B, [["render", _sfc_render$B], ["__scopeId", "data-v-f19bcd27"]]);
+    var TableTemplatePresetPanel = /* @__PURE__ */ _export_sfc(_sfc_main$B, [["render", _sfc_render$B], ["__scopeId", "data-v-6a829872"]]);
 
     const basicConfigCopy = {
         nav: {
@@ -95717,20 +95873,11 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     }
     async function saveGlobalTemplateSnapshot(orderedData, interactions) {
-        let templateObj = null;
-        try {
-            templateObj = JSON.parse(TABLE_TEMPLATE_ACU);
-        }
-        catch {
-            templateObj = parseTableTemplateJson_ACU({ stripSeedRows: false });
-        }
-        if (!templateObj || typeof templateObj !== 'object')
-            templateObj = {};
-        const tempGlobalCfg = getGlobalInjectionConfigFromData_ACU(orderedData, {
-            ensureWriteBack: true,
+        const templateObj = {};
+        Object.keys(orderedData || {}).forEach(key => {
+            if (!key.startsWith('sheet_'))
+                templateObj[key] = cloneData$1(orderedData[key]);
         });
-        const prevGlobalCfgStr = safeJsonStringify_ACU(templateObj?.mate?.globalInjectionConfig || {}, '{}');
-        const nextGlobalCfgStr = safeJsonStringify_ACU(tempGlobalCfg || {}, '{}');
         if (!templateObj.mate || typeof templateObj.mate !== 'object') {
             templateObj.mate = { type: 'chatSheets', version: 1 };
         }
@@ -95738,57 +95885,27 @@ Expected function or array of functions, received type ${typeof value}.`
             templateObj.mate.type = 'chatSheets';
         if (!Number.isFinite(templateObj.mate.version))
             templateObj.mate.version = 1;
-        templateObj.mate.globalInjectionConfig = tempGlobalCfg;
-        let templateChanged = prevGlobalCfgStr !== nextGlobalCfgStr;
-        Object.keys(orderedData || {}).forEach(key => {
-            if (!key.startsWith('sheet_'))
-                return;
-            const currentTable = orderedData[key];
-            if (!templateObj[key]) {
-                const newTemplateTable = cloneData$1(currentTable);
-                if (Array.isArray(newTemplateTable.content) && newTemplateTable.content.length > 1) {
-                    newTemplateTable.content = [newTemplateTable.content[0]];
-                }
-                newTemplateTable[TABLE_ORDER_FIELD_ACU] = currentTable[TABLE_ORDER_FIELD_ACU];
-                templateObj[key] = newTemplateTable;
-                templateChanged = true;
-                return;
-            }
-            const templateTable = templateObj[key];
-            if (templateTable.name !== currentTable.name) {
-                templateTable.name = currentTable.name;
-                templateChanged = true;
-            }
-            for (const field of ['sourceData', 'updateConfig', 'exportConfig']) {
-                if (JSON.stringify(templateTable[field]) !== JSON.stringify(currentTable[field])) {
-                    templateTable[field] = currentTable[field] ? cloneData$1(currentTable[field]) : {};
-                    templateChanged = true;
-                }
-            }
-            if (templateTable[TABLE_ORDER_FIELD_ACU] !== currentTable[TABLE_ORDER_FIELD_ACU]) {
-                templateTable[TABLE_ORDER_FIELD_ACU] = currentTable[TABLE_ORDER_FIELD_ACU];
-                templateChanged = true;
-            }
-            const currentHeaders = Array.isArray(currentTable.content?.[0]) ? currentTable.content[0] : null;
-            if (currentHeaders && JSON.stringify(templateTable.content?.[0]) !== JSON.stringify(currentHeaders)) {
-                if (!Array.isArray(templateTable.content))
-                    templateTable.content = [];
-                templateTable.content[0] = cloneData$1(currentHeaders);
-                templateChanged = true;
-            }
+        templateObj.mate.globalInjectionConfig = getGlobalInjectionConfigFromData_ACU(orderedData, {
+            ensureWriteBack: true,
         });
-        Object.keys(templateObj).forEach(key => {
-            if (key.startsWith('sheet_') && !orderedData?.[key]) {
-                delete templateObj[key];
-                templateChanged = true;
+        const orderedSheetKeys = getSortedSheetKeys_ACU(orderedData, { ignoreChatGuide: true });
+        orderedSheetKeys.forEach(key => {
+            const currentTable = orderedData?.[key];
+            if (!currentTable || typeof currentTable !== 'object')
+                return;
+            const templateTable = cloneData$1(currentTable);
+            if (Array.isArray(templateTable.content) && templateTable.content.length > 1) {
+                templateTable.content = [templateTable.content[0]];
             }
+            templateTable[TABLE_ORDER_FIELD_ACU] = currentTable[TABLE_ORDER_FIELD_ACU];
+            templateObj[key] = templateTable;
         });
         ensureSheetOrderNumbers_ACU(templateObj, {
-            baseOrderKeys: getSortedSheetKeys_ACU(orderedData, { ignoreChatGuide: true }),
+            baseOrderKeys: orderedSheetKeys,
             forceRebuild: false,
         });
-        if (!templateChanged)
-            return { status: 'unchanged' };
+        const currentGlobalSnapshot = getGlobalTemplateSnapshotForCurrentProfile_ACU();
+        const currentGlobalStr = currentGlobalSnapshot?.templateStr || '';
         const isolationKey = getCurrentIsolationKey_ACU();
         const activePresetName = normalizeTemplatePresetSelectionValue_ACU(resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true, isolationKey }));
         let finalGlobalPresetName = activePresetName;
@@ -95813,6 +95930,8 @@ Expected function or array of functions, received type ${typeof value}.`
         if (!preparedSnapshot?.templateStr) {
             throw new Error('无法生成模板快照。');
         }
+        if (currentGlobalStr && preparedSnapshot.templateStr === currentGlobalStr)
+            return { status: 'unchanged' };
         const presetSaved = upsertTemplatePreset_ACU(finalGlobalPresetName, preparedSnapshot.templateStr);
         if (!presetSaved)
             throw new Error('无法写入全局预设库。');
