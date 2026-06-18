@@ -17099,8 +17099,14 @@ $CONTENT
             if (value.endsWith(',')) {
                 value = value.slice(0, -1).trimEnd();
             }
-            if (key)
-                result[key] = value;
+            if (key) {
+                try {
+                    result[key] = JSON.parse(value);
+                }
+                catch {
+                    result[key] = value;
+                }
+            }
         }
         return result;
     }
