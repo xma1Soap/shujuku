@@ -1322,6 +1322,94 @@ DELETE FROM table_name WHERE row_id = 2;
         }
         return { ...segment };
     });
+    const DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU = DEFAULT_CHAR_CARD_PROMPT_ACU.map(segment => {
+        if (segment.mainSlot === 'A' || segment.isMain) {
+            return {
+                ...segment,
+                content: `你是【填表AI】，负责根据用户提供的资料对表格数据执行增删改操作。
+
+## 核心任务
+依据三类资料来源执行表格编辑：
+- <背景设定>：故事及人物设定
+- <正文数据>：上轮发生的故事
+- <当前表格数据>：之前的数据作为填表基础
+
+## 输出格式
+
+回复内容必须是一个合法 JSON 对象，且只能包含这个 JSON 对象本身。
+
+本次必须使用：
+{"format":"table_edit_ops_v1","ops":[]}
+
+ops 只允许 insert、update、delete 三种操作。
+
+insert 格式：
+{"op":"insert","sheet":"表格名","row":{"字段名":"字段值"}}
+
+update 格式：
+{"op":"update","sheet":"表格名","where":{"字段名":"定位值"},"set":{"字段名":"新值"}}
+
+delete 格式：
+{"op":"delete","sheet":"表格名","where":{"字段名":"定位值"}}
+
+## 关键规则
+1. 必须逐表阅读每个表格的 note 部分，严格遵守其中的约束。
+2. note 的约束优先级最高，高于通用填表经验。
+3. sheet 必须从当前表格数据列出的表格名中复制。
+4. 字段名必须从对应表格的 Columns 中复制。
+5. update/delete 必须使用 where 定位唯一行。
+6. 如果没有任何修改，输出 {"format":"table_edit_ops_v1","ops":[]}。
+7. 针对纪要表的额外规则：如果当前表格数据里存在纪要表，那么本轮就必须插入一条新的总结记录。
+
+现在开始按此 JSON 格式执行填表任务。`
+            };
+        }
+        if (segment.isMain2)
+            return { ...segment };
+        if (segment.role === 'assistant' && typeof segment.content === 'string' && segment.content.includes('<thought>')) {
+            return { ...segment, content: '收到，我将只返回指定 JSON 对象。' };
+        }
+        return { ...segment };
+    });
+    const DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU = DEFAULT_CHAR_CARD_PROMPT_SQL_ACU.map(segment => {
+        if (segment.mainSlot === 'A' || segment.isMain) {
+            return {
+                ...segment,
+                content: `你是【填表AI】，负责根据用户提供的资料对 SQLite 表格数据执行增删改操作。
+
+## 核心任务
+依据三类资料来源执行表格编辑：
+- <背景设定>：故事及人物设定
+- <正文数据>：上轮发生的故事
+- <当前表格数据>：之前的数据作为填表基础，包含每张表的 DDL、Note、Trigger 和当前数据
+
+## 输出格式
+
+回复内容必须是一个合法 JSON 对象，且只能包含这个 JSON 对象本身。
+
+本次必须使用：
+{"format":"table_edit_sql_v1","sql":""}
+
+## SQL 规则
+1. sql 必须是字符串。
+2. sql 是按上文 DDL 写出的完整 SQL 脚本，可包含多条 INSERT、UPDATE 或 DELETE。
+3. UPDATE 和 DELETE 必须带 WHERE。
+4. UPDATE 和 DELETE 的 WHERE 优先使用 DDL 中的 UNIQUE 约束、业务唯一字段或 Note/Trigger 指定的业务键定位。
+5. 每条 SQL 必须以分号结尾。
+6. 表名和字段名必须从上文 DDL 中逐字复制。
+7. 当前数据表头优先使用 DDL 列名；不要把中文注释、中文剧情描述或中文显示名当作 SQL 标识符。
+8. 如果没有任何修改，输出 {"format":"table_edit_sql_v1","sql":""}。
+
+现在开始按此 JSON 格式执行填表任务。`
+            };
+        }
+        if (segment.isMain2)
+            return { ...segment };
+        if (segment.role === 'assistant' && typeof segment.content === 'string' && segment.content.includes('<thought>')) {
+            return { ...segment, content: '收到，我将只返回指定 JSON 对象。' };
+        }
+        return { ...segment };
+    });
     const ORIGINAL_DEFAULT_TABLE_TEMPLATE_ACU = buildOriginalDefaultTableTemplateString_ACU();
     const DEFAULT_TABLE_TEMPLATE_ACU = buildDefaultTableTemplateString_ACU();
     let TABLE_TEMPLATE_ACU = DEFAULT_TABLE_TEMPLATE_ACU;
@@ -4168,12 +4256,15 @@ $CONTENT
         apiPresets: [],
         tableApiPreset: '',
         plotApiPreset: '',
+        strictJsonTableFillEnabled: false,
         // [剧情推进] 按剧情任务ID保存的任务级 API 预设覆盖（key=taskId, value=presetName）
         // 不保存入聊天记录或剧情推进预设，只写进插件全局设置。
         plotTaskApiPresetOverridesById: {},
         // [新增] 按表格名称保存的表级 API 预设覆盖（key=标准化表名, value=presetName）
         tableApiPresetOverridesByName: {},
         charCardPrompt: DEFAULT_CHAR_CARD_PROMPT_ACU,
+        strictJsonCharCardPrompt: DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU,
+        strictJsonSqlCharCardPrompt: DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU,
         autoUpdateThreshold: DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
         autoUpdateFrequency: DEFAULT_AUTO_UPDATE_FREQUENCY_ACU,
         autoUpdateTokenThreshold: DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU,
@@ -10308,6 +10399,309 @@ $CONTENT
         return { success: true, result, recoveredKeys, error: null };
     }
 
+    function jsonClone(value) {
+        return JSON.parse(JSON.stringify(value));
+    }
+    function stripCodeFence(text) {
+        const trimmed = String(text || '').trim();
+        const fence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+        return fence ? fence[1].trim() : trimmed;
+    }
+    function tryParseJsonObject(text) {
+        const cleaned = stripCodeFence(text);
+        try {
+            return JSON.parse(cleaned);
+        }
+        catch { }
+        const start = cleaned.indexOf('{');
+        const end = cleaned.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            return JSON.parse(cleaned.slice(start, end + 1));
+        }
+        throw new Error('回复不是合法 JSON 对象。');
+    }
+    function isPlainObject$2(value) {
+        return !!value && typeof value === 'object' && !Array.isArray(value);
+    }
+    function buildSheetLookup(tableData, targetSheetKeys) {
+        const sortedKeys = getSortedSheetKeys_ACU(tableData || {});
+        const allowed = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0 ? new Set(targetSheetKeys) : null;
+        const entries = sortedKeys
+            .filter((sheetKey) => !allowed || allowed.has(sheetKey))
+            .map((sheetKey, index) => ({ sheetKey, index: sortedKeys.indexOf(sheetKey), table: tableData[sheetKey] }))
+            .filter((entry) => entry.table && Array.isArray(entry.table.content));
+        return { sortedKeys, entries };
+    }
+    function resolveSheet(sheet, tableData, targetSheetKeys) {
+        const name = String(sheet ?? '').trim();
+        if (!name)
+            throw new Error('sheet 不能为空。');
+        const { entries } = buildSheetLookup(tableData, targetSheetKeys);
+        const matches = entries.filter((entry) => entry.sheetKey === name || String(entry.table?.name || '').trim() === name || String(entry.table?.uid || '').trim() === name);
+        if (matches.length === 0)
+            throw new Error(`sheet 未匹配到可编辑表格：${name}`);
+        if (matches.length > 1)
+            throw new Error(`sheet 匹配到多个表格：${name}`);
+        return matches[0];
+    }
+    function getHeaderMap(table) {
+        const header = Array.isArray(table?.content?.[0]) ? table.content[0] : [];
+        const map = new Map();
+        header.slice(1).forEach((field, idx) => {
+            const key = String(field ?? '').trim();
+            if (key)
+                map.set(key, idx);
+        });
+        return map;
+    }
+    function normalizeValueObject(value, headerMap, label) {
+        if (!isPlainObject$2(value))
+            throw new Error(`${label} 必须是对象。`);
+        const result = {};
+        for (const [field, raw] of Object.entries(value)) {
+            if (!headerMap.has(field))
+                throw new Error(`字段名不存在：${field}`);
+            if (raw === undefined || raw === null)
+                result[field] = '';
+            else
+                result[field] = String(raw);
+        }
+        return result;
+    }
+    function findUniqueRowIndex(table, where, headerMap) {
+        const whereKeys = Object.keys(where);
+        if (whereKeys.length === 0)
+            throw new Error('where 必须至少包含一个字段。');
+        const rows = Array.isArray(table.content) ? table.content.slice(1) : [];
+        const matches = [];
+        rows.forEach((row, rowIndex) => {
+            const ok = whereKeys.every((field) => {
+                const col = headerMap.get(field);
+                return col !== undefined && String(row[col + 1] ?? '') === where[field];
+            });
+            if (ok)
+                matches.push(rowIndex);
+        });
+        if (matches.length === 0)
+            throw new Error('where 未匹配到任何行。');
+        if (matches.length > 1)
+            throw new Error('where 匹配到多行，请增加定位条件。');
+        return matches[0];
+    }
+    function valuesToColumnObject(values, headerMap) {
+        const out = {};
+        for (const [field, value] of Object.entries(values)) {
+            const idx = headerMap.get(field);
+            if (idx === undefined)
+                throw new Error(`字段名不存在：${field}`);
+            out[String(idx)] = value;
+        }
+        return out;
+    }
+    function assertOnlyKeys(value, allowed, label) {
+        const allowedSet = new Set(allowed);
+        for (const key of Object.keys(value)) {
+            if (!allowedSet.has(key))
+                throw new Error(`${label} 包含不允许的字段：${key}`);
+        }
+    }
+    function convertStrictOpsToTableEdit_ACU(ops, tableData, targetSheetKeys) {
+        if (!Array.isArray(ops))
+            throw new Error('ops 必须是数组。');
+        const lines = [];
+        const modifiedKeys = new Set();
+        for (const op of ops) {
+            if (!isPlainObject$2(op))
+                throw new Error('ops 中的每一项都必须是对象。');
+            const kind = String(op.op || '').trim();
+            const entry = resolveSheet(op.sheet, tableData, targetSheetKeys);
+            const headerMap = getHeaderMap(entry.table);
+            if (kind === 'insert') {
+                assertOnlyKeys(op, ['op', 'sheet', 'row'], 'insert');
+                const row = normalizeValueObject(op.row, headerMap, 'row');
+                lines.push(`insertRow(${entry.index}, ${JSON.stringify(valuesToColumnObject(row, headerMap))})`);
+                modifiedKeys.add(entry.sheetKey);
+            }
+            else if (kind === 'update') {
+                assertOnlyKeys(op, ['op', 'sheet', 'where', 'set'], 'update');
+                const where = normalizeValueObject(op.where, headerMap, 'where');
+                const set = normalizeValueObject(op.set, headerMap, 'set');
+                if (Object.keys(set).length === 0)
+                    throw new Error('set 必须至少包含一个字段。');
+                const rowIndex = findUniqueRowIndex(entry.table, where, headerMap);
+                lines.push(`updateRow(${entry.index}, ${rowIndex}, ${JSON.stringify(valuesToColumnObject(set, headerMap))})`);
+                modifiedKeys.add(entry.sheetKey);
+            }
+            else if (kind === 'delete') {
+                assertOnlyKeys(op, ['op', 'sheet', 'where'], 'delete');
+                const where = normalizeValueObject(op.where, headerMap, 'where');
+                const rowIndex = findUniqueRowIndex(entry.table, where, headerMap);
+                lines.push(`deleteRow(${entry.index}, ${rowIndex})`);
+                modifiedKeys.add(entry.sheetKey);
+            }
+            else {
+                throw new Error(`不支持的 op：${kind}`);
+            }
+        }
+        const tableEditText = lines.join('\n');
+        return {
+            tableEditText,
+            normalizedResponse: `<tableEdit>\n${tableEditText}\n</tableEdit>`,
+            modifiedKeys: Array.from(modifiedKeys),
+        };
+    }
+    function extractStrictJsonTableFillResponse_ACU(text, options = {}) {
+        try {
+            const parsed = tryParseJsonObject(text);
+            if (!isPlainObject$2(parsed))
+                throw new Error('回复 JSON 根节点必须是对象。');
+            const expected = options.sqlite ? 'table_edit_sql_v1' : 'table_edit_ops_v1';
+            if (parsed.format !== expected)
+                throw new Error(`format 必须是 ${expected}。`);
+            if (expected === 'table_edit_sql_v1') {
+                if (typeof parsed.sql !== 'string')
+                    throw new Error('sql 必须是字符串。');
+                const tableEditText = parsed.sql.trim();
+                return { ok: true, format: expected, rawJson: parsed, tableEditText, normalizedResponse: `<tableEdit>\n${tableEditText}\n</tableEdit>` };
+            }
+            const converted = convertStrictOpsToTableEdit_ACU(parsed.ops, options.tableData, options.targetSheetKeys);
+            return { ok: true, format: expected, rawJson: parsed, ...converted };
+        }
+        catch (error) {
+            const message = error?.message || '严格 JSON 填表响应解析失败。';
+            return { ok: false, error: message, retryHint: message };
+        }
+    }
+    function buildStrictJsonTableFillResponseFormat_ACU(sqlite) {
+        if (sqlite) {
+            return {
+                type: 'json_schema',
+                json_schema: {
+                    name: 'table_edit_sql_response',
+                    strict: true,
+                    schema: {
+                        type: 'object',
+                        additionalProperties: false,
+                        required: ['format', 'sql'],
+                        properties: {
+                            format: { type: 'string', enum: ['table_edit_sql_v1'] },
+                            sql: { type: 'string' },
+                        },
+                    },
+                },
+            };
+        }
+        return buildWideNativeResponseFormat();
+    }
+    function buildWideNativeResponseFormat() {
+        return {
+            type: 'json_schema',
+            json_schema: {
+                name: 'table_edit_ops_response',
+                strict: true,
+                schema: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['format', 'ops'],
+                    properties: {
+                        format: { type: 'string', enum: ['table_edit_ops_v1'] },
+                        ops: {
+                            type: 'array',
+                            items: {
+                                type: 'object',
+                                additionalProperties: true,
+                                required: ['op', 'sheet'],
+                                properties: {
+                                    op: { type: 'string', enum: ['insert', 'update', 'delete'] },
+                                    sheet: { type: 'string' },
+                                    row: { type: 'object', additionalProperties: { type: 'string' } },
+                                    where: { type: 'object', additionalProperties: { type: 'string' } },
+                                    set: { type: 'object', additionalProperties: { type: 'string' } },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        };
+    }
+    function fieldObjectSchema(fields, minProperties = 0) {
+        const properties = {};
+        fields.forEach((field) => { properties[field] = { type: 'string' }; });
+        return { type: 'object', additionalProperties: false, minProperties, properties };
+    }
+    function shouldUseWideStrictJsonSchema_ACU(stats) {
+        return stats.sheetCount > 8
+            || stats.maxFieldCount > 32
+            || stats.totalFieldCount > 120
+            || stats.oneOfBranchCount > 48
+            || stats.responseFormatBytes > 24 * 1024;
+    }
+    function buildStrictJsonTableFillResponseFormatForData_ACU(sqlite, tableData, targetSheetKeys) {
+        if (sqlite)
+            return { responseFormat: buildStrictJsonTableFillResponseFormat_ACU(true), stats: null, wide: false };
+        const { entries } = buildSheetLookup(tableData || {}, targetSheetKeys);
+        const branches = [];
+        let totalFieldCount = 0;
+        let maxFieldCount = 0;
+        entries.forEach((entry) => {
+            const fields = Array.from(getHeaderMap(entry.table).keys());
+            totalFieldCount += fields.length;
+            maxFieldCount = Math.max(maxFieldCount, fields.length);
+            const sheetConst = String(entry.table?.name || entry.sheetKey);
+            branches.push({
+                type: 'object',
+                additionalProperties: false,
+                required: ['op', 'sheet', 'row'],
+                properties: { op: { type: 'string', enum: ['insert'] }, sheet: { type: 'string', enum: [sheetConst] }, row: fieldObjectSchema(fields, 1) },
+            });
+            branches.push({
+                type: 'object',
+                additionalProperties: false,
+                required: ['op', 'sheet', 'where', 'set'],
+                properties: { op: { type: 'string', enum: ['update'] }, sheet: { type: 'string', enum: [sheetConst] }, where: fieldObjectSchema(fields, 1), set: fieldObjectSchema(fields, 1) },
+            });
+            branches.push({
+                type: 'object',
+                additionalProperties: false,
+                required: ['op', 'sheet', 'where'],
+                properties: { op: { type: 'string', enum: ['delete'] }, sheet: { type: 'string', enum: [sheetConst] }, where: fieldObjectSchema(fields, 1) },
+            });
+        });
+        if (branches.length === 0)
+            return { responseFormat: buildWideNativeResponseFormat(), stats: { sheetCount: 0, maxFieldCount: 0, totalFieldCount: 0, oneOfBranchCount: 0, responseFormatBytes: 0 }, wide: true };
+        const strong = {
+            type: 'json_schema',
+            json_schema: {
+                name: 'table_edit_ops_response',
+                strict: true,
+                schema: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['format', 'ops'],
+                    properties: {
+                        format: { type: 'string', enum: ['table_edit_ops_v1'] },
+                        ops: { type: 'array', items: { oneOf: branches } },
+                    },
+                },
+            },
+        };
+        const stats = {
+            sheetCount: entries.length,
+            maxFieldCount,
+            totalFieldCount,
+            oneOfBranchCount: branches.length,
+            responseFormatBytes: JSON.stringify(strong).length,
+        };
+        if (shouldUseWideStrictJsonSchema_ACU(stats))
+            return { responseFormat: buildWideNativeResponseFormat(), stats, wide: true };
+        return { responseFormat: strong, stats, wide: false };
+    }
+    function cloneStrictPromptSegments_ACU(value, fallback) {
+        const source = Array.isArray(value) && value.length > 0 ? value : fallback;
+        return jsonClone(source || []);
+    }
+
     /**
      * service/ai/prompt-builder/table-edit-parser.ts
      * AI 响应表格编辑解析 — <tableEdit> 块提取 + 指令解析 + 编辑应用
@@ -10411,7 +10805,20 @@ $CONTENT
             logError_ACU('Cannot apply edits, tableData is not loaded.');
             return false;
         }
-        const extracted = extractTableEditInner_ACU(aiResponse, { allowNoTableEditTags: true });
+        let responseForParsing = aiResponse;
+        if (settings_ACU?.strictJsonTableFillEnabled === true) {
+            const strictExtraction = extractStrictJsonTableFillResponse_ACU(aiResponse, {
+                sqlite: isSqliteMode(),
+                tableData,
+            });
+            if (!strictExtraction.ok) {
+                const error = strictExtraction.retryHint || strictExtraction.error || '严格 JSON 填表响应格式无效';
+                logWarn_ACU(error);
+                return { success: false, modifiedKeys: [], appliedEdits: 0, error };
+            }
+            responseForParsing = strictExtraction.normalizedResponse || aiResponse;
+        }
+        const extracted = extractTableEditInner_ACU(responseForParsing, { allowNoTableEditTags: true });
         if (!extracted || !extracted.inner) {
             logWarn_ACU('No recognizable table edit block found (missing <tableEdit> boundary and/or incomplete <!-- --> wrapper).');
             return true;
@@ -16094,7 +16501,12 @@ $CONTENT
         const manualExtraHintText = manualExtraHint_ACU$1 || '';
         // SQLite 模式下追加 SQL 编辑格式兜底说明（Q17 确认：$0 自带格式说明）
         if (isSqliteMode() && tableDataText) {
-            tableDataText += `\n-- [SQL 编辑格式说明]\n-- 请在 <tableEdit> 标签内使用标准 SQL 语句（INSERT INTO / UPDATE / DELETE FROM）\n-- 所有 UPDATE 和 DELETE 必须带 WHERE 条件，优先参考各表 Note 中的 SQL 示例和 DDL 中的 UNIQUE 约束选择定位方式\n-- INSERT 时 row_id 值为当前表最大 row_id + 1\n-- 支持表达式更新（如 SET quantity = quantity + 1）、条件批量更新、CASE 条件更新等标准 SQL 写法\n-- 每条语句以分号结尾，多条语句用换行分隔\n`;
+            if (settings_ACU.strictJsonTableFillEnabled === true) {
+                tableDataText += `\n-- [SQL 编辑格式说明]\n-- 请在响应 JSON 的 sql 字符串中使用标准 SQL 语句（INSERT INTO / UPDATE / DELETE FROM）\n-- 所有 UPDATE 和 DELETE 必须带 WHERE 条件，优先参考各表 Note 中的 SQL 示例和 DDL 中的 UNIQUE 约束选择定位方式\n-- INSERT 时 row_id 值为当前表最大 row_id + 1\n-- 支持表达式更新（如 SET quantity = quantity + 1）、条件批量更新、CASE 条件更新等标准 SQL 写法\n-- 每条语句以分号结尾，多条语句用换行分隔\n`;
+            }
+            else {
+                tableDataText += `\n-- [SQL 编辑格式说明]\n-- 请在 <tableEdit> 标签内使用标准 SQL 语句（INSERT INTO / UPDATE / DELETE FROM）\n-- 所有 UPDATE 和 DELETE 必须带 WHERE 条件，优先参考各表 Note 中的 SQL 示例和 DDL 中的 UNIQUE 约束选择定位方式\n-- INSERT 时 row_id 值为当前表最大 row_id + 1\n-- 支持表达式更新（如 SET quantity = quantity + 1）、条件批量更新、CASE 条件更新等标准 SQL 写法\n-- 每条语句以分号结尾，多条语句用换行分隔\n`;
+            }
         }
         return { tableDataText, messagesText, worldbookContent, manualExtraHint: manualExtraHintText };
     }
@@ -16287,6 +16699,28 @@ $CONTENT
             return 'user';
         return 'user';
     }
+    const STRICT_JSON_PROMPT_LEGACY_TOKEN_DENYLIST_ACU = [
+        '<tableEdit>',
+        '</tableEdit>',
+        'insertRow',
+        'updateRow',
+        'deleteRow',
+        'tableId',
+        'rowIndex',
+    ];
+    function warnIfStrictJsonPromptPolluted_ACU(messages) {
+        const hits = new Set();
+        messages.forEach((message) => {
+            const content = String(message?.content || '');
+            STRICT_JSON_PROMPT_LEGACY_TOKEN_DENYLIST_ACU.forEach((token) => {
+                if (content.includes(token))
+                    hits.add(token);
+            });
+        });
+        if (hits.size > 0) {
+            logWarn_ACU(`[严格JSON填表] strict prompt 中检测到 legacy 协议关键词污染：${Array.from(hits).join(', ')}`);
+        }
+    }
     async function callCustomOpenAI_ACU(dynamicContent, abortController = null, options = null) {
         const localAbortController = abortController || new AbortController();
         _set_currentAbortController_ACU$1(localAbortController);
@@ -16302,7 +16736,13 @@ $CONTENT
         const effectiveApiConfig = apiPresetConfig.apiConfig;
         const effectiveTavernProfile = apiPresetConfig.tavernProfile;
         const messages = [];
-        const charCardPromptSetting = settings_ACU.charCardPrompt;
+        const strictJsonFillEnabled = settings_ACU.strictJsonTableFillEnabled === true;
+        const sqliteMode = isSqliteMode();
+        const charCardPromptSetting = strictJsonFillEnabled
+            ? (sqliteMode
+                ? cloneStrictPromptSegments_ACU(settings_ACU.strictJsonSqlCharCardPrompt, DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU)
+                : cloneStrictPromptSegments_ACU(settings_ACU.strictJsonCharCardPrompt, DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU))
+            : settings_ACU.charCardPrompt;
         let promptSegments = [];
         if (Array.isArray(charCardPromptSetting)) {
             promptSegments = charCardPromptSetting;
@@ -16369,6 +16809,9 @@ $CONTENT
                 finalContent = parseIfBlocksInContent_ACU(finalContent, templateContext, 0);
             }
             messages.push({ role: normalizeRoleForApi_ACU(segment.role), content: finalContent });
+        }
+        if (strictJsonFillEnabled) {
+            warnIfStrictJsonPromptPolluted_ACU(messages);
         }
         logDebug_ACU('Final messages array being sent to API:', messages);
         logDebug_ACU(`使用API预设: ${effectiveTableApiPreset || '当前配置'}, 模式: ${effectiveApiMode}`);
@@ -28492,6 +28935,7 @@ $CONTENT
             apiPresets: [],
             tableApiPreset: '',
             plotApiPreset: '',
+            strictJsonTableFillEnabled: false,
             // [剧情推进] 按剧情任务ID保存的任务级 API 预设覆盖（key=taskId, value=presetName）
             // 不保存入聊天记录或剧情推进预设，只写进插件全局设置。
             plotTaskApiPresetOverridesById: {},
@@ -28499,6 +28943,8 @@ $CONTENT
             // 不保存入模板，只写进数据库插件设置；同名表跨模板复用
             tableApiPresetOverridesByName: {},
             charCardPrompt: DEFAULT_CHAR_CARD_PROMPT_ACU,
+            strictJsonCharCardPrompt: DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU,
+            strictJsonSqlCharCardPrompt: DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU,
             autoUpdateThreshold: DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
             autoUpdateFrequency: DEFAULT_AUTO_UPDATE_FREQUENCY_ACU,
             autoUpdateTokenThreshold: DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU,
@@ -31715,6 +32161,18 @@ $CONTENT
     /**
      * presentation/triggers/settings-ui-sync/settings-ui-config.ts
      */
+    function getCurrentPromptSettingKey_ACU(mode = isSqliteMode() ? 'sqlite' : 'native') {
+        if (settings_ACU.strictJsonTableFillEnabled === true) {
+            return mode === 'sqlite' ? 'strictJsonSqlCharCardPrompt' : 'strictJsonCharCardPrompt';
+        }
+        return 'charCardPrompt';
+    }
+    function getDefaultPromptForMode_ACU(mode) {
+        if (settings_ACU.strictJsonTableFillEnabled === true) {
+            return mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU : DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU;
+        }
+        return mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU;
+    }
     function saveCustomCharCardPrompt_ACU() {
         if (!$popupInstance_ACU || !$charCardPromptSegmentsContainer_ACU) {
             logError_ACU('保存更新预设失败：UI元素未初始化。');
@@ -31746,13 +32204,14 @@ $CONTENT
         }
         catch (e) { }
         // 保存为JSON数组格式
-        settings_ACU.charCardPrompt = newPromptSegments;
+        settings_ACU[getCurrentPromptSettingKey_ACU()] = newPromptSegments;
         saveSettingsAndNotify_ACU();
         showToastr_ACU('success', '更新预设已保存！');
         loadSettingsAndRefreshUI_ACU(); // This will re-render from the saved data.
     }
     function resetDefaultCharCardPrompt_ACU() {
-        settings_ACU.charCardPrompt = isSqliteMode() ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU;
+        const mode = isSqliteMode() ? 'sqlite' : 'native';
+        settings_ACU[getCurrentPromptSettingKey_ACU(mode)] = getDefaultPromptForMode_ACU(mode);
         saveSettingsAndNotify_ACU();
         showToastr_ACU('info', '更新预设已恢复为默认值！');
         // loadSettings will trigger renderPromptSegments_ACU which correctly handles the string default
@@ -31764,7 +32223,7 @@ $CONTENT
      * 用于"模式切换后恢复目标模式默认提示词"场景——此时当前模式可能已完成切换。
      */
     function applyModeDefaultCharCardPrompt_ACU(mode) {
-        settings_ACU.charCardPrompt = mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU;
+        settings_ACU[getCurrentPromptSettingKey_ACU(mode)] = getDefaultPromptForMode_ACU(mode);
         saveSettingsAndNotify_ACU();
         loadSettingsAndRefreshUI_ACU();
     }
@@ -34344,7 +34803,11 @@ $CONTENT
                 dynamicContent.tableDataText += `${UNIFIED_GROUP_ERROR_MARKER_ACU}[统一提交失败，请修正后重新输出]\n错误信息: ${feedback.lastUnifiedError}`;
             }
             try {
-                const aiResponse = await callCustomOpenAI_ACU(dynamicContent, abortController, job.requestOptions);
+                const aiResponse = await callCustomOpenAI_ACU(dynamicContent, abortController, {
+                    ...(job.requestOptions || {}),
+                    tableData: job.baseSnapshot,
+                    targetSheetKeys: job.targetSheetKeys,
+                });
                 if (abortController.signal.aborted || wasStoppedByUser_ACU$1) {
                     return { job, success: false, attempt, aborted: true };
                 }
@@ -34352,11 +34815,27 @@ $CONTENT
                 if (aiResponse && minReplyLength > 0 && aiResponse.length < minReplyLength) {
                     throw new Error(`AI回复过短 (${aiResponse.length} 字符)，低于阈值 (${minReplyLength} 字符)`);
                 }
-                if (!aiResponse || !aiResponse.includes('<tableEdit>') || !aiResponse.includes('</tableEdit>')) {
-                    throw new Error('AI响应中未找到完整有效的 <tableEdit> 标签');
+                let normalizedAiResponse = aiResponse;
+                let tableEditText = '';
+                if (settings_ACU.strictJsonTableFillEnabled === true) {
+                    const extracted = extractStrictJsonTableFillResponse_ACU(aiResponse, {
+                        sqlite: isSqliteMode(),
+                        tableData: job.baseSnapshot,
+                        targetSheetKeys: job.targetSheetKeys,
+                    });
+                    if (!extracted.ok) {
+                        throw new Error(extracted.retryHint || extracted.error || '严格 JSON 填表响应格式无效');
+                    }
+                    normalizedAiResponse = extracted.normalizedResponse || aiResponse;
+                    tableEditText = (extracted.tableEditText || '').trim();
                 }
-                const tableEditText = (aiResponse.match(/<tableEdit>([\s\S]*?)<\/tableEdit>/i)?.[1] || '').trim();
-                return { job, success: true, attempt, aiResponse, tableEditText };
+                else {
+                    if (!aiResponse || !aiResponse.includes('<tableEdit>') || !aiResponse.includes('</tableEdit>')) {
+                        throw new Error('AI响应中未找到完整有效的 <tableEdit> 标签');
+                    }
+                    tableEditText = (aiResponse.match(/<tableEdit>([\s\S]*?)<\/tableEdit>/i)?.[1] || '').trim();
+                }
+                return { job, success: true, attempt, aiResponse: normalizedAiResponse, tableEditText };
             }
             catch (error) {
                 lastErrorMessage = error?.message || '未知错误';
@@ -37353,8 +37832,12 @@ $CONTENT
         }
         if (typeof updateApiStatusDisplay_ACU === 'function')
             updateApiStatusDisplay_ACU();
-        if ($charCardPromptSegmentsContainer_ACU)
-            renderPromptSegments_ACU(s.charCardPrompt);
+        if ($charCardPromptSegmentsContainer_ACU) {
+            const promptForCurrentMode = s.strictJsonTableFillEnabled === true
+                ? (s.storageMode === 'sqlite' ? s.strictJsonSqlCharCardPrompt : s.strictJsonCharCardPrompt)
+                : s.charCardPrompt;
+            renderPromptSegments_ACU(promptForCurrentMode || s.charCardPrompt);
+        }
         if ($autoUpdateThresholdInput_ACU)
             $autoUpdateThresholdInput_ACU.val(s.autoUpdateThreshold);
         if ($autoUpdateFrequencyInput_ACU)
@@ -43323,6 +43806,22 @@ $CONTENT
     // ═══════════════════════════════════════════════════════════════════════════════
     // --- [Legacy] 旧版"单份设置/单份模板"存储键（仅用于迁移；新版本不再直接读写它们） ---
 
+    async function validateSqliteTemplateDataStrict_ACU(tableData) {
+        const engine = new SqliteEngine();
+        const syncBridge = new SyncBridge(engine);
+        try {
+            await engine.init();
+            syncBridge.loadFromTableData(tableData, { strict: true });
+            return { success: true };
+        }
+        catch (error) {
+            return { success: false, error: error?.message || String(error) };
+        }
+        finally {
+            engine.dispose();
+        }
+    }
+
     /**
      * presentation/pages/visualizer-main-save.ts
      * 可视化编辑器保存变更
@@ -43417,19 +43916,10 @@ $CONTENT
         }
         if (!isSqliteMode())
             return { success: true, data: candidate.data };
-        const engine = new SqliteEngine();
-        const syncBridge = new SyncBridge(engine);
-        try {
-            await engine.init();
-            syncBridge.loadFromTableData(candidate.data, { strict: true });
-            return { success: true, data: candidate.data };
-        }
-        catch (error) {
-            return { success: false, error: error?.message || String(error) };
-        }
-        finally {
-            engine.dispose();
-        }
+        const validation = await validateSqliteTemplateDataStrict_ACU(candidate.data);
+        if (!validation.success)
+            return { success: false, error: validation.error };
+        return { success: true, data: candidate.data };
     }
     function buildTemplateObjectFromVisualizerData_ACU(templateData, orderedKeys) {
         let templateObj = null;
@@ -78177,7 +78667,7 @@ Expected function or array of functions, received type ${typeof value}.`
     	key: 2,
     	class: "fa-solid fa-check acu-preset-dd__check"
     };
-    const _hoisted_9$d = {
+    const _hoisted_9$e = {
     	key: 0,
     	class: "acu-preset-dd__empty"
     };
@@ -78248,7 +78738,7 @@ Expected function or array of functions, received type ${typeof value}.`
     			/* KEYED_FRAGMENT */
     		)), !$props.items.length ? (openBlock(), createElementBlock(
     			"li",
-    			_hoisted_9$d,
+    			_hoisted_9$e,
     			toDisplayString($props.emptyText),
     			1
     			/* TEXT */
@@ -78638,7 +79128,7 @@ Expected function or array of functions, received type ${typeof value}.`
     	key: 1,
     	class: "acu-api-config-panel__editor-section"
     };
-    const _hoisted_9$c = { class: "acu-api-config-panel__actions" };
+    const _hoisted_9$d = { class: "acu-api-config-panel__actions" };
     function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createBlock($setup["AcuPanel"], {
     		title: $setup.apiCopy.panels.preset.title,
@@ -78869,7 +79359,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						)]),
     						_: 1
     					})) : createCommentVNode("v-if", true),
-    					createBaseVNode("div", _hoisted_9$c, [createVNode($setup["AcuButton"], {
+    					createBaseVNode("div", _hoisted_9$d, [createVNode($setup["AcuButton"], {
     						disabled: !$setup.activeDraftDirty,
     						onClick: $setup.syncActiveDraft
     					}, {
@@ -79762,10 +80252,29 @@ Expected function or array of functions, received type ${typeof value}.`
         }));
     }
     function currentDefaultPromptSegments() {
+        if (settings_ACU.strictJsonTableFillEnabled === true) {
+            const defaults = getCurrentStorageMode() === "sqlite"
+                ? DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU
+                : DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU;
+            return normalizePromptSegments(defaults);
+        }
         const defaults = getCurrentStorageMode() === "sqlite"
             ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU
             : DEFAULT_CHAR_CARD_PROMPT_ACU;
         return normalizePromptSegments(defaults);
+    }
+    function currentPromptSettingKey() {
+        if (settings_ACU.strictJsonTableFillEnabled === true) {
+            return getCurrentStorageMode() === "sqlite"
+                ? "strictJsonSqlCharCardPrompt"
+                : "strictJsonCharCardPrompt";
+        }
+        return "charCardPrompt";
+    }
+    function currentPromptSource() {
+        const key = currentPromptSettingKey();
+        const value = settings_ACU[key];
+        return Array.isArray(value) && value.length > 0 ? value : currentDefaultPromptSegments();
     }
     function promptFingerprint$2(segments) {
         return JSON.stringify(preparePromptForSave(segments));
@@ -79775,6 +80284,7 @@ Expected function or array of functions, received type ${typeof value}.`
         const values = ref({ ...FALLBACKS });
         const tableApiPreset = ref(String(settings_ACU.tableApiPreset || ""));
         const tableEditLastPairOnly = ref(settings_ACU.tableEditLastPairOnly !== false);
+        const strictJsonTableFillEnabled = ref(settings_ACU.strictJsonTableFillEnabled === true);
         const extractRules = ref([]);
         const excludeRules = ref([]);
         const promptSegments = ref([]);
@@ -79798,9 +80308,10 @@ Expected function or array of functions, received type ${typeof value}.`
             values.value = nextValues;
             tableApiPreset.value = String(settings_ACU.tableApiPreset || "");
             tableEditLastPairOnly.value = settings_ACU.tableEditLastPairOnly !== false;
+            strictJsonTableFillEnabled.value = settings_ACU.strictJsonTableFillEnabled === true;
             extractRules.value = normalizeRules(settings_ACU.tableContextExtractRules, settings_ACU.tableContextExtractTags || "", "extract");
             excludeRules.value = normalizeRules(settings_ACU.tableContextExcludeRules, settings_ACU.tableContextExcludeTags || "", "exclude");
-            promptSegments.value = normalizePromptSegments(settings_ACU.charCardPrompt);
+            promptSegments.value = normalizePromptSegments(currentPromptSource());
             promptDirty.value = false;
         }
         function setTableApiPreset(value) {
@@ -79830,6 +80341,14 @@ Expected function or array of functions, received type ${typeof value}.`
         function setTableEditLastPairOnly(value) {
             tableEditLastPairOnly.value = !!value;
             settings_ACU.tableEditLastPairOnly = tableEditLastPairOnly.value;
+            saveSettings_ACU();
+            message.value = null;
+        }
+        function setStrictJsonTableFillEnabled(value) {
+            strictJsonTableFillEnabled.value = !!value;
+            settings_ACU.strictJsonTableFillEnabled = strictJsonTableFillEnabled.value;
+            promptSegments.value = normalizePromptSegments(currentPromptSource());
+            promptDirty.value = false;
             saveSettings_ACU();
             message.value = null;
         }
@@ -79907,7 +80426,7 @@ Expected function or array of functions, received type ${typeof value}.`
         }
         function savePrompt() {
             const prepared = preparePromptForSave(promptSegments.value);
-            settings_ACU.charCardPrompt = clone$3(prepared);
+            settings_ACU[currentPromptSettingKey()] = clone$3(prepared);
             saveSettings_ACU();
             promptSegments.value = prepared;
             promptDirty.value = false;
@@ -79969,6 +80488,7 @@ Expected function or array of functions, received type ${typeof value}.`
             numberFields,
             tableApiPreset,
             tableEditLastPairOnly,
+            strictJsonTableFillEnabled,
             extractRules,
             excludeRules,
             promptSegments,
@@ -79980,6 +80500,7 @@ Expected function or array of functions, received type ${typeof value}.`
             setNumber,
             setNumbers,
             setTableEditLastPairOnly,
+            setStrictJsonTableFillEnabled,
             setExtractRules,
             setExcludeRules,
             addPromptSegment,
@@ -82032,7 +82553,7 @@ Expected function or array of functions, received type ${typeof value}.`
     	key: 0,
     	class: "acu-v2-plot-tasks__disabled-label"
     };
-    const _hoisted_9$b = {
+    const _hoisted_9$c = {
     	key: 0,
     	class: "acu-v2-plot-tasks__empty"
     };
@@ -82112,7 +82633,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		}),
     		128
     		/* KEYED_FRAGMENT */
-    	)), !$props.tasks.length ? (openBlock(), createElementBlock("div", _hoisted_9$b, "暂无任务，点击右上 + 新增。")) : createCommentVNode("v-if", true)])]);
+    	)), !$props.tasks.length ? (openBlock(), createElementBlock("div", _hoisted_9$c, "暂无任务，点击右上 + 新增。")) : createCommentVNode("v-if", true)])]);
     }
     var PlotTaskList = /* @__PURE__ */ _export_sfc(_sfc_main$F, [["render", _sfc_render$F], ["__scopeId", "data-v-7a4b4a71"]]);
 
@@ -84657,8 +85178,8 @@ Expected function or array of functions, received type ${typeof value}.`
     };
     const _hoisted_7$d = { class: "acu-dashboard-storage-mode__body" };
     const _hoisted_8$b = { class: "acu-dashboard-storage-mode__card-head" };
-    const _hoisted_9$a = { class: "acu-dashboard-storage-mode__name" };
-    const _hoisted_10$a = { class: "acu-dashboard-storage-mode__badge" };
+    const _hoisted_9$b = { class: "acu-dashboard-storage-mode__name" };
+    const _hoisted_10$b = { class: "acu-dashboard-storage-mode__badge" };
     const _hoisted_11$a = { class: "acu-dashboard-storage-mode__desc" };
     function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock("section", {
@@ -84708,13 +85229,13 @@ Expected function or array of functions, received type ${typeof value}.`
     						/* CLASS */
     					)]), createBaseVNode("span", _hoisted_7$d, [createBaseVNode("span", _hoisted_8$b, [createBaseVNode(
     						"span",
-    						_hoisted_9$a,
+    						_hoisted_9$b,
     						toDisplayString(option.label),
     						1
     						/* TEXT */
     					), createBaseVNode(
     						"span",
-    						_hoisted_10$a,
+    						_hoisted_10$b,
     						toDisplayString(option.badge),
     						1
     						/* TEXT */
@@ -85603,6 +86124,8 @@ Expected function or array of functions, received type ${typeof value}.`
             settings_ACU.charCardPrompt = clone$2(mode === "sqlite"
                 ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU
                 : DEFAULT_CHAR_CARD_PROMPT_ACU);
+            settings_ACU.strictJsonCharCardPrompt = clone$2(DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU);
+            settings_ACU.strictJsonSqlCharCardPrompt = clone$2(DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU);
             saveSettings_ACU();
             try {
                 await switchStorageMode(mode);
@@ -85854,6 +86377,14 @@ Expected function or array of functions, received type ${typeof value}.`
     }
     var DashboardPage = /* @__PURE__ */ _export_sfc(_sfc_main$x, [["render", _sfc_render$x], ["__scopeId", "data-v-35bbca43"]]);
 
+    function useFormFillCheckpointStatus(refreshTick, settingsFingerprint) {
+        return computed(() => {
+            void refreshTick.value;
+            void settingsFingerprint.value;
+            return collectCheckpointGenerationStatusV2_ACU(getChatArray_ACU(), getCurrentIsolationKey_ACU(), currentJsonTableData_ACU || null);
+        });
+    }
+
     const UNLOCK_CLICK_COUNT_ACU = 5;
     const UNLOCK_CLICK_INTERVAL_MS_ACU = 2000;
     var _sfc_main$w = /*@__PURE__*/ defineComponent({
@@ -85874,11 +86405,7 @@ Expected function or array of functions, received type ${typeof value}.`
             const lastDescriptionClickAt = ref(0);
             const checkpointFields = computed(() => settings.numberFields.value.filter((field) => checkpointFieldKeys.has(field.key)));
             const checkpointSettingsFingerprint = computed(() => checkpointFields.value.map((field) => `${field.key}:${field.value}`).join("|"));
-            const status = computed(() => {
-                void refreshTick.value;
-                void checkpointSettingsFingerprint.value;
-                return collectCheckpointGenerationStatusV2_ACU(getChatArray_ACU(), getCurrentIsolationKey_ACU(), currentJsonTableData_ACU || null);
-            });
+            const status = useFormFillCheckpointStatus(refreshTick, checkpointSettingsFingerprint);
             const currentCheckpointLabel = computed(() => status.value.latestCheckpointAiFloor
                 ? `AI 第 ${status.value.latestCheckpointAiFloor} 层`
                 : "当前隔离标签暂无 full checkpoint");
@@ -85923,8 +86450,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-form-fill-checkpoint-panel__status-grid[data-v-b9089874] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-form-fill-checkpoint-panel__status-item[data-v-b9089874] {\n  min-width: 0;\n  padding: 10px;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n  border: 1px solid var(--acu-border-2);\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-form-fill-checkpoint-panel__status-item span[data-v-b9089874] {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-form-fill-checkpoint-panel__status-item strong[data-v-b9089874] {\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  font-variant-numeric: tabular-nums;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-form-fill-checkpoint-panel__next-kind[data-v-b9089874] {\n  color: var(--acu-accent);\n}\n.acu-form-fill-checkpoint-panel__next-kind--full[data-v-b9089874] {\n  color: var(--acu-warning);\n}\n.acu-form-fill-checkpoint-panel__settings[data-v-b9089874] {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-form-fill-checkpoint-panel__section-title[data-v-b9089874] {\n  margin: 0;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.4;\n  color: var(--acu-text-1);\n}\n.acu-form-fill-checkpoint-panel__number-grid[data-v-b9089874] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n@media (max-width: 860px) {\n.acu-form-fill-checkpoint-panel__status-grid[data-v-b9089874],\n  .acu-form-fill-checkpoint-panel__number-grid[data-v-b9089874] {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/components/FormFillCheckpointSettingsPanel.vue#style-0-b9089874");
-    var FormFillCheckpointSettingsPanel_vue_vue_type_style_index_0_scoped_b9089874_lang = null;
+    injectSfcStyle("\n.acu-form-fill-checkpoint-panel__status-grid[data-v-e8561dab] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-form-fill-checkpoint-panel__status-item[data-v-e8561dab] {\n  min-width: 0;\n  padding: 10px;\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n  border: 1px solid var(--acu-border-2);\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-form-fill-checkpoint-panel__status-item span[data-v-e8561dab] {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-form-fill-checkpoint-panel__status-item strong[data-v-e8561dab] {\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body, 12px);\n  font-variant-numeric: tabular-nums;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.acu-form-fill-checkpoint-panel__next-kind[data-v-e8561dab] {\n  color: var(--acu-accent);\n}\n.acu-form-fill-checkpoint-panel__next-kind--full[data-v-e8561dab] {\n  color: var(--acu-warning);\n}\n.acu-form-fill-checkpoint-panel__settings[data-v-e8561dab] {\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-form-fill-checkpoint-panel__section-title[data-v-e8561dab] {\n  margin: 0;\n  font-size: var(--acu-font-size-body, 12px);\n  line-height: 1.4;\n  color: var(--acu-text-1);\n}\n.acu-form-fill-checkpoint-panel__number-grid[data-v-e8561dab] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n@media (max-width: 860px) {\n.acu-form-fill-checkpoint-panel__status-grid[data-v-e8561dab],\n  .acu-form-fill-checkpoint-panel__number-grid[data-v-e8561dab] {\n    grid-template-columns: 1fr;\n}\n}\n", "src/presentation-v2/components/FormFillCheckpointSettingsPanel.vue#style-0-e8561dab");
+    var FormFillCheckpointSettingsPanel_vue_vue_type_style_index_0_scoped_e8561dab_lang = null;
 
     const _hoisted_1$w = { class: "acu-form-fill-checkpoint-panel__status-grid" };
     const _hoisted_2$q = { class: "acu-form-fill-checkpoint-panel__status-item" };
@@ -86048,7 +86575,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	}, 8, ["title", "description"]);
     }
-    var FormFillCheckpointSettingsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$w, [["render", _sfc_render$w], ["__scopeId", "data-v-b9089874"]]);
+    var FormFillCheckpointSettingsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$w, [["render", _sfc_render$w], ["__scopeId", "data-v-e8561dab"]]);
 
     var _sfc_main$v = /*@__PURE__*/ defineComponent({
         __name: 'TableSelector',
@@ -86553,8 +87080,8 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_6$c = { class: "acu-v2-form-fill-page__status-table" };
     const _hoisted_7$a = { key: 0 };
     const _hoisted_8$a = { key: 1 };
-    const _hoisted_9$9 = { class: "acu-v2-form-fill-page__manual-number-grid" };
-    const _hoisted_10$9 = { class: "acu-v2-form-fill-page__manual-extra" };
+    const _hoisted_9$a = { class: "acu-v2-form-fill-page__manual-number-grid" };
+    const _hoisted_10$a = { class: "acu-v2-form-fill-page__manual-extra" };
     const _hoisted_11$9 = { class: "acu-v2-form-fill-page__actions" };
     function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock("section", _hoisted_1$u, [createVNode($setup["AcuMobilePanelNav"], { items: $setup.panelNavItems }), createVNode($setup["AcuPanelGrid"], { class: "acu-v2-form-fill-page__grid" }, {
@@ -86734,7 +87261,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				description: $setup.formFillCopy.panels.manual.description
     			}, {
     				default: withCtx(() => [
-    					createBaseVNode("div", _hoisted_9$9, [createVNode($setup["AcuFormRow"], {
+    					createBaseVNode("div", _hoisted_9$a, [createVNode($setup["AcuFormRow"], {
     						label: "手动处理最近 N 层",
     						hint: "从可用 AI 回复中取最近 N 层执行手动填表。"
     					}, {
@@ -86782,7 +87309,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						"onSelectAll",
     						"onSelectNone"
     					]),
-    					createBaseVNode("div", _hoisted_10$9, [createVNode($setup["AcuFormRow"], {
+    					createBaseVNode("div", _hoisted_10$a, [createVNode($setup["AcuFormRow"], {
     						label: "本次填表附加要求",
     						hint: "留空时不会给本次手动填表追加额外要求。"
     					}, {
@@ -87947,8 +88474,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-table-page[data-v-d3b7d177] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-table-page__col[data-v-d3b7d177] {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n  min-width: 0;\n}\n.acu-v2-table-page__filter[data-v-d3b7d177] {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-v2-table-page__toggle-row[data-v-d3b7d177] {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-v2-table-page__toggle-head[data-v-d3b7d177] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n}\n.acu-v2-table-page__toggle-label[data-v-d3b7d177] {\n  min-width: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n  line-height: 1.35;\n}\n.acu-v2-table-page__toggle-desc[data-v-d3b7d177] {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-v2-table-page__actions[data-v-d3b7d177] {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-table-page__status-line[data-v-d3b7d177] {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  color: var(--acu-text-3);\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-wrap: wrap;\n}\n.acu-v2-table-page__status-line strong[data-v-d3b7d177] {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n.acu-v2-table-page__preset-row[data-v-d3b7d177] {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\n  gap: 6px;\n  align-items: stretch;\n  min-width: 0;\n}\n.acu-v2-table-page__badge[data-v-d3b7d177] {\n  display: inline-flex;\n  align-items: center;\n  padding: 2px 8px;\n  border-radius: var(--acu-radius-sm);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 500;\n}\n.acu-v2-table-page__badge--inherit[data-v-d3b7d177] {\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  color: var(--acu-text-2);\n}\n.acu-v2-table-page__badge--override[data-v-d3b7d177] {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-v2-table-page__hint[data-v-d3b7d177] {\n  margin: 0;\n  font-size: var(--acu-font-size-body, 12px);\n  color: var(--acu-text-3);\n}\n.acu-v2-table-page__hint strong[data-v-d3b7d177] {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n@media (max-width: 860px) {\n.acu-v2-table-page[data-v-d3b7d177] {\n    padding: 14px;\n}\n}\n", "src/presentation-v2/pages/TablePage.vue#style-0-d3b7d177");
-    var TablePage_vue_vue_type_style_index_0_scoped_d3b7d177_lang = null;
+    injectSfcStyle("\n.acu-v2-table-page[data-v-76e05f4b] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-table-page__col[data-v-76e05f4b] {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n  min-width: 0;\n}\n.acu-v2-table-page__filter[data-v-76e05f4b] {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-v2-table-page__toggle-row[data-v-76e05f4b] {\n  display: flex;\n  flex-direction: column;\n  gap: 4px;\n}\n.acu-v2-table-page__toggle-head[data-v-76e05f4b] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 12px;\n}\n.acu-v2-table-page__toggle-label[data-v-76e05f4b] {\n  min-width: 0;\n  color: var(--acu-text-1);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  font-weight: 500;\n  line-height: 1.35;\n}\n.acu-v2-table-page__toggle-desc[data-v-76e05f4b] {\n  margin: 0;\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-caption, 11px);\n  line-height: 1.5;\n}\n.acu-v2-table-page__actions[data-v-76e05f4b] {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n  padding-top: 12px;\n  margin-top: 4px;\n}\n.acu-v2-table-page__status-line[data-v-76e05f4b] {\n  margin: 0 0 10px;\n  font-size: var(--acu-font-size-body, 12px);\n  color: var(--acu-text-3);\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex-wrap: wrap;\n}\n.acu-v2-table-page__status-line strong[data-v-76e05f4b] {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n.acu-v2-table-page__preset-row[data-v-76e05f4b] {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\n  gap: 6px;\n  align-items: stretch;\n  min-width: 0;\n}\n.acu-v2-table-page__badge[data-v-76e05f4b] {\n  display: inline-flex;\n  align-items: center;\n  padding: 2px 8px;\n  border-radius: var(--acu-radius-sm);\n  font-size: var(--acu-font-size-caption, 11px);\n  font-weight: 500;\n}\n.acu-v2-table-page__badge--inherit[data-v-76e05f4b] {\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\n  color: var(--acu-text-2);\n}\n.acu-v2-table-page__badge--override[data-v-76e05f4b] {\n  background: var(--acu-accent);\n  color: var(--acu-on-accent);\n}\n.acu-v2-table-page__hint[data-v-76e05f4b] {\n  margin: 0;\n  font-size: var(--acu-font-size-body, 12px);\n  color: var(--acu-text-3);\n}\n.acu-v2-table-page__hint strong[data-v-76e05f4b] {\n  color: var(--acu-text-1);\n  font-weight: 500;\n}\n@media (max-width: 860px) {\n.acu-v2-table-page[data-v-76e05f4b] {\n    padding: 14px;\n}\n}\n", "src/presentation-v2/pages/TablePage.vue#style-0-76e05f4b");
+    var TablePage_vue_vue_type_style_index_0_scoped_76e05f4b_lang = null;
 
     const _hoisted_1$n = { class: "acu-v2-table-page" };
     const _hoisted_2$j = { class: "acu-v2-table-page__col" };
@@ -87957,7 +88484,9 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_5$c = { class: "acu-v2-table-page__filter" };
     const _hoisted_6$b = { class: "acu-v2-table-page__toggle-row" };
     const _hoisted_7$9 = { class: "acu-v2-table-page__toggle-head" };
-    const _hoisted_8$9 = { class: "acu-v2-table-page__hint" };
+    const _hoisted_8$9 = { class: "acu-v2-table-page__toggle-row" };
+    const _hoisted_9$9 = { class: "acu-v2-table-page__toggle-head" };
+    const _hoisted_10$9 = { class: "acu-v2-table-page__hint" };
     function _sfc_render$n(_ctx, _cache, $props, $setup, $data, $options) {
     	return openBlock(), createElementBlock("section", _hoisted_1$n, [
     		createVNode($setup["AcuMobilePanelNav"], { items: $setup.panelNavItems }),
@@ -88015,7 +88544,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					key: 0,
     					kind: "warning"
     				}, {
-    					default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
+    					default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
     						" 填表提示词缺少必要主插槽，建议在编辑器里载入默认提示词后保存。 ",
     						-1
     						/* CACHED */
@@ -88025,7 +88554,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					variant: "primary",
     					onClick: _cache[6] || (_cache[6] = ($event) => $setup.promptDrawerOpen = true)
     				}, {
-    					default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+    					default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
     						" 编辑提示词 ",
     						-1
     						/* CACHED */
@@ -88039,7 +88568,25 @@ Expected function or array of functions, received type ${typeof value}.`
     				description: $setup.formFillCopy.panels.filter.description
     			}, {
     				default: withCtx(() => [createBaseVNode("div", _hoisted_5$c, [
-    					createBaseVNode("div", _hoisted_6$b, [createBaseVNode("div", _hoisted_7$9, [_cache[17] || (_cache[17] = createBaseVNode(
+    					createBaseVNode("div", _hoisted_6$b, [createBaseVNode("div", _hoisted_7$9, [_cache[18] || (_cache[18] = createBaseVNode(
+    						"span",
+    						{ class: "acu-v2-table-page__toggle-label" },
+    						" 严格 JSON 填表响应 ",
+    						-1
+    						/* CACHED */
+    					)), createVNode($setup["AcuToggle"], {
+    						"model-value": $setup.settings.strictJsonTableFillEnabled.value,
+    						"aria-label": "严格 JSON 填表响应",
+    						"data-acu-setting-key": "strictJsonTableFillEnabled",
+    						"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.settings.setStrictJsonTableFillEnabled($event))
+    					}, null, 8, ["model-value"])]), _cache[19] || (_cache[19] = createBaseVNode(
+    						"p",
+    						{ class: "acu-v2-table-page__toggle-desc" },
+    						" 开启后使用隔离的严格 JSON 提示词。原生表格输出结构化操作，SQLite 输出 SQL 脚本文本。 ",
+    						-1
+    						/* CACHED */
+    					))]),
+    					createBaseVNode("div", _hoisted_8$9, [createBaseVNode("div", _hoisted_9$9, [_cache[20] || (_cache[20] = createBaseVNode(
     						"span",
     						{ class: "acu-v2-table-page__toggle-label" },
     						" 仅识别最后一对 <tableEdit> 标签 ",
@@ -88049,8 +88596,8 @@ Expected function or array of functions, received type ${typeof value}.`
     						"model-value": $setup.settings.tableEditLastPairOnly.value,
     						"aria-label": "仅识别最后一对 tableEdit 标签",
     						"data-acu-setting-key": "tableEditLastPairOnly",
-    						"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.settings.setTableEditLastPairOnly($event))
-    					}, null, 8, ["model-value"])]), _cache[18] || (_cache[18] = createBaseVNode(
+    						"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.settings.setTableEditLastPairOnly($event))
+    					}, null, 8, ["model-value"])]), _cache[21] || (_cache[21] = createBaseVNode(
     						"p",
     						{ class: "acu-v2-table-page__toggle-desc" },
     						" 默认开启，用于忽略前面思维链或草稿里的旧指令。 ",
@@ -88063,7 +88610,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						"start-placeholder": "提取开始边界",
     						"end-placeholder": "提取结束边界",
     						"add-label": "添加提取规则",
-    						"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.settings.setExtractRules($event))
+    						"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.settings.setExtractRules($event))
     					}, null, 8, ["model-value"]),
     					createVNode($setup["AcuRulePairList"], {
     						label: "排除规则",
@@ -88071,7 +88618,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						"start-placeholder": "排除开始边界",
     						"end-placeholder": "排除结束边界",
     						"add-label": "添加排除规则",
-    						"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.settings.setExcludeRules($event))
+    						"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.settings.setExcludeRules($event))
     					}, null, 8, ["model-value"])
     				])]),
     				_: 1
@@ -88089,14 +88636,14 @@ Expected function or array of functions, received type ${typeof value}.`
     					"show-character-option": "",
     					"character-option-label": "角色卡绑定世界书",
     					filterable: "",
-    					"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.onInjectionTargetChange($event))
+    					"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.onInjectionTargetChange($event))
     				}, null, 8, [
     					"model-value",
     					"names",
     					"char-primary",
     					"status",
     					"error"
-    				]), createBaseVNode("p", _hoisted_8$9, [_cache[19] || (_cache[19] = createTextVNode(
+    				]), createBaseVNode("p", _hoisted_10$9, [_cache[22] || (_cache[22] = createTextVNode(
     					" 目前已选: ",
     					-1
     					/* CACHED */
@@ -88116,13 +88663,13 @@ Expected function or array of functions, received type ${typeof value}.`
     			segments: $setup.settings.promptSegments.value,
     			dirty: $setup.settings.promptDirty.value,
     			message: $setup.promptMessage,
-    			onClose: _cache[11] || (_cache[11] = ($event) => $setup.promptDrawerOpen = false),
+    			onClose: _cache[12] || (_cache[12] = ($event) => $setup.promptDrawerOpen = false),
     			onSave: $setup.settings.savePrompt,
     			onReset: $setup.settings.resetPrompt,
-    			onImportFile: _cache[12] || (_cache[12] = ($event) => $setup.settings.importPromptFile($event)),
+    			onImportFile: _cache[13] || (_cache[13] = ($event) => $setup.settings.importPromptFile($event)),
     			onExport: $setup.settings.exportPrompt,
-    			onAdd: _cache[13] || (_cache[13] = ($event) => $setup.settings.addPromptSegment($event)),
-    			onDelete: _cache[14] || (_cache[14] = ($event) => $setup.settings.deletePromptSegment($event)),
+    			onAdd: _cache[14] || (_cache[14] = ($event) => $setup.settings.addPromptSegment($event)),
+    			onDelete: _cache[15] || (_cache[15] = ($event) => $setup.settings.deletePromptSegment($event)),
     			onUpdate: $setup.updatePromptSegment
     		}, null, 8, [
     			"is-open",
@@ -88135,7 +88682,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		])
     	]);
     }
-    var TablePage = /* @__PURE__ */ _export_sfc(_sfc_main$n, [["render", _sfc_render$n], ["__scopeId", "data-v-d3b7d177"]]);
+    var TablePage = /* @__PURE__ */ _export_sfc(_sfc_main$n, [["render", _sfc_render$n], ["__scopeId", "data-v-76e05f4b"]]);
 
     var _sfc_main$m = /*@__PURE__*/ defineComponent({
         __name: 'ApiPage',
