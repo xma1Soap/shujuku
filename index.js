@@ -17060,55 +17060,16 @@ $CONTENT
 
     // service/ai/api-call.ts — AI 调用编排（剧情推进用）
     // 从 04_shared_helpers.js 迁入
-    /**
-     * 解析 "key=value\nkey=value" 格式字符串为 Record<string, string>
-     */
-    function parseKeyValueLines(raw) {
-        const result = {};
-        if (!raw || typeof raw !== 'string')
-            return result;
-        // JSON 检测：尝试整体 parse
+    function normalizeExcludeBodyParamsForSillyTavern_ACU(raw) {
+        if (typeof raw !== 'string')
+            return '';
         const trimmed = raw.trim();
-        if (trimmed.startsWith('{')) {
-            try {
-                const parsed = JSON.parse(trimmed);
-                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                    return parsed;
-                }
-            }
-            catch {
-                // 不是合法 JSON，回退到行解析
-            }
-        }
-        // 行解析（保持现有逻辑 + 边界加固）
-        const lines = raw.split(/\n/);
-        for (const line of lines) {
-            const lineTrimmed = line.trim();
-            if (!lineTrimmed || lineTrimmed.startsWith('#'))
-                continue;
-            const eqIndex = lineTrimmed.indexOf(':');
-            if (eqIndex <= 0)
-                continue;
-            let key = lineTrimmed.slice(0, eqIndex).trim();
-            let value = lineTrimmed.slice(eqIndex + 1).trim();
-            // 去除 key 的引号包裹（兼容 JSON 行混入）
-            if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
-                key = key.slice(1, -1);
-            }
-            // 去除 value 尾部逗号（兼容 JSON 行混入）
-            if (value.endsWith(',')) {
-                value = value.slice(0, -1).trimEnd();
-            }
-            if (key) {
-                try {
-                    result[key] = JSON.parse(value);
-                }
-                catch {
-                    result[key] = value;
-                }
-            }
-        }
-        return result;
+        if (!trimmed)
+            return '';
+        if (trimmed.startsWith('- ') || trimmed.startsWith('[') || trimmed.startsWith('{'))
+            return trimmed;
+        const keys = trimmed.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+        return keys.map((key) => `- ${key}`).join('\n');
     }
     /**
      * 构建 Chat Completions 自定义 API 请求体（支持 bodyParams / excludeBodyParams / requestHeaders）
@@ -17148,34 +17109,9 @@ $CONTENT
             proxy_password: '',
             custom_url: effectiveApiConfig.url,
             custom_include_headers: headers,
+            custom_include_body: effectiveApiConfig.bodyParams || '',
+            custom_exclude_body: normalizeExcludeBodyParamsForSillyTavern_ACU(effectiveApiConfig.excludeBodyParams),
         };
-        // 合并 bodyParams
-        if (effectiveApiConfig.bodyParams) {
-            const extra = parseKeyValueLines(effectiveApiConfig.bodyParams);
-            for (const [k, v] of Object.entries(extra)) {
-                if (typeof v === 'string') {
-                    if (v === 'true')
-                        body[k] = true;
-                    else if (v === 'false')
-                        body[k] = false;
-                    else if (v !== '' && !isNaN(Number(v)))
-                        body[k] = Number(v);
-                    else
-                        body[k] = v;
-                }
-                else {
-                    // JSON 解析路径：值已是正确类型（number/boolean/object）
-                    body[k] = v;
-                }
-            }
-        }
-        // 删除 excludeBodyParams 指定的字段
-        if (effectiveApiConfig.excludeBodyParams) {
-            const keys = effectiveApiConfig.excludeBodyParams.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
-            for (const k of keys) {
-                delete body[k];
-            }
-        }
         return body;
     }
     /**
@@ -79132,8 +79068,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-a9798c6e] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\n  gap: 6px;\n  align-items: stretch;\n}\n.acu-api-config-panel__editor[data-v-a9798c6e] {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-a9798c6e] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-a9798c6e] {\n  display: flex;\n  align-items: center;\n  flex-wrap: wrap;\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-a9798c6e] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-a9798c6e] {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-a9798c6e] {\n  color: var(--acu-danger);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-a9798c6e] {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n}\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-a9798c6e");
-    var ApiConfigPanel_vue_vue_type_style_index_0_scoped_a9798c6e_lang = null;
+    injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-f30a4ced] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\n  gap: 6px;\n  align-items: stretch;\n}\n.acu-api-config-panel__editor[data-v-f30a4ced] {\n  display: flex;\n  flex-direction: column;\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-f30a4ced] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-f30a4ced] {\n  display: flex;\n  align-items: center;\n  flex-wrap: wrap;\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-f30a4ced] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-f30a4ced] {\n  color: var(--acu-text-3);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-f30a4ced] {\n  color: var(--acu-danger);\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-f30a4ced] {\n  display: flex;\n  justify-content: flex-end;\n  gap: 8px;\n}\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-f30a4ced");
+    var ApiConfigPanel_vue_vue_type_style_index_0_scoped_f30a4ced_lang = null;
 
     const _hoisted_1$O = { class: "acu-api-config-panel__select-row" };
     const _hoisted_2$H = { class: "acu-api-config-panel__editor-section" };
@@ -79340,19 +79276,19 @@ Expected function or array of functions, received type ${typeof value}.`
     					$setup.activeConnectionMode === "custom" ? (openBlock(), createElementBlock("div", _hoisted_8$f, [
     						createVNode($setup["AcuFormRow"], {
     							label: "附加主体参数",
-    							hint: "每行一个 key: value，会合并到请求体中。"
+    							hint: "SillyTavern custom_include_body，填写 YAML object，会合并到最终模型请求体。"
     						}, {
     							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
     								modelValue: $setup.activeDraft.bodyParams,
     								"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.bodyParams = $event),
     								rows: 3,
-    								placeholder: "top_k: 50\nfrequency_penalty: 0.5"
+    								placeholder: "response_format:\n  type: json_object\ntop_k: 50"
     							}, null, 8, ["modelValue"])]),
     							_: 1
     						}),
     						createVNode($setup["AcuFormRow"], {
     							label: "排除主体参数",
-    							hint: "逗号或换行分隔，从请求体中删除指定字段。"
+    							hint: "会转换为 SillyTavern custom_exclude_body，从最终模型请求体删除指定字段。"
     						}, {
     							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
     								modelValue: $setup.activeDraft.excludeBodyParams,
@@ -79426,7 +79362,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	}, 8, ["title", "description"]);
     }
-    var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-a9798c6e"]]);
+    var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-f30a4ced"]]);
 
     /**
      * plot-preset-store — 剧情推进页状态边界（D23）
