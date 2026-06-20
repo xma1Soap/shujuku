@@ -24065,6 +24065,7 @@ $CONTENT
      * 后续可在此层统一添加日志、埋点、缓存等增值逻辑。
      */
     // ─── 业务逻辑函数（从 presentation 层搬迁） ───
+    const RETAIN_RECENT_CHECKPOINT_BUFFER_LAYERS_ACU = 20;
     async function deleteVectorIndexManifestFromTagData_ACU(tagData) {
         if (!tagData || typeof tagData !== 'object')
             return false;
@@ -24154,10 +24155,18 @@ $CONTENT
         return false;
     }
     function selectRetainedCheckpointAnchorIndex_ACU(chat, retainedDataIndices) {
-        const retainedAiIndices = retainedDataIndices.filter((idx) => idx >= 1 && chat[idx] && !chat[idx].is_user);
+        const retainedAiIndices = retainedDataIndices.filter((idx) => idx >= 0 && chat[idx] && !chat[idx].is_user);
         if (retainedAiIndices.length === 0)
             return undefined;
         return retainedAiIndices[Math.floor(retainedAiIndices.length / 2)];
+    }
+    function selectLastAiIndex_ACU(chat, indices) {
+        for (let i = indices.length - 1; i >= 0; i--) {
+            const idx = indices[i];
+            if (idx >= 0 && chat[idx] && !chat[idx].is_user)
+                return idx;
+        }
+        return undefined;
     }
     async function writeV2BoundaryCheckpointBeforePurge_ACU(chat, anchorIndex, options = {}) {
         if (anchorIndex < 0 || !chat[anchorIndex] || chat[anchorIndex].is_user) {
@@ -24347,8 +24356,8 @@ $CONTENT
      * 清理超出保留层数的旧本地数据（表格数据 + 剧情推进数据）
      * 从 presentation/triggers/settings-ui-sync/settings-ui-config.ts 搬迁
      *
-     * 按消息计数，仅保留最近N层的数据，更早楼层的 TavernDB_ACU_* 和 qrf_plot 字段将被删除。
-     * 不会删除聊天第一层的"空白指导表"（TavernDB_ACU_InternalSheetGuide）。
+     * 按消息计数，用户可见语义保留最近N层有效数据；额外保留20层恢复缓冲区，确保清理后有可用 checkpoint。
+     * 仅保护聊天第一层的"空白指导表"（TavernDB_ACU_InternalSheetGuide），不保护整层本地数据。
      */
     async function purgeOldLayerDataCore_ACU() {
         const retainCount = settings_ACU.retainRecentLayers || 0;
@@ -24361,33 +24370,41 @@ $CONTENT
             logDebug_ACU('[数据清理] 聊天记录为空，跳过清理。');
             return;
         }
-        // 收集所有包含本地数据的消息索引（排除 chat[0]，保护指导表）
+        // 收集所有包含本地数据的消息索引。chat[0] 只保护指导表字段，不再整层保护 checkpoint/日志数据。
         const dataMessageIndices = [];
-        for (let i = 1; i < chat.length; i++) {
+        for (let i = 0; i < chat.length; i++) {
             const msg = chat[i];
             if (messageHasLocalLayerData_ACU(msg)) {
                 dataMessageIndices.push(i);
             }
         }
-        if (dataMessageIndices.length <= retainCount) {
-            logDebug_ACU(`[数据清理] 含数据消息总数(${dataMessageIndices.length}) <= 保留层数(${retainCount})，无需清理。`);
+        const effectiveRetainCount = retainCount + RETAIN_RECENT_CHECKPOINT_BUFFER_LAYERS_ACU;
+        if (dataMessageIndices.length <= effectiveRetainCount) {
+            logDebug_ACU(`[数据清理] 含数据消息总数(${dataMessageIndices.length}) <= 实际保留层数(${effectiveRetainCount}=用户${retainCount}+缓冲${RETAIN_RECENT_CHECKPOINT_BUFFER_LAYERS_ACU})，无需清理。`);
             return;
         }
-        const cutoffIndex = dataMessageIndices.length - retainCount;
+        const cutoffIndex = dataMessageIndices.length - effectiveRetainCount;
         const indicesToPurge = dataMessageIndices.slice(0, cutoffIndex);
         if (indicesToPurge.length === 0) {
             logDebug_ACU('[数据清理] 无需清理的楼层。');
             return;
         }
-        logDebug_ACU(`[数据清理] 将清理 ${indicesToPurge.length} 层消息的本地数据（保留最近 ${retainCount} 层）...`);
-        // ── [V2 边界 checkpoint] 删除旧 frame 前，保留窗口内已有 full checkpoint 就复用；没有才在窗口中间补一个 ──
+        logDebug_ACU(`[数据清理] 将清理 ${indicesToPurge.length} 层消息的本地数据（用户保留最近 ${retainCount} 层，额外保留 ${RETAIN_RECENT_CHECKPOINT_BUFFER_LAYERS_ACU} 层 checkpoint 缓冲）...`);
+        // ── [V2 边界 checkpoint] 删除旧 frame 前，确保恢复缓冲区内有 full checkpoint ──
         const retainedDataIndices = dataMessageIndices.slice(cutoffIndex);
+        const checkpointBufferIndices = retainedDataIndices.slice(0, Math.min(RETAIN_RECENT_CHECKPOINT_BUFFER_LAYERS_ACU, retainedDataIndices.length));
         const retainedStartIndex = retainedDataIndices[0];
         const retainedEndIndex = retainedDataIndices[retainedDataIndices.length - 1];
-        const anchorIndex = selectRetainedCheckpointAnchorIndex_ACU(chat, retainedDataIndices);
-        if (anchorIndex !== undefined && anchorIndex >= 1 && chat[anchorIndex]) {
+        const checkpointBufferStartIndex = checkpointBufferIndices[0];
+        const checkpointBufferEndIndex = checkpointBufferIndices[checkpointBufferIndices.length - 1];
+        const anchorIndex = selectLastAiIndex_ACU(chat, checkpointBufferIndices)
+            ?? selectRetainedCheckpointAnchorIndex_ACU(chat, retainedDataIndices);
+        if (anchorIndex !== undefined && anchorIndex >= 0 && chat[anchorIndex]) {
             try {
-                if (await writeV2BoundaryCheckpointBeforePurge_ACU(chat, anchorIndex, { retainedStartIndex, retainedEndIndex })) {
+                if (await writeV2BoundaryCheckpointBeforePurge_ACU(chat, anchorIndex, {
+                    retainedStartIndex: checkpointBufferStartIndex ?? retainedStartIndex,
+                    retainedEndIndex: checkpointBufferEndIndex ?? retainedEndIndex,
+                })) {
                     await saveChatToHost_ACU();
                 }
             }
@@ -24402,8 +24419,8 @@ $CONTENT
         }
         // ── [兜底快照] 在删除旧楼层之前，迁移冷表数据到边界保留楼层 ──
         const retainedSet = new Set(retainedDataIndices);
-        // 确认边界楼层有效且不是 chat[0]
-        if (anchorIndex !== undefined && anchorIndex >= 1 && chat[anchorIndex]) {
+        // 确认边界楼层有效。chat[0] 只保护指导表字段，不再整层保护普通本地数据。
+        if (anchorIndex !== undefined && anchorIndex >= 0 && chat[anchorIndex]) {
             const dataIsolationEnabled = settings_ACU.dataIsolationEnabled || false;
             const dataIsolationCode = settings_ACU.dataIsolationCode || null;
             // orphanedData: Map<isolationKey, Map<sheetKey, SheetData>>
