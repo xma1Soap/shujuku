@@ -35467,12 +35467,22 @@ $CONTENT
                         const checkpointTargetIndex = Number.isInteger(options.checkpointTargetIndex) ? options.checkpointTargetIndex : bucket.saveTargetIndex;
                         const revisionWriteSet = checkpointSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
                         const maxPlannedMessageIndex = Math.max(...jobs.map(job => job.saveTargetIndex));
-                        const progressStatus = maxPlannedMessageIndex >= checkpointTargetIndex ? 'complete' : 'in_progress';
+                        const completedSheetMessageIndexByKey = {
+                            ...(options.manualRefillProgress?.completedSheetMessageIndexByKey || {}),
+                        };
+                        for (const sheetKey of checkpointSheetKeys) {
+                            completedSheetMessageIndexByKey[sheetKey] = Math.max(Number(completedSheetMessageIndexByKey[sheetKey]) || -1, maxPlannedMessageIndex);
+                        }
+                        const selectedSheetKeys = options.manualRefillProgress?.selectedSheetKeys || [];
+                        const allSelectedSheetsComplete = selectedSheetKeys.length > 0
+                            && selectedSheetKeys.every(sheetKey => (Number(completedSheetMessageIndexByKey[sheetKey]) || -1) >= checkpointTargetIndex);
+                        const progressStatus = allSelectedSheetsComplete ? 'complete' : 'in_progress';
                         const progress = options.manualRefillProgress
                             ? {
                                 ...options.manualRefillProgress,
                                 status: progressStatus,
                                 completedUntilMessageIndex: Math.max(options.manualRefillProgress.completedUntilMessageIndex, maxPlannedMessageIndex),
+                                completedSheetMessageIndexByKey,
                                 updatedAt: Date.now(),
                             }
                             : undefined;
@@ -36081,12 +36091,7 @@ $CONTENT
                     manualRefillInitialData = await buildManualRefillInitialData_ACU(getChatArray_ACU() || [], contextScopeIndices[0], targetKeys, latestBaseResult.data);
                     manualRefillCheckpointData = JSON.parse(JSON.stringify(manualRefillInitialData));
                 }
-                const pendingStartIndex = matchedProgress ? matchedProgress.completedUntilMessageIndex + 1 : contextScopeIndices[0];
-                const pendingContextScopeIndices = contextScopeIndices.filter(index => index >= pendingStartIndex);
-                if (matchedProgress && pendingContextScopeIndices.length === 0) {
-                    logDebug_ACU('[Manual Refill] 已存在完整的重填进度，无需继续处理。');
-                    return { success: true };
-                }
+                let pendingContextScopeIndices = contextScopeIndices.slice();
                 manualRefillProgress = matchedProgress
                     ? { ...matchedProgress, batchSize: uiBatchSize, contextMessageIndices: contextScopeIndices.slice(), updatedAt: Date.now() }
                     : {
@@ -36101,8 +36106,35 @@ $CONTENT
                         updatedAt: Date.now(),
                     };
                 if (matchedProgress) {
+                    let hasPendingGroup = false;
+                    const completedBySheet = matchedProgress.completedSheetMessageIndexByKey || {};
+                    const hasPerSheetProgress = Object.keys(completedBySheet).length > 0;
+                    let earliestPendingIndex = Number.POSITIVE_INFINITY;
                     for (const gKey of Object.keys(updateGroups)) {
-                        updateGroups[gKey].indices = pendingContextScopeIndices;
+                        const group = updateGroups[gKey];
+                        const completedUntilForGroup = (group.sheetKeys || []).reduce((minCompleted, sheetKey) => {
+                            const rawCompleted = completedBySheet[sheetKey];
+                            const sheetCompleted = Number.isFinite(Number(rawCompleted))
+                                ? Number(rawCompleted)
+                                : (hasPerSheetProgress ? matchedProgress.originalStartMessageIndex - 1 : matchedProgress.completedUntilMessageIndex);
+                            return Math.min(minCompleted, sheetCompleted);
+                        }, Number.POSITIVE_INFINITY);
+                        const effectiveCompletedUntil = Number.isFinite(completedUntilForGroup)
+                            ? completedUntilForGroup
+                            : matchedProgress.completedUntilMessageIndex;
+                        const pendingIndicesForGroup = contextScopeIndices.filter(index => index > effectiveCompletedUntil);
+                        group.indices = pendingIndicesForGroup;
+                        if (pendingIndicesForGroup.length > 0) {
+                            hasPendingGroup = true;
+                            earliestPendingIndex = Math.min(earliestPendingIndex, pendingIndicesForGroup[0]);
+                        }
+                    }
+                    pendingContextScopeIndices = Number.isFinite(earliestPendingIndex)
+                        ? contextScopeIndices.filter(index => index >= earliestPendingIndex)
+                        : [];
+                    if (!hasPendingGroup) {
+                        logDebug_ACU('[Manual Refill] 已存在完整的重填进度，无需继续处理。');
+                        return { success: true };
                     }
                 }
                 _set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(manualRefillInitialData)));
@@ -39428,8 +39460,8 @@ $CONTENT
             // 弹出确认框：手动填表将使用事务式重填，失败不会改动聊天记录中的旧数据
             const confirmed = await showCustomConfirm_ACU('手动填表确认', '即将执行手动填表。\n\n' +
                 '系统会在内存中按当前上下文和批处理设置重填当前选中的表，全部成功后才写入新的完整 checkpoint。\n' +
-                '如果重填起点之前找不到可回放的 checkpoint，选中表会从空白结构开始重填；未选中的表会保持当前最新数据。\n\n' +
-                '失败或终止时不会清空聊天记录中的旧表格数据。', { confirmLabel: '确认并继续', cancelLabel: '取消' });
+                '如果重填起点之前找不到可回放的 checkpoint，选中表的本次内存重建基底会从表头空基底开始；未选中的表会保持当前最新数据。\n\n' +
+                '失败、终止或从中断处继续时，都不会清空聊天记录中的旧表格数据。', { confirmLabel: '确认并继续', cancelLabel: '取消' });
             if (!confirmed) {
                 logDebug_ACU('[更新流程] 用户取消了手动填表确认框');
                 showToastr_ACU('info', '已取消手动填表。');
@@ -86883,7 +86915,7 @@ Expected function or array of functions, received type ${typeof value}.`
             if (coveredCheckpoints.length !== checkpoints.length)
                 return '';
             const coveredFloors = coveredCheckpoints.map(item => `AI 第 ${item.aiFloor} 层`).join('、');
-            return `危险：当前聊天的所有 full checkpoint 都在即将执行的重填范围内（${coveredFloors}）。确认执行后，重填起点前将没有可回放 checkpoint，选中表可能从空白结构开始重填，是否是预期行为？`;
+            return `危险：当前聊天的所有 full checkpoint 都在即将执行的重填范围内（${coveredFloors}）。确认执行后，重填起点前将没有可回放 checkpoint，选中表的本次内存重建基底可能只能从表头空基底开始；这不会删除聊天记录中的旧表格数据。是否是预期行为？`;
         });
         const vectorIndexWarning = computed(() => {
             void refreshTick.value;
@@ -86932,7 +86964,7 @@ Expected function or array of functions, received type ${typeof value}.`
             }
             const confirmed = await dialogStore.confirm({
                 title: '执行手动填表',
-                message: `即将执行手动填表。\n\n当前 full checkpoint：${checkpointFloorsLabel.value}\n本次重填范围：${manualRefillRangeLabel.value}\n\n系统会在内存中按当前上下文和批处理设置重填当前选中的表，全部成功后才写入新的完整 checkpoint。\n如果重填起点之前找不到可回放的 checkpoint，选中表会从空白结构开始重填；未选中的表会保持当前最新数据。\n\n失败或终止时不会清空聊天记录中的旧表格数据。`,
+                message: `即将执行手动填表。\n\n当前 full checkpoint：${checkpointFloorsLabel.value}\n本次重填范围：${manualRefillRangeLabel.value}\n\n系统会在内存中按当前上下文和批处理设置重填当前选中的表，全部成功后才写入新的完整 checkpoint。\n如果重填起点之前找不到可回放的 checkpoint，选中表的本次内存重建基底会从表头空基底开始；未选中的表会保持当前最新数据。\n\n失败、终止或从中断处继续时，都不会清空聊天记录中的旧表格数据。`,
                 dangerMessage: checkpointRiskMessage.value || undefined,
                 confirmLabel: '确认并继续',
                 cancelLabel: '取消',
