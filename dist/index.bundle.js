@@ -32424,29 +32424,37 @@ $CONTENT
     /**
      * 通过 SillyTavern 后端代理获取模型列表
      *
-     * Custom 源在后端有两种路径获取 API key：
-     *   1. custom_url 非空 → 从 secret store 读取（插件无法注入）
-     *   2. custom_url 为空 + reverse_proxy 非空 → 使用 proxy_password 作为 key
+     * 标准SillyTavern后端处理 Custom 源:
+     *   apiUrl = custom_url
+     *   apiKey = readSecret(CUSTOM)  // 从 secret store 读，插件无法注入
+     *   headers = mergeObjectWithYaml({}, custom_include_headers)
+     *   最终请求头: { 'Authorization': 'Bearer ' + apiKey, ...headers }
      *
-     * 我们利用路径 2：把用户 URL 放到 reverse_proxy，key 放到 proxy_password，
-     * custom_url 留空，让后端用 proxy_password 作为 Bearer token 请求 reverse_proxy/models。
+     * 关键: ...headers 在 Authorization 之后展开，所以 custom_include_headers 里的
+     * Authorization 会覆盖前面对应的空值。我们利用这一点传入 API key。
      *
-     * 注意：Custom 源在 SillyTavern 中 bypass 状态检查，后端可能返回 { bypass: true, data: [] }，
-     * 此时 data 为空数组，我们视为后端代理不可用，回退到直接请求。
+     * 但 apiKey 为空时后端可能提前返回错误(第1982行检查)。
+     * 实际上 CUSTOM 源被排除在 apiKey 检查之外:
+     *   if (!apiKey && !request.body.reverse_proxy && source !== CUSTOM)
+     * 所以 apiKey 为空不会拦住 CUSTOM 源，请求会继续，Authorization 由 custom_include_headers 提供。
      */
     async function fetchModelsViaBackend_ACU(apiUrl, apiKey) {
         const headers = getHostRequestHeaders_ACU();
         if (!headers['Content-Type']) {
             headers['Content-Type'] = 'application/json';
         }
-        // 利用 reverse_proxy + proxy_password 路径让后端代理转发请求
         const body = {
             chat_completion_source: 'custom',
-            custom_url: '',
-            reverse_proxy: apiUrl,
-            proxy_password: apiKey || '',
+            custom_url: apiUrl,
             custom_api_format: 'openai_compat',
         };
+        // 通过 custom_include_headers 传 Authorization，后端会合并到请求头中
+        // 后端代码: headers = {}; mergeObjectWithYaml(headers, custom_include_headers)
+        // 然后发送: { 'Authorization': 'Bearer ' + apiKey, ...headers }
+        // ...headers 展开在后，会覆盖前面的 Authorization
+        if (apiKey) {
+            body.custom_include_headers = `Authorization: Bearer ${apiKey}`;
+        }
         // 超时保护
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 15000);
