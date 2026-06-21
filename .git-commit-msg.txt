@@ -1,5 +1,0 @@
-fix: 模型加载卡住,改用SillyTavern后端代理避免CORS
-
-fetchAvailableModels_ACU 原先直接在浏览器fetch外部API,被CORS阻止
-改用 POST /api/backends/chat-completions/status 后端代理转发请求
-后端代理失败时回退到直接fetch(油猴脚本模式)
