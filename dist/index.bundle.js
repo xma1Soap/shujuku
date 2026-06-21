@@ -32423,33 +32423,61 @@ $CONTENT
     }
     /**
      * 通过 SillyTavern 后端代理获取模型列表
+     *
+     * Custom 源在后端有两种路径获取 API key：
+     *   1. custom_url 非空 → 从 secret store 读取（插件无法注入）
+     *   2. custom_url 为空 + reverse_proxy 非空 → 使用 proxy_password 作为 key
+     *
+     * 我们利用路径 2：把用户 URL 放到 reverse_proxy，key 放到 proxy_password，
+     * custom_url 留空，让后端用 proxy_password 作为 Bearer token 请求 reverse_proxy/models。
+     *
+     * 注意：Custom 源在 SillyTavern 中 bypass 状态检查，后端可能返回 { bypass: true, data: [] }，
+     * 此时 data 为空数组，我们视为后端代理不可用，回退到直接请求。
      */
     async function fetchModelsViaBackend_ACU(apiUrl, apiKey) {
         const headers = getHostRequestHeaders_ACU();
         if (!headers['Content-Type']) {
             headers['Content-Type'] = 'application/json';
         }
+        // 利用 reverse_proxy + proxy_password 路径让后端代理转发请求
         const body = {
             chat_completion_source: 'custom',
-            custom_url: apiUrl,
+            custom_url: '',
+            reverse_proxy: apiUrl,
+            proxy_password: apiKey || '',
             custom_api_format: 'openai_compat',
         };
-        // API Key 通过 custom_include_headers 传给后端
-        if (apiKey) {
-            body.custom_include_headers = `Authorization: Bearer ${apiKey}`;
+        // 超时保护
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
+        let response;
+        try {
+            response = await fetch('/api/backends/chat-completions/status', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(body),
+                cache: 'no-cache',
+                signal: controller.signal,
+            });
         }
-        const response = await fetch('/api/backends/chat-completions/status', {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(body),
-            cache: 'no-cache',
-        });
+        catch (e) {
+            clearTimeout(timeoutId);
+            const msg = e?.name === 'AbortError'
+                ? '后端代理请求超时（15秒）。'
+                : `后端代理请求失败: ${e?.message || String(e)}`;
+            return { success: false, error: msg };
+        }
+        clearTimeout(timeoutId);
         if (!response.ok) {
             const errorText = await response.text();
             return { success: false, error: `后端代理状态检查失败: ${response.status} ${response.statusText}. ${errorText}` };
         }
         const data = await response.json();
         logDebug_ACU('[fetchModels] 后端代理返回:', data);
+        // bypass 响应表示后端没有实际请求远端 API
+        if (data?.bypass) {
+            return { success: false, error: '后端代理 bypass，未实际请求远端。' };
+        }
         // SillyTavern status 端点返回 { data: [{id, ...}, ...], error?: string }
         let modelsList = [];
         if (data && Array.isArray(data.data)) {
@@ -32495,10 +32523,25 @@ $CONTENT
         if (apiKey) {
             headers['Authorization'] = `Bearer ${apiKey}`;
         }
-        const response = await fetch(modelsUrl, {
-            method: 'GET',
-            headers,
-        });
+        // 超时保护：避免 CORS 拒绝时 fetch 挂住不返回
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
+        let response;
+        try {
+            response = await fetch(modelsUrl, {
+                method: 'GET',
+                headers,
+                signal: controller.signal,
+            });
+        }
+        catch (e) {
+            clearTimeout(timeoutId);
+            const msg = e?.name === 'AbortError'
+                ? '请求超时（15秒），可能被 CORS 策略阻止或网络不可达。'
+                : `请求失败: ${e?.message || String(e)}。可能被 CORS 策略阻止。`;
+            return { success: false, error: msg };
+        }
+        clearTimeout(timeoutId);
         if (!response.ok) {
             const errorText = await response.text();
             let errorMessage = `API端点状态检查失败: ${response.status} ${response.statusText}.`;
@@ -78717,16 +78760,24 @@ Expected function or array of functions, received type ${typeof value}.`
             async loadModelsForConfig(apiConfig) {
                 this.modelLoadStatus = 'loading';
                 this.modelLoadError = '';
-                const result = await fetchAvailableModels_ACU(String(apiConfig.url || ''), String(apiConfig.apiKey || ''));
-                if (!result.success) {
+                try {
+                    const result = await fetchAvailableModels_ACU(String(apiConfig.url || ''), String(apiConfig.apiKey || ''));
+                    if (!result.success) {
+                        this.modelOptions = [];
+                        this.modelLoadStatus = 'error';
+                        this.modelLoadError = result.error || '模型列表加载失败';
+                        return false;
+                    }
+                    this.modelOptions = result.models || [];
+                    this.modelLoadStatus = 'success';
+                    return true;
+                }
+                catch (e) {
                     this.modelOptions = [];
                     this.modelLoadStatus = 'error';
-                    this.modelLoadError = result.error || '模型列表加载失败';
+                    this.modelLoadError = e?.message || String(e) || '模型列表加载异常';
                     return false;
                 }
-                this.modelOptions = result.models || [];
-                this.modelLoadStatus = 'success';
-                return true;
             },
         },
     });

@@ -355,16 +355,23 @@ export const useApiPresetStore = defineStore('acu-v2-api-presets', {
     async loadModelsForConfig(apiConfig: Partial<AcuV2ApiConfig>): Promise<boolean> {
       this.modelLoadStatus = 'loading';
       this.modelLoadError = '';
-      const result = await fetchAvailableModels_ACU(String(apiConfig.url || ''), String(apiConfig.apiKey || ''));
-      if (!result.success) {
+      try {
+        const result = await fetchAvailableModels_ACU(String(apiConfig.url || ''), String(apiConfig.apiKey || ''));
+        if (!result.success) {
+          this.modelOptions = [];
+          this.modelLoadStatus = 'error';
+          this.modelLoadError = result.error || '模型列表加载失败';
+          return false;
+        }
+        this.modelOptions = result.models || [];
+        this.modelLoadStatus = 'success';
+        return true;
+      } catch (e: any) {
         this.modelOptions = [];
         this.modelLoadStatus = 'error';
-        this.modelLoadError = result.error || '模型列表加载失败';
+        this.modelLoadError = e?.message || String(e) || '模型列表加载异常';
         return false;
       }
-      this.modelOptions = result.models || [];
-      this.modelLoadStatus = 'success';
-      return true;
     },
   },
 });
