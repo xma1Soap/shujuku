@@ -1,7 +1,0 @@
-fix: 模型加载卡住,修复后端代理参数和异常处理
-
-1. 后端代理改用 reverse_proxy+proxy_password 传参(custom_url留空),
-   让后端用 proxy_password 作为 API key 请求远端 /models 端点
-2. loadModelsForConfig 加 try-catch,异常时正确设置 error 状态
-3. 两个 fetch 路径加 15 秒超时保护,避免 CORS 拒绝时 hang 住
-4. 后端返回 bypass 时视为不可用,回退直接请求
