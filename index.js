@@ -14893,9 +14893,9 @@ $CONTENT
         if (values.length === 1 && columns.length === 1) {
             return String(values[0][0] ?? '');
         }
-        // 多行：用逗号分隔
+        // 多行单列：每条记录一行，避免单元格内容里的逗号造成歧义。
         if (columns.length === 1) {
-            return values.map(row => String(row[0] ?? '')).join(', ');
+            return values.map(row => String(row[0] ?? '')).join('\n');
         }
         // 多列：用表格格式
         const lines = [];
