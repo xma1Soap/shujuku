@@ -17,7 +17,6 @@ export {
     getHostRequestHeaders_ACU,
 } from '../../data/gateways/ai-gateway';
 
-import { getHostRequestHeaders_ACU as _getHeaders } from '../../data/gateways/ai-gateway';
 import { logDebug_ACU } from '../../shared/utils';
 
 // ============================================================
@@ -40,19 +39,33 @@ export async function fetchAvailableModels_ACU(apiUrl: string, apiKey: string): 
         return { success: false, error: '请输入API基础URL。' };
     }
 
-    const statusUrl = `/api/backends/chat-completions/status`;
-    const body = {
-        "reverse_proxy": apiUrl,
-        "proxy_password": "",
-        "chat_completion_source": "custom",
-        "custom_url": apiUrl,
-        "custom_include_headers": apiKey ? `Authorization: Bearer ${apiKey}` : ""
-    };
+    // 直接调用 API 端点获取模型列表（Responses API 方式）
+    // 尝试 /v1/models 端点
+    let modelsUrl = (apiUrl || '').trim().replace(/\/+$/, '');
+    if (!modelsUrl) {
+        return { success: false, error: '请输入API基础URL。' };
+    }
+    // 如果 URL 以 /chat/completions 结尾，替换为 /models
+    if (modelsUrl.endsWith('/chat/completions')) {
+        modelsUrl = modelsUrl.replace(/\/chat\/completions$/, '/models');
+    } else if (modelsUrl.endsWith('/responses')) {
+        modelsUrl = modelsUrl.replace(/\/responses$/, '/models');
+    } else if (modelsUrl.endsWith('/v1')) {
+        modelsUrl = modelsUrl + '/models';
+    } else if (!modelsUrl.includes('/v1')) {
+        modelsUrl = modelsUrl + '/v1/models';
+    } else {
+        modelsUrl = modelsUrl + '/models';
+    }
 
-    const response = await fetch(statusUrl, {
-        method: 'POST',
-        headers: { ..._getHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+    const headers: Record<string, string> = {};
+    if (apiKey) {
+        headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+
+    const response = await fetch(modelsUrl, {
+        method: 'GET',
+        headers,
     });
 
     if (!response.ok) {

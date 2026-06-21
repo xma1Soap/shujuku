@@ -7,6 +7,7 @@ import { topLevelWindow_ACU } from '../../../shared/env';
 import { logDebug_ACU, logError_ACU } from '../../../shared/utils';
 import { sendConnectionManagerRequest_ACU, generateRaw_ACU, isGenerateRawAvailable_ACU, getHostRequestHeaders_ACU } from '../../../service/ai/ai-service';
 import { buildCustomApiRequestBody_ACU } from '../../../service/ai/api-call';
+import { callResponsesApiDirect_ACU } from '../../../service/ai/responses-api';
 import { getChatArray_ACU } from '../../../service/chat/chat-service';
 import {
     settings_ACU,
@@ -170,29 +171,16 @@ export function createWorldbookAiApi(_ctx: ApiGroupContext): Record<string, Func
                             return null;
                         }
 
-                        const url = `/api/backends/chat-completions/generate`;
                         const customOverrides: { maxTokens?: number; stripModelPrefix: boolean } = { stripModelPrefix: false };
                         if (optionsMaxTokens !== undefined) customOverrides.maxTokens = optionsMaxTokens;
-                        const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, customOverrides));
 
-                        const headers = {
-                            ...getHostRequestHeaders_ACU(),
-                            'Content-Type': 'application/json'
-                        };
-                        const res = await fetch(url, { method: 'POST', headers, body });
-
-                        if (!res.ok) {
-                            const errTxt = await res.text();
-                            logError_ACU('[callAI] API request failed:', res.status, errTxt);
+                        try {
+                            const content = await callResponsesApiDirect_ACU(messages, effectiveApiConfig, customOverrides);
+                            return content;
+                        } catch (e) {
+                            logError_ACU('[callAI] Responses API call failed:', e);
                             return null;
                         }
-
-                        const content = await handleApiResponse_ACU(res);
-                        if (content) {
-                            return content;
-                        }
-                        logError_ACU('[callAI] Invalid response from custom API');
-                        return null;
                     }
                 }
             } catch (e) {

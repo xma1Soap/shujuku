@@ -5,6 +5,7 @@
  */
 import { currentAbortController_ACU, trackAbortController_ACU, untrackAbortController_ACU, _set_currentAbortController_ACU } from '../../runtime/state-manager';
 import { getApiConfigByPreset_ACU, buildCustomApiRequestBody_ACU } from '../api-call';
+import { callResponsesApiDirect_ACU, handleResponsesApiResponse_ACU, streamResponsesApiToText_ACU, parseResponsesApiOutput_ACU } from '../responses-api';
 import { currentJsonTableData_ACU, settings_ACU } from '../../runtime/state-manager';
 import { getPersonaDescription_ACU, getCharDescription_ACU } from '../../../data/gateways/host-state-gateway';
 import { isGenerateRawAvailable_ACU, generateRaw_ACU, sendConnectionManagerRequest_ACU, triggerSlash_ACU, getConnectionManagerProfiles_ACU, getHostRequestHeaders_ACU } from '../../../data/gateways/ai-gateway';
@@ -278,25 +279,9 @@ import { cloneStrictPromptSegments_ACU } from './strict-json-table-fill';
             if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
                 throw new Error('自定义API的URL或模型未配置。');
             }
-            const generateUrl = `/api/backends/chat-completions/generate`;
-            
-            const headers = { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' };
-            
-            const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }));
-            
-            logDebug_ACU('ACU: 调用新的后端生成API:', generateUrl, 'Model:', effectiveApiConfig.model);
-            const response = await fetch(generateUrl, { method: 'POST', headers, body, signal: abortSignal });
-            
-            if (!response.ok) {
-              const errTxt = await response.text();
-              throw new Error(`API请求失败: ${response.status} ${errTxt}`);
-            }
-            
-            const content = await handleApiResponse_ACU(response, abortSignal);
-            if (content) {
-                return content.trim();
-            }
-            throw new Error('API响应格式不正确或内容为空。');
+            logDebug_ACU('ACU: 直接调用 OpenAI Responses API, Model:', effectiveApiConfig.model);
+            const content = await callResponsesApiDirect_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }, abortSignal);
+            return content;
         }
         }
     } finally {
@@ -308,6 +293,8 @@ import { cloneStrictPromptSegments_ACU } from './strict-json-table-fill';
   }
 
   // ═══ 流式/非流式响应处理 ═══
+  // 现在统一使用 Responses API 格式解析
+  // 同时保留对旧 Chat Completions 格式的兼容（tavern 模式返回的响应）
 
   async function streamToText_ACU(response: any, signal: AbortSignal | null = null) {
     const reader = response.body.getReader();
@@ -335,6 +322,20 @@ import { cloneStrictPromptSegments_ACU } from './strict-json-table-fill';
                     
                     try {
                         const json = JSON.parse(data);
+
+                        // Responses API 格式：response.output_text.delta
+                        if (json.type === 'response.output_text.delta' && typeof json.delta === 'string') {
+                            fullContent += json.delta;
+                            continue;
+                        }
+
+                        // Responses API 拒绝增量
+                        if (json.type === 'response.refusal.delta' && typeof json.delta === 'string') {
+                            fullContent += json.delta;
+                            continue;
+                        }
+
+                        // Chat Completions 格式兼容
                         const content = json?.choices?.[0]?.delta?.content;
                         if (content) {
                             fullContent += content;
@@ -355,6 +356,19 @@ import { cloneStrictPromptSegments_ACU } from './strict-json-table-fill';
   async function parseNonStreamResponse_ACU(response: any) {
     try {
         const data = await response.json();
+
+        // Responses API 格式：遍历 output 数组
+        if (data && Array.isArray(data.output)) {
+            const result = parseResponsesApiOutput_ACU(data);
+            if (result) return result;
+        }
+
+        // SDK convenience field
+        if (typeof data?.output_text === 'string' && data.output_text) {
+            return data.output_text;
+        }
+
+        // Chat Completions 格式兼容
         if (data?.choices?.[0]?.message?.content) {
             return data.choices[0].message.content;
         }

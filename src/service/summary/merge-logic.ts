@@ -4,6 +4,7 @@ import { DEFAULT_CHAR_CARD_PROMPT_ACU, DEFAULT_CHAR_CARD_PROMPT_SQL_ACU, DEFAULT
 import { isSqliteMode } from '../table/storage-mode';
 import { handleApiResponse_ACU } from '../ai/prompt-builder';
 import { buildCustomApiRequestBody_ACU } from '../ai/api-call';
+import { callResponsesApiDirect_ACU } from '../ai/responses-api';
 import { currentJsonTableData_ACU, settings_ACU } from '../runtime/state-manager';
 import { sendConnectionManagerRequest_ACU, isGenerateRawAvailable_ACU, generateRaw_ACU } from '../../data/gateways/ai-gateway';
 import { getLastMessageIndex_ACU } from '../../data/gateways/chat-gateway';
@@ -204,13 +205,7 @@ export async function executeAutoMergeBatch_ACU(
                         ? await generateRaw_ACU({ ordered_prompts: finalMessages, should_stream: settings_ACU.streamingEnabled || false })
                         : '';
                 } else {
-                    const res = await fetch(`/api/backends/chat-completions/generate`, {
-                        method: 'POST',
-                        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-                        body: JSON.stringify(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false }))
-                    });
-                    if (!res.ok) throw new Error(`API请求失败: ${res.status} ${await res.text()}`);
-                    aiResponseText = await handleApiResponse_ACU(res);
+                    aiResponseText = await callResponsesApiDirect_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false });
                     if (!aiResponseText) throw new Error('API返回的数据格式不正确');
                 }
             }

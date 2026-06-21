@@ -10,6 +10,7 @@ import { isSqliteMode } from '../table/storage-mode';
 import { sendConnectionManagerRequest_ACU, generateRaw_ACU, getHostRequestHeaders_ACU } from '../ai/ai-service';
 import { extractTableEditInner_ACU, handleApiResponse_ACU } from '../ai/prompt-builder';
 import { buildCustomApiRequestBody_ACU } from '../ai/api-call';
+import { callResponsesApiDirect_ACU } from '../ai/responses-api';
 import { currentJsonTableData_ACU, settings_ACU, isAutoUpdatingCard_ACU, _set_isAutoUpdatingCard_ACU, _set_wasStoppedByUser_ACU } from '../runtime/state-manager';
 import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
 import { loadAllChatMessages_ACU, updateReadableLorebookEntry_ACU } from '../worldbook/pipeline';
@@ -134,13 +135,7 @@ export async function executeMergeBatches_ACU(
                     if (settings_ACU.apiConfig.useMainApi) {
                         aiResponseText = await generateRaw_ACU({ ordered_prompts: finalMessages, should_stream: settings_ACU.streamingEnabled || false });
                     } else {
-                        const res = await fetch(`/api/backends/chat-completions/generate`, {
-                            method: 'POST',
-                            headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-                            body: JSON.stringify(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false }))
-                        });
-                        if (!res.ok) throw new Error(`API请求失败: ${res.status} ${await res.text()}`);
-                        aiResponseText = await handleApiResponse_ACU(res);
+                        aiResponseText = await callResponsesApiDirect_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false });
                         if (!aiResponseText) throw new Error('API返回的数据格式不正确');
                     }
                 }

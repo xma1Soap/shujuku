@@ -2,6 +2,7 @@
 // 从 04_shared_helpers.js 迁入
 
 import { handleApiResponse_ACU } from './prompt-builder';
+import { callResponsesApiDirect_ACU, buildResponsesApiRequestBody_ACU, buildResponsesApiUrl_ACU, buildResponsesApiHeaders_ACU, handleResponsesApiResponse_ACU, parseResponsesApiOutput_ACU } from './responses-api';
 import { settings_ACU } from '../runtime/state-manager';
 import { isGenerateRawAvailable_ACU, generateRaw_ACU, sendConnectionManagerRequest_ACU, getHostRequestHeaders_ACU } from '../../data/gateways/ai-gateway';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
@@ -98,27 +99,7 @@ export async function callApiWithPlotPreset_ACU(messages: any[], presetName: str
         throw new Error('自定义API的URL或模型未配置。');
       }
 
-      const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig);
-
-
-      const response = await fetch('/api/backends/chat-completions/generate', {
-        method: 'POST',
-        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-        signal: abortSignal,
-      });
-
-      if (!response.ok) {
-        const errTxt = await response.text();
-        throw new Error(`API请求失败: ${response.status} ${errTxt}`);
-      }
-
-      const content = await handleApiResponse_ACU(response, abortSignal);
-      if (content) {
-        return content.trim();
-      }
-
-      throw new Error(`API调用返回无效响应`);
+      return await callResponsesApiDirect_ACU(messages, effectiveApiConfig, {}, abortSignal);
     }
 }
 
@@ -151,29 +132,7 @@ export async function callApi_ACU(messages: any[], apiSettings: any, abortSignal
         throw new Error('自定义API的URL或模型未配置。');
       }
 
-      const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig);
-
-      const response = await fetch('/api/backends/chat-completions/generate', {
-        method: 'POST',
-        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-        signal: abortSignal,
-      });
-
-
-      if (!response.ok) {
-        const errTxt = await response.text();
-        throw new Error(`API请求失败: ${response.status} ${errTxt}`);
-      }
-
-      // 根据streamingEnabled设置选择响应处理方式
-      const content = await handleApiResponse_ACU(response, abortSignal);
-      if (content) {
-        return content.trim();
-      }
-
-
-      throw new Error(`API调用返回无效响应`);
+      return await callResponsesApiDirect_ACU(messages, effectiveApiConfig, {}, abortSignal);
     }
 }
 
@@ -224,11 +183,7 @@ export async function callCustomOpenAI_ACU_Direct(messages: any[]) {
           if (settings_ACU.apiConfig.useMainApi) {
              return await generateRaw_ACU({ ordered_prompts: messages, should_stream: settings_ACU.streamingEnabled || false });
           } else {
-             const requestBody = buildCustomApiRequestBody_ACU(messages, settings_ACU.apiConfig, { stripModelPrefix: false });
-             const res = await fetch('/api/backends/chat-completions/generate', { method: 'POST', headers: {...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json'}, body: JSON.stringify(requestBody) });
-             // 根据streamingEnabled设置选择响应处理方式
-             const content = await handleApiResponse_ACU(res);
-             return content;
+             return await callResponsesApiDirect_ACU(messages, settings_ACU.apiConfig, { stripModelPrefix: false });
           }
       }
   }
@@ -284,19 +239,5 @@ export async function callAIWithPreset_ACU(messages: any[], presetName: string =
         throw new Error('自定义API的URL或模型未配置。');
     }
 
-    const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false }));
-
-    const res = await fetch('/api/backends/chat-completions/generate', {
-        method: 'POST',
-        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-        body,
-    });
-
-    if (!res.ok) {
-        const errTxt = await res.text();
-        throw new Error(`API请求失败: ${res.status} ${errTxt}`);
-    }
-
-    const content = await handleApiResponse_ACU(res);
-    return content ? content.trim() : null;
+    return await callResponsesApiDirect_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false });
 }
