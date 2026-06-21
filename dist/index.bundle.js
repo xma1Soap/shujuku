@@ -4840,6 +4840,7 @@ $CONTENT
             extraIndexColumns: [],
             extraIndexColumnModes: {},
             extraIndexInjectionTemplate: '',
+            sqlInjectionTemplate: '',
             entryPlacement: { ...DEFAULT_ENTRY_PLACEMENT_ACU },
             extraIndexPlacement: { ...DEFAULT_EXTRA_INDEX_PLACEMENT_ACU },
             fixedEntryPlacement: { ...fixedDefaults.entry },
@@ -12600,6 +12601,13 @@ $CONTENT
                     return; // Skip from main output because it will be exported separately
                 if (table.exportConfig.injectIntoWorldbook === false)
                     return; // Skip if injection is disabled
+            }
+            const sqlInjectionTemplate = isSqliteMode() && typeof table.exportConfig?.sqlInjectionTemplate === 'string'
+                ? table.exportConfig.sqlInjectionTemplate.trim()
+                : '';
+            if (sqlInjectionTemplate) {
+                readableText += `${sqlInjectionTemplate}\n\n`;
+                return;
             }
             // All other tables, including '全局数据表', are added to the readable text
             readableText += `# ${table.name}\n\n`;
@@ -24154,12 +24162,6 @@ $CONTENT
         }
         return false;
     }
-    function selectRetainedCheckpointAnchorIndex_ACU(chat, retainedDataIndices) {
-        const retainedAiIndices = retainedDataIndices.filter((idx) => idx >= 0 && chat[idx] && !chat[idx].is_user);
-        if (retainedAiIndices.length === 0)
-            return undefined;
-        return retainedAiIndices[Math.floor(retainedAiIndices.length / 2)];
-    }
     function selectLastAiIndex_ACU(chat, indices) {
         for (let i = indices.length - 1; i >= 0; i--) {
             const idx = indices[i];
@@ -24397,8 +24399,7 @@ $CONTENT
         const retainedEndIndex = retainedDataIndices[retainedDataIndices.length - 1];
         const checkpointBufferStartIndex = checkpointBufferIndices[0];
         const checkpointBufferEndIndex = checkpointBufferIndices[checkpointBufferIndices.length - 1];
-        const anchorIndex = selectLastAiIndex_ACU(chat, checkpointBufferIndices)
-            ?? selectRetainedCheckpointAnchorIndex_ACU(chat, retainedDataIndices);
+        const anchorIndex = selectLastAiIndex_ACU(chat, checkpointBufferIndices);
         if (anchorIndex !== undefined && anchorIndex >= 0 && chat[anchorIndex]) {
             try {
                 if (await writeV2BoundaryCheckpointBeforePurge_ACU(chat, anchorIndex, {
@@ -24414,7 +24415,7 @@ $CONTENT
             }
         }
         else if (collectIsolationKeysWithV2Frames_ACU(chat, { maxMessageIndex: indicesToPurge[indicesToPurge.length - 1] }).length > 0) {
-            logError_ACU('[V2 Compaction] 找不到可写入边界 checkpoint 的保留 AI 楼层，已中止本次清理以避免恢复链断裂。');
+            logError_ACU(`[V2 Compaction] checkpoint 缓冲区（额外 ${RETAIN_RECENT_CHECKPOINT_BUFFER_LAYERS_ACU} 层）内找不到可写入 checkpoint 的 AI 楼层，已中止本次清理以避免恢复链断裂。`);
             return;
         }
         // ── [兜底快照] 在删除旧楼层之前，迁移冷表数据到边界保留楼层 ──
@@ -25486,6 +25487,9 @@ $CONTENT
                     return;
                 const config = ensureExportConfigDefaults_ACU(table.exportConfig, table.name || sheetKey);
                 const tableName = table.name;
+                const sqlInjectionTemplate = isSqliteMode() && typeof config.sqlInjectionTemplate === 'string'
+                    ? config.sqlInjectionTemplate.trim()
+                    : '';
                 const entryPlacement = normalizePlacementConfig_ACU(config.entryPlacement, DEFAULT_ENTRY_PLACEMENT_ACU);
                 const extraIndexPlacement = normalizePlacementConfig_ACU(config.extraIndexPlacement, DEFAULT_EXTRA_INDEX_PLACEMENT_ACU);
                 const headers = table.content[0] ? table.content[0].slice(1) : [];
@@ -25502,8 +25506,8 @@ $CONTENT
                 const hasExtraIndex = hasExtraIndexEnabled && extraIndexSpec && extraIndexSpec.indexCols.length > 0 && extraIndexSpec.indexRows.length > 0;
                 const wrapperParts = parseWrapperTemplate(config.injectionTemplate);
                 const useWrapperEntries = !!wrapperParts;
-                if (effectiveRows.length === 0 && !hasExtraIndex)
-                    return; // 仅存在空白行时不注入任何表格相关条目
+                if (effectiveRows.length === 0 && !hasExtraIndex && !sqlInjectionTemplate)
+                    return; // 仅存在空白行且无模板时不注入任何表格相关条目
                 // [新增] 如果主条目禁用但索引条目启用，只处理索引条目
                 if (mainEntryDisabled && hasExtraIndex) {
                     // 只导出索引条目
@@ -25521,6 +25525,43 @@ $CONTENT
                     entriesToCreate.push(...extraBlock.entries);
                     nextCustomExportOrder = extraBlock.nextOrder + CUSTOM_EXPORT_ORDER_GAP;
                     return; // 跳过主条目处理
+                }
+                if (sqlInjectionTemplate) {
+                    const entryName = config.entryName || tableName;
+                    let keys = config.keywords ? splitKeywordsByComma_ACU(config.keywords) : [];
+                    if (config.entryType === 'keyword' && keys.length === 0)
+                        return;
+                    const mainOrder = allocOrder_ACU(usedOrders, toIntOrFallback_ACU(entryPlacement.order, nextCustomExportOrder), 1, 99999);
+                    const fullComment = getImportEntryName(entryName);
+                    newGeneratedNames.push(fullComment);
+                    postCreateOrderFixPlan.push({ comment: fullComment, order: mainOrder, placement: entryPlacement });
+                    entriesToCreate.push(applyPlacementToEntry_ACU({
+                        comment: fullComment,
+                        content: sqlInjectionTemplate,
+                        keys,
+                        enabled: true,
+                        type: config.entryType || 'constant',
+                        prevent_recursion: config.preventRecursion !== false,
+                        order: mainOrder,
+                    }, entryPlacement));
+                    let nextOrder = mainOrder + CUSTOM_EXPORT_ORDER_GAP;
+                    if (hasExtraIndex) {
+                        const extraBlock = buildExtraIndexEntryBlock_ACU({
+                            exportPrefix,
+                            extraIndexSpec,
+                            templateStr: config.extraIndexInjectionTemplate,
+                            startOrder: toIntOrFallback_ACU(extraIndexPlacement.order, nextOrder),
+                            placement: extraIndexPlacement,
+                            usedOrderSet: usedOrders,
+                            enabled: extraIndexEntryEnabled,
+                        });
+                        newGeneratedNames.push(...extraBlock.names);
+                        postCreateOrderFixPlan.push(...extraBlock.plans);
+                        entriesToCreate.push(...extraBlock.entries);
+                        nextOrder = extraBlock.nextOrder;
+                    }
+                    nextCustomExportOrder = nextOrder + CUSTOM_EXPORT_ORDER_GAP;
+                    return;
                 }
                 // 准备表格数据内容 (Common logic)
                 let tableContentMarkdown = "";
@@ -97721,6 +97762,7 @@ Expected function or array of functions, received type ${typeof value}.`
     }
     var PlacementEditor = /* @__PURE__ */ _export_sfc(_sfc_main$6, [["render", _sfc_render$6], ["__scopeId", "data-v-82cf8890"]]);
 
+    const sqlInjectionTemplatePlaceholder = '留空则使用默认表格内容。支持 {[sql "SELECT ..."]} / {[db.表名.where(...).get(...)]}，会原样写入世界书并在发送前展开。';
     var _sfc_main$5 = /*@__PURE__*/ defineComponent({
         __name: 'VisualizerConfigPanels',
         emits: ["request-add-column", "request-delete-column"],
@@ -97764,14 +97806,14 @@ Expected function or array of functions, received type ${typeof value}.`
             function validateDDL() {
                 ddlValidation.value = config.validateDDL();
             }
-            const __returned__ = { config, ddlValidation, updateConfig, sourceData, exportConfig, extraIndexColumns, extraIndexColumnModes, specialIndexLabel, validateDDL, AcuBadge, AcuButton, AcuCheckbox, AcuFormRow, AcuIconButton, AcuInput, AcuPanel, AcuSelect, AcuTextarea, PlacementEditor };
+            const __returned__ = { config, ddlValidation, sqlInjectionTemplatePlaceholder, updateConfig, sourceData, exportConfig, extraIndexColumns, extraIndexColumnModes, specialIndexLabel, validateDDL, AcuBadge, AcuButton, AcuCheckbox, AcuFormRow, AcuIconButton, AcuInput, AcuPanel, AcuSelect, AcuTextarea, PlacementEditor };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-viz-config[data-v-5b19ce24] {\n  min-width: 0;\n  display: grid;\n  gap: 12px;\n}\n.acu-viz-config__grid[data-v-5b19ce24] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-viz-config__grid--three[data-v-5b19ce24] {\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n}\n.acu-viz-config__columns[data-v-5b19ce24],\n.acu-viz-config__prompts[data-v-5b19ce24],\n.acu-viz-config__toggles[data-v-5b19ce24],\n.acu-viz-config__subsection[data-v-5b19ce24],\n.acu-viz-config__column-modes[data-v-5b19ce24] {\n  min-width: 0;\n  display: grid;\n  gap: 10px;\n}\n.acu-viz-config__columns[data-v-5b19ce24] {\n  margin-top: 12px;\n}\n.acu-viz-config__column-operation[data-v-5b19ce24] {\n  display: flex;\n  justify-content: flex-end;\n  padding-top: 2px;\n}\n.acu-viz-config__column-row[data-v-5b19ce24] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: 42px minmax(0, 1fr) auto;\n  align-items: center;\n  gap: 8px;\n  padding: 8px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-index[data-v-5b19ce24] {\n  color: var(--acu-text-3);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: right;\n}\n.acu-viz-config__empty[data-v-5b19ce24] {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-viz-config__inline-actions[data-v-5b19ce24],\n.acu-viz-config__column-mode[data-v-5b19ce24] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-viz-config__inline-actions[data-v-5b19ce24] {\n  margin-top: 10px;\n}\n.acu-viz-config__ddl[data-v-5b19ce24] {\n  font-family: var(--acu-font-mono);\n}\n.acu-viz-config__column-mode[data-v-5b19ce24] {\n  padding: 8px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-mode[data-v-5b19ce24] .acu-checkbox {\n  flex: 1 1 220px;\n}\n.acu-viz-config__column-mode[data-v-5b19ce24] .acu-select {\n  flex: 1 1 260px;\n}\n@media (max-width: 860px) {\n.acu-viz-config__grid[data-v-5b19ce24],\n  .acu-viz-config__grid--three[data-v-5b19ce24] {\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 767px) {\n.acu-viz-config__column-operation[data-v-5b19ce24] {\n    justify-content: stretch;\n}\n.acu-viz-config__column-operation[data-v-5b19ce24] .acu-btn {\n    width: 100%;\n}\n}\n@media (max-width: 520px) {\n.acu-viz-config__column-row[data-v-5b19ce24] {\n    grid-template-columns: 34px minmax(0, 1fr) auto;\n    padding: 7px;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerConfigPanels.vue#style-0-5b19ce24");
-    var VisualizerConfigPanels_vue_vue_type_style_index_0_scoped_5b19ce24_lang = null;
+    injectSfcStyle("\n.acu-viz-config[data-v-c458f9ad] {\n  min-width: 0;\n  display: grid;\n  gap: 12px;\n}\n.acu-viz-config__grid[data-v-c458f9ad] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-viz-config__grid--three[data-v-c458f9ad] {\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n}\n.acu-viz-config__columns[data-v-c458f9ad],\n.acu-viz-config__prompts[data-v-c458f9ad],\n.acu-viz-config__toggles[data-v-c458f9ad],\n.acu-viz-config__subsection[data-v-c458f9ad],\n.acu-viz-config__column-modes[data-v-c458f9ad] {\n  min-width: 0;\n  display: grid;\n  gap: 10px;\n}\n.acu-viz-config__columns[data-v-c458f9ad] {\n  margin-top: 12px;\n}\n.acu-viz-config__column-operation[data-v-c458f9ad] {\n  display: flex;\n  justify-content: flex-end;\n  padding-top: 2px;\n}\n.acu-viz-config__column-row[data-v-c458f9ad] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: 42px minmax(0, 1fr) auto;\n  align-items: center;\n  gap: 8px;\n  padding: 8px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-index[data-v-c458f9ad] {\n  color: var(--acu-text-3);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: right;\n}\n.acu-viz-config__empty[data-v-c458f9ad] {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-viz-config__inline-actions[data-v-c458f9ad],\n.acu-viz-config__column-mode[data-v-c458f9ad] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-viz-config__inline-actions[data-v-c458f9ad] {\n  margin-top: 10px;\n}\n.acu-viz-config__ddl[data-v-c458f9ad] {\n  font-family: var(--acu-font-mono);\n}\n.acu-viz-config__column-mode[data-v-c458f9ad] {\n  padding: 8px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-mode[data-v-c458f9ad] .acu-checkbox {\n  flex: 1 1 220px;\n}\n.acu-viz-config__column-mode[data-v-c458f9ad] .acu-select {\n  flex: 1 1 260px;\n}\n@media (max-width: 860px) {\n.acu-viz-config__grid[data-v-c458f9ad],\n  .acu-viz-config__grid--three[data-v-c458f9ad] {\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 767px) {\n.acu-viz-config__column-operation[data-v-c458f9ad] {\n    justify-content: stretch;\n}\n.acu-viz-config__column-operation[data-v-c458f9ad] .acu-btn {\n    width: 100%;\n}\n}\n@media (max-width: 520px) {\n.acu-viz-config__column-row[data-v-c458f9ad] {\n    grid-template-columns: 34px minmax(0, 1fr) auto;\n    padding: 7px;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerConfigPanels.vue#style-0-c458f9ad");
+    var VisualizerConfigPanels_vue_vue_type_style_index_0_scoped_c458f9ad_lang = null;
 
     const _hoisted_1$5 = {
     	class: "acu-viz-config",
@@ -97856,7 +97898,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					variant: "primary",
     					onClick: _cache[0] || (_cache[0] = ($event) => _ctx.$emit("request-add-column"))
     				}, {
-    					default: withCtx(() => [..._cache[24] || (_cache[24] = [createBaseVNode(
+    					default: withCtx(() => [..._cache[25] || (_cache[25] = [createBaseVNode(
     						"i",
     						{ class: "fa-solid fa-plus" },
     						null,
@@ -98011,7 +98053,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				size: "sm",
     				onClick: $setup.validateDDL
     			}, {
-    				default: withCtx(() => [..._cache[25] || (_cache[25] = [createBaseVNode(
+    				default: withCtx(() => [..._cache[26] || (_cache[26] = [createBaseVNode(
     					"i",
     					{ class: "fa-solid fa-check-circle" },
     					null,
@@ -98040,141 +98082,157 @@ Expected function or array of functions, received type ${typeof value}.`
     			title: "世界书注入配置",
     			description: "控制这张表是否进入世界书、写成哪些条目、放在哪个位置。世界书内容缺失、重复或位置不对时检查这里。"
     		}, {
-    			default: withCtx(() => [createBaseVNode("div", _hoisted_10$2, [createVNode($setup["AcuCheckbox"], {
-    				"model-value": $setup.exportConfig.injectIntoWorldbook !== false,
-    				label: "注入到世界书条目",
-    				"onUpdate:modelValue": _cache[13] || (_cache[13] = (value) => $setup.config.updateExportConfig("injectIntoWorldbook", value))
-    			}, null, 8, ["model-value"]), createVNode($setup["AcuCheckbox"], {
-    				"model-value": $setup.exportConfig.enabled === true,
-    				label: "启用独立导出",
-    				"onUpdate:modelValue": _cache[14] || (_cache[14] = (value) => $setup.config.updateExportConfig("enabled", value))
-    			}, null, 8, ["model-value"])]), $setup.exportConfig.enabled === true ? (openBlock(), createElementBlock(
-    				Fragment,
-    				{ key: 0 },
-    				[
-    					createBaseVNode("div", _hoisted_11$2, [createVNode($setup["AcuCheckbox"], {
-    						"model-value": $setup.exportConfig.splitByRow === true,
-    						label: "按行拆分独立条目",
-    						"onUpdate:modelValue": _cache[15] || (_cache[15] = (value) => $setup.config.updateExportConfig("splitByRow", value))
-    					}, null, 8, ["model-value"]), createVNode($setup["AcuCheckbox"], {
-    						"model-value": $setup.exportConfig.preventRecursion !== false,
-    						label: "防止递归触发",
-    						"onUpdate:modelValue": _cache[16] || (_cache[16] = (value) => $setup.config.updateExportConfig("preventRecursion", value))
+    			default: withCtx(() => [
+    				createBaseVNode("div", _hoisted_10$2, [createVNode($setup["AcuCheckbox"], {
+    					"model-value": $setup.exportConfig.injectIntoWorldbook !== false,
+    					label: "注入到世界书条目",
+    					"onUpdate:modelValue": _cache[13] || (_cache[13] = (value) => $setup.config.updateExportConfig("injectIntoWorldbook", value))
+    				}, null, 8, ["model-value"]), createVNode($setup["AcuCheckbox"], {
+    					"model-value": $setup.exportConfig.enabled === true,
+    					label: "启用独立导出",
+    					"onUpdate:modelValue": _cache[14] || (_cache[14] = (value) => $setup.config.updateExportConfig("enabled", value))
+    				}, null, 8, ["model-value"])]),
+    				$setup.config.isSQLite.value ? (openBlock(), createBlock($setup["AcuFormRow"], {
+    					key: 0,
+    					label: "SQL 注入模板"
+    				}, {
+    					default: withCtx(() => [createVNode($setup["AcuTextarea"], {
+    						"model-value": $setup.exportConfig.sqlInjectionTemplate || "",
+    						rows: 5,
+    						"auto-resize": "",
+    						placeholder: $setup.sqlInjectionTemplatePlaceholder,
+    						"onUpdate:modelValue": _cache[15] || (_cache[15] = (value) => $setup.config.updateExportConfig("sqlInjectionTemplate", value))
     					}, null, 8, ["model-value"])]),
-    					createBaseVNode("div", _hoisted_12$2, [
-    						createVNode($setup["AcuFormRow"], { label: "条目名称" }, {
-    							default: withCtx(() => [createVNode($setup["AcuInput"], {
-    								"model-value": $setup.exportConfig.entryName || "",
-    								"onUpdate:modelValue": _cache[17] || (_cache[17] = (value) => $setup.config.updateExportConfig("entryName", value))
-    							}, null, 8, ["model-value"])]),
-    							_: 1
-    						}),
-    						createVNode($setup["AcuFormRow"], { label: "条目类型" }, {
-    							default: withCtx(() => [createVNode($setup["AcuSelect"], {
-    								"model-value": $setup.exportConfig.entryType || "constant",
-    								options: $setup.config.entryTypeOptions,
-    								"onUpdate:modelValue": _cache[18] || (_cache[18] = (value) => $setup.config.updateExportConfig("entryType", value))
-    							}, null, 8, ["model-value", "options"])]),
-    							_: 1
-    						}),
-    						createVNode($setup["AcuFormRow"], { label: "关键词" }, {
-    							default: withCtx(() => [createVNode($setup["AcuInput"], {
-    								"model-value": $setup.exportConfig.keywords || "",
-    								"onUpdate:modelValue": _cache[19] || (_cache[19] = (value) => $setup.config.updateExportConfig("keywords", value))
-    							}, null, 8, ["model-value"])]),
-    							_: 1
-    						})
-    					]),
-    					createVNode($setup["AcuFormRow"], { label: "自定义注入模板" }, {
-    						default: withCtx(() => [createVNode($setup["AcuTextarea"], {
-    							"model-value": $setup.exportConfig.injectionTemplate || "",
-    							rows: 3,
-    							"onUpdate:modelValue": _cache[20] || (_cache[20] = (value) => $setup.config.updateExportConfig("injectionTemplate", value))
+    					_: 1
+    				})) : createCommentVNode("v-if", true),
+    				$setup.exportConfig.enabled === true ? (openBlock(), createElementBlock(
+    					Fragment,
+    					{ key: 1 },
+    					[
+    						createBaseVNode("div", _hoisted_11$2, [createVNode($setup["AcuCheckbox"], {
+    							"model-value": $setup.exportConfig.splitByRow === true,
+    							label: "按行拆分独立条目",
+    							"onUpdate:modelValue": _cache[16] || (_cache[16] = (value) => $setup.config.updateExportConfig("splitByRow", value))
+    						}, null, 8, ["model-value"]), createVNode($setup["AcuCheckbox"], {
+    							"model-value": $setup.exportConfig.preventRecursion !== false,
+    							label: "防止递归触发",
+    							"onUpdate:modelValue": _cache[17] || (_cache[17] = (value) => $setup.config.updateExportConfig("preventRecursion", value))
     						}, null, 8, ["model-value"])]),
-    						_: 1
-    					}),
-    					createVNode($setup["PlacementEditor"], {
-    						title: "主条目位置",
-    						placement: $setup.config.getPlacement("entryPlacement"),
-    						options: $setup.config.placementOptions,
-    						"update-field": (field, value) => $setup.config.updatePlacement("entryPlacement", field, value)
-    					}, null, 8, [
-    						"placement",
-    						"options",
-    						"update-field"
-    					]),
-    					createBaseVNode("div", _hoisted_13$2, [createVNode($setup["AcuCheckbox"], {
-    						"model-value": $setup.exportConfig.extraIndexEnabled === true,
-    						label: "额外增加索引条目",
-    						"onUpdate:modelValue": _cache[21] || (_cache[21] = (value) => $setup.config.updateExportConfig("extraIndexEnabled", value))
-    					}, null, 8, ["model-value"]), $setup.exportConfig.extraIndexEnabled ? (openBlock(), createElementBlock(
-    						Fragment,
-    						{ key: 0 },
-    						[
-    							createBaseVNode("div", _hoisted_14$2, [createVNode($setup["AcuFormRow"], { label: "索引条目名称" }, {
+    						createBaseVNode("div", _hoisted_12$2, [
+    							createVNode($setup["AcuFormRow"], { label: "条目名称" }, {
     								default: withCtx(() => [createVNode($setup["AcuInput"], {
-    									"model-value": $setup.exportConfig.extraIndexEntryName || "",
-    									"onUpdate:modelValue": _cache[22] || (_cache[22] = (value) => $setup.config.updateExportConfig("extraIndexEntryName", value))
-    								}, null, 8, ["model-value"])]),
-    								_: 1
-    							})]),
-    							createVNode($setup["AcuFormRow"], { label: "索引条目模板" }, {
-    								default: withCtx(() => [createVNode($setup["AcuTextarea"], {
-    									"model-value": $setup.exportConfig.extraIndexInjectionTemplate || "",
-    									rows: 3,
-    									"onUpdate:modelValue": _cache[23] || (_cache[23] = (value) => $setup.config.updateExportConfig("extraIndexInjectionTemplate", value))
+    									"model-value": $setup.exportConfig.entryName || "",
+    									"onUpdate:modelValue": _cache[18] || (_cache[18] = (value) => $setup.config.updateExportConfig("entryName", value))
     								}, null, 8, ["model-value"])]),
     								_: 1
     							}),
-    							createBaseVNode("div", _hoisted_15$1, [(openBlock(true), createElementBlock(
-    								Fragment,
-    								null,
-    								renderList($setup.config.headers.value, (header, index) => {
-    									return openBlock(), createElementBlock("article", {
-    										key: `extra-index-column-${index}`,
-    										class: "acu-viz-config__column-mode"
-    									}, [createVNode($setup["AcuCheckbox"], {
-    										"model-value": $setup.extraIndexColumns.includes(header),
-    										label: header,
-    										"onUpdate:modelValue": (value) => $setup.config.setExtraIndexColumn(header, value)
-    									}, null, 8, [
-    										"model-value",
-    										"label",
-    										"onUpdate:modelValue"
-    									]), createVNode($setup["AcuSelect"], {
-    										size: "sm",
-    										disabled: !$setup.extraIndexColumns.includes(header),
-    										"model-value": $setup.extraIndexColumnModes[header] === "index_only" ? "index_only" : "both",
-    										options: $setup.config.extraIndexModeOptions,
-    										"onUpdate:modelValue": (value) => $setup.config.setExtraIndexColumnMode(header, value === "index_only" ? "index_only" : "both")
-    									}, null, 8, [
-    										"disabled",
-    										"model-value",
-    										"options",
-    										"onUpdate:modelValue"
-    									])]);
+    							createVNode($setup["AcuFormRow"], { label: "条目类型" }, {
+    								default: withCtx(() => [createVNode($setup["AcuSelect"], {
+    									"model-value": $setup.exportConfig.entryType || "constant",
+    									options: $setup.config.entryTypeOptions,
+    									"onUpdate:modelValue": _cache[19] || (_cache[19] = (value) => $setup.config.updateExportConfig("entryType", value))
+    								}, null, 8, ["model-value", "options"])]),
+    								_: 1
+    							}),
+    							createVNode($setup["AcuFormRow"], { label: "关键词" }, {
+    								default: withCtx(() => [createVNode($setup["AcuInput"], {
+    									"model-value": $setup.exportConfig.keywords || "",
+    									"onUpdate:modelValue": _cache[20] || (_cache[20] = (value) => $setup.config.updateExportConfig("keywords", value))
+    								}, null, 8, ["model-value"])]),
+    								_: 1
+    							})
+    						]),
+    						createVNode($setup["AcuFormRow"], { label: "自定义注入模板" }, {
+    							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
+    								"model-value": $setup.exportConfig.injectionTemplate || "",
+    								rows: 3,
+    								"onUpdate:modelValue": _cache[21] || (_cache[21] = (value) => $setup.config.updateExportConfig("injectionTemplate", value))
+    							}, null, 8, ["model-value"])]),
+    							_: 1
+    						}),
+    						createVNode($setup["PlacementEditor"], {
+    							title: "主条目位置",
+    							placement: $setup.config.getPlacement("entryPlacement"),
+    							options: $setup.config.placementOptions,
+    							"update-field": (field, value) => $setup.config.updatePlacement("entryPlacement", field, value)
+    						}, null, 8, [
+    							"placement",
+    							"options",
+    							"update-field"
+    						]),
+    						createBaseVNode("div", _hoisted_13$2, [createVNode($setup["AcuCheckbox"], {
+    							"model-value": $setup.exportConfig.extraIndexEnabled === true,
+    							label: "额外增加索引条目",
+    							"onUpdate:modelValue": _cache[22] || (_cache[22] = (value) => $setup.config.updateExportConfig("extraIndexEnabled", value))
+    						}, null, 8, ["model-value"]), $setup.exportConfig.extraIndexEnabled ? (openBlock(), createElementBlock(
+    							Fragment,
+    							{ key: 0 },
+    							[
+    								createBaseVNode("div", _hoisted_14$2, [createVNode($setup["AcuFormRow"], { label: "索引条目名称" }, {
+    									default: withCtx(() => [createVNode($setup["AcuInput"], {
+    										"model-value": $setup.exportConfig.extraIndexEntryName || "",
+    										"onUpdate:modelValue": _cache[23] || (_cache[23] = (value) => $setup.config.updateExportConfig("extraIndexEntryName", value))
+    									}, null, 8, ["model-value"])]),
+    									_: 1
+    								})]),
+    								createVNode($setup["AcuFormRow"], { label: "索引条目模板" }, {
+    									default: withCtx(() => [createVNode($setup["AcuTextarea"], {
+    										"model-value": $setup.exportConfig.extraIndexInjectionTemplate || "",
+    										rows: 3,
+    										"onUpdate:modelValue": _cache[24] || (_cache[24] = (value) => $setup.config.updateExportConfig("extraIndexInjectionTemplate", value))
+    									}, null, 8, ["model-value"])]),
+    									_: 1
     								}),
-    								128
-    								/* KEYED_FRAGMENT */
-    							))]),
-    							createVNode($setup["PlacementEditor"], {
-    								title: "索引条目位置",
-    								placement: $setup.config.getPlacement("extraIndexPlacement"),
-    								options: $setup.config.placementOptions,
-    								"update-field": (field, value) => $setup.config.updatePlacement("extraIndexPlacement", field, value)
-    							}, null, 8, [
-    								"placement",
-    								"options",
-    								"update-field"
-    							])
-    						],
-    						64
-    						/* STABLE_FRAGMENT */
-    					)) : createCommentVNode("v-if", true)])
-    				],
-    				64
-    				/* STABLE_FRAGMENT */
-    			)) : createCommentVNode("v-if", true)]),
+    								createBaseVNode("div", _hoisted_15$1, [(openBlock(true), createElementBlock(
+    									Fragment,
+    									null,
+    									renderList($setup.config.headers.value, (header, index) => {
+    										return openBlock(), createElementBlock("article", {
+    											key: `extra-index-column-${index}`,
+    											class: "acu-viz-config__column-mode"
+    										}, [createVNode($setup["AcuCheckbox"], {
+    											"model-value": $setup.extraIndexColumns.includes(header),
+    											label: header,
+    											"onUpdate:modelValue": (value) => $setup.config.setExtraIndexColumn(header, value)
+    										}, null, 8, [
+    											"model-value",
+    											"label",
+    											"onUpdate:modelValue"
+    										]), createVNode($setup["AcuSelect"], {
+    											size: "sm",
+    											disabled: !$setup.extraIndexColumns.includes(header),
+    											"model-value": $setup.extraIndexColumnModes[header] === "index_only" ? "index_only" : "both",
+    											options: $setup.config.extraIndexModeOptions,
+    											"onUpdate:modelValue": (value) => $setup.config.setExtraIndexColumnMode(header, value === "index_only" ? "index_only" : "both")
+    										}, null, 8, [
+    											"disabled",
+    											"model-value",
+    											"options",
+    											"onUpdate:modelValue"
+    										])]);
+    									}),
+    									128
+    									/* KEYED_FRAGMENT */
+    								))]),
+    								createVNode($setup["PlacementEditor"], {
+    									title: "索引条目位置",
+    									placement: $setup.config.getPlacement("extraIndexPlacement"),
+    									options: $setup.config.placementOptions,
+    									"update-field": (field, value) => $setup.config.updatePlacement("extraIndexPlacement", field, value)
+    								}, null, 8, [
+    									"placement",
+    									"options",
+    									"update-field"
+    								])
+    							],
+    							64
+    							/* STABLE_FRAGMENT */
+    						)) : createCommentVNode("v-if", true)])
+    					],
+    					64
+    					/* STABLE_FRAGMENT */
+    				)) : createCommentVNode("v-if", true)
+    			]),
     			_: 1
     		}),
     		$setup.config.fixedConfigEnabled.value ? (openBlock(), createBlock($setup["AcuPanel"], {
@@ -98225,7 +98283,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		})) : createCommentVNode("v-if", true)
     	]);
     }
-    var VisualizerConfigPanels = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$5], ["__scopeId", "data-v-5b19ce24"]]);
+    var VisualizerConfigPanels = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$5], ["__scopeId", "data-v-c458f9ad"]]);
 
     var _sfc_main$4 = /*@__PURE__*/ defineComponent({
         __name: 'VisualizerGlobalInjectionPanels',
