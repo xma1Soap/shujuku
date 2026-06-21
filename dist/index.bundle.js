@@ -16577,6 +16577,20 @@ $CONTENT
         if (isUsingSeedRows) {
             text += `-- SeedRows: 已提供模板基础数据（尚未写入聊天楼层数据；本次填表可直接基于这些行更新）\n`;
         }
+        const ddlColumnNames = parseDDLColumnNames(ddl);
+        const headers = (ddlColumnNames.length > 0) ? ddlColumnNames : (table.content[0] || []);
+        const sendRowsSqlTemplate = typeof table.updateConfig?.sendRowsSqlTemplate === 'string'
+            ? table.updateConfig.sendRowsSqlTemplate.trim()
+            : '';
+        if (sendRowsSqlTemplate) {
+            const renderedRows = replaceDbSqlVariables(sendRowsSqlTemplate).trim();
+            text += `\n-- 当前数据\n`;
+            text += renderedRows
+                ? `${renderedRows}\n`
+                : '-- (No data rows)\n';
+            text += '\n';
+            return text;
+        }
         // 行数限制逻辑（与原生模式一致）
         let rowsToProcess = effectiveAllRows;
         let startIndex = 0;
@@ -16597,8 +16611,6 @@ $CONTENT
         }
         // 输出当前数据（注释格式的表格）
         // 优先使用 DDL 中的英文列名作为表头，避免 AI 看到中文列名后用中文属性名写 SQL
-        const ddlColumnNames = parseDDLColumnNames(ddl);
-        const headers = (ddlColumnNames.length > 0) ? ddlColumnNames : (table.content[0] || []);
         text += `\n-- 当前数据 (${rowsToProcess.length} rows)\n`;
         text += `-- | ${headers.join(' | ')} |\n`;
         rowsToProcess.forEach((row) => {
@@ -26830,7 +26842,7 @@ $CONTENT
                 name: s.name || k,
                 sourceData: s.sourceData ? JSON.parse(JSON.stringify(s.sourceData)) : { note: '', initNode: '', insertNode: '', updateNode: '', deleteNode: '' },
                 content: [headerRow],
-                updateConfig: s.updateConfig ? JSON.parse(JSON.stringify(s.updateConfig)) : { uiSentinel: -1, contextDepth: -1, updateFrequency: -1, batchSize: -1, skipFloors: -1, sendLatestRows: -1, groupId: -1 },
+                updateConfig: s.updateConfig ? JSON.parse(JSON.stringify(s.updateConfig)) : { uiSentinel: -1, contextDepth: -1, updateFrequency: -1, batchSize: -1, skipFloors: -1, sendLatestRows: -1, groupId: -1, sendRowsSqlTemplate: '' },
                 exportConfig: ensureExportConfigDefaults_ACU(s.exportConfig ? JSON.parse(JSON.stringify(s.exportConfig)) : null, s.name || k),
             };
             // 需求4：结构/表名/参数变更时，仅更新指导表元信息，不修改"基础数据(seedRows)"
@@ -96110,7 +96122,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 if (!sheet.updateConfig || typeof sheet.updateConfig !== 'object')
                     sheet.updateConfig = {};
                 sheet.updateConfig.uiSentinel = -1;
-                sheet.updateConfig[key] = intValue(value, -1);
+                sheet.updateConfig[key] = key === 'sendRowsSqlTemplate' ? stringValue(value) : intValue(value, -1);
             });
         }
         function updateSourceData(key, value) {
@@ -97779,6 +97791,7 @@ Expected function or array of functions, received type ${typeof value}.`
                     groupId: Number.isFinite(raw.groupId) ? raw.groupId : -1,
                     skipFloors: Number.isFinite(raw.skipFloors) ? raw.skipFloors : -1,
                     sendLatestRows: Number.isFinite(raw.sendLatestRows) ? raw.sendLatestRows : -1,
+                    sendRowsSqlTemplate: String(raw.sendRowsSqlTemplate || ''),
                 };
             });
             const sourceData = computed(() => {
@@ -97791,6 +97804,21 @@ Expected function or array of functions, received type ${typeof value}.`
                     deleteNode: String(raw.deleteNode || ''),
                     ddl: String(raw.ddl || ''),
                 };
+            });
+            const sendRowsSqlTemplatePlaceholder = computed(() => {
+                const ddlColumns = parseDDLColumnNames(sourceData.value.ddl);
+                const headers = ddlColumns.length > 0
+                    ? ddlColumns
+                    : (config.headers.value.length > 0 ? ['row_id', ...config.headers.value] : ['row_id']);
+                const tableNameMatch = String(sourceData.value.ddl || '').match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(]+)/i);
+                const tableName = tableNameMatch?.[1] || 'your_table';
+                return [
+                    `建议查询列：${headers.join(', ')}`,
+                    `展开格式示例：row_id: 1, ${headers.slice(1).map((header, index) => `${header}: 值${index + 1}`).join(', ')}`,
+                    '',
+                    '示例模板：',
+                    `{[sql "SELECT ${headers.join(', ')} FROM ${tableName} ORDER BY row_id ASC LIMIT 10"]}`,
+                ].join('\n');
             });
             const exportConfig = computed(() => config.exportConfig.value || {});
             const extraIndexColumns = computed(() => Array.isArray(exportConfig.value.extraIndexColumns) ? exportConfig.value.extraIndexColumns : []);
@@ -97806,14 +97834,14 @@ Expected function or array of functions, received type ${typeof value}.`
             function validateDDL() {
                 ddlValidation.value = config.validateDDL();
             }
-            const __returned__ = { config, ddlValidation, sqlInjectionTemplatePlaceholder, updateConfig, sourceData, exportConfig, extraIndexColumns, extraIndexColumnModes, specialIndexLabel, validateDDL, AcuBadge, AcuButton, AcuCheckbox, AcuFormRow, AcuIconButton, AcuInput, AcuPanel, AcuSelect, AcuTextarea, PlacementEditor };
+            const __returned__ = { config, ddlValidation, sqlInjectionTemplatePlaceholder, updateConfig, sourceData, sendRowsSqlTemplatePlaceholder, exportConfig, extraIndexColumns, extraIndexColumnModes, specialIndexLabel, validateDDL, AcuBadge, AcuButton, AcuCheckbox, AcuFormRow, AcuIconButton, AcuInput, AcuPanel, AcuSelect, AcuTextarea, PlacementEditor };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-viz-config[data-v-c458f9ad] {\n  min-width: 0;\n  display: grid;\n  gap: 12px;\n}\n.acu-viz-config__grid[data-v-c458f9ad] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-viz-config__grid--three[data-v-c458f9ad] {\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n}\n.acu-viz-config__columns[data-v-c458f9ad],\n.acu-viz-config__prompts[data-v-c458f9ad],\n.acu-viz-config__toggles[data-v-c458f9ad],\n.acu-viz-config__subsection[data-v-c458f9ad],\n.acu-viz-config__column-modes[data-v-c458f9ad] {\n  min-width: 0;\n  display: grid;\n  gap: 10px;\n}\n.acu-viz-config__columns[data-v-c458f9ad] {\n  margin-top: 12px;\n}\n.acu-viz-config__column-operation[data-v-c458f9ad] {\n  display: flex;\n  justify-content: flex-end;\n  padding-top: 2px;\n}\n.acu-viz-config__column-row[data-v-c458f9ad] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: 42px minmax(0, 1fr) auto;\n  align-items: center;\n  gap: 8px;\n  padding: 8px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-index[data-v-c458f9ad] {\n  color: var(--acu-text-3);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: right;\n}\n.acu-viz-config__empty[data-v-c458f9ad] {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-viz-config__inline-actions[data-v-c458f9ad],\n.acu-viz-config__column-mode[data-v-c458f9ad] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-viz-config__inline-actions[data-v-c458f9ad] {\n  margin-top: 10px;\n}\n.acu-viz-config__ddl[data-v-c458f9ad] {\n  font-family: var(--acu-font-mono);\n}\n.acu-viz-config__column-mode[data-v-c458f9ad] {\n  padding: 8px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-mode[data-v-c458f9ad] .acu-checkbox {\n  flex: 1 1 220px;\n}\n.acu-viz-config__column-mode[data-v-c458f9ad] .acu-select {\n  flex: 1 1 260px;\n}\n@media (max-width: 860px) {\n.acu-viz-config__grid[data-v-c458f9ad],\n  .acu-viz-config__grid--three[data-v-c458f9ad] {\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 767px) {\n.acu-viz-config__column-operation[data-v-c458f9ad] {\n    justify-content: stretch;\n}\n.acu-viz-config__column-operation[data-v-c458f9ad] .acu-btn {\n    width: 100%;\n}\n}\n@media (max-width: 520px) {\n.acu-viz-config__column-row[data-v-c458f9ad] {\n    grid-template-columns: 34px minmax(0, 1fr) auto;\n    padding: 7px;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerConfigPanels.vue#style-0-c458f9ad");
-    var VisualizerConfigPanels_vue_vue_type_style_index_0_scoped_c458f9ad_lang = null;
+    injectSfcStyle("\n.acu-viz-config[data-v-7e08f9ff] {\n  min-width: 0;\n  display: grid;\n  gap: 12px;\n}\n.acu-viz-config__grid[data-v-7e08f9ff] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.acu-viz-config__grid--three[data-v-7e08f9ff] {\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n}\n.acu-viz-config__columns[data-v-7e08f9ff],\n.acu-viz-config__prompts[data-v-7e08f9ff],\n.acu-viz-config__toggles[data-v-7e08f9ff],\n.acu-viz-config__subsection[data-v-7e08f9ff],\n.acu-viz-config__column-modes[data-v-7e08f9ff] {\n  min-width: 0;\n  display: grid;\n  gap: 10px;\n}\n.acu-viz-config__columns[data-v-7e08f9ff] {\n  margin-top: 12px;\n}\n.acu-viz-config__column-operation[data-v-7e08f9ff] {\n  display: flex;\n  justify-content: flex-end;\n  padding-top: 2px;\n}\n.acu-viz-config__column-row[data-v-7e08f9ff] {\n  min-width: 0;\n  display: grid;\n  grid-template-columns: 42px minmax(0, 1fr) auto;\n  align-items: center;\n  gap: 8px;\n  padding: 8px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-index[data-v-7e08f9ff] {\n  color: var(--acu-text-3);\n  font-family: var(--acu-font-mono);\n  font-size: var(--acu-font-size-body, 12px);\n  text-align: right;\n}\n.acu-viz-config__empty[data-v-7e08f9ff] {\n  margin: 0;\n  color: var(--acu-text-2);\n  font-size: var(--acu-font-size-body-lg, 13px);\n  line-height: 1.55;\n}\n.acu-viz-config__inline-actions[data-v-7e08f9ff],\n.acu-viz-config__column-mode[data-v-7e08f9ff] {\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n.acu-viz-config__inline-actions[data-v-7e08f9ff] {\n  margin-top: 10px;\n}\n.acu-viz-config__ddl[data-v-7e08f9ff] {\n  font-family: var(--acu-font-mono);\n}\n.acu-viz-config__column-mode[data-v-7e08f9ff] {\n  padding: 8px;\n  border: 1px solid var(--acu-border);\n  border-radius: var(--acu-radius-sm);\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-mode[data-v-7e08f9ff] .acu-checkbox {\n  flex: 1 1 220px;\n}\n.acu-viz-config__column-mode[data-v-7e08f9ff] .acu-select {\n  flex: 1 1 260px;\n}\n@media (max-width: 860px) {\n.acu-viz-config__grid[data-v-7e08f9ff],\n  .acu-viz-config__grid--three[data-v-7e08f9ff] {\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 767px) {\n.acu-viz-config__column-operation[data-v-7e08f9ff] {\n    justify-content: stretch;\n}\n.acu-viz-config__column-operation[data-v-7e08f9ff] .acu-btn {\n    width: 100%;\n}\n}\n@media (max-width: 520px) {\n.acu-viz-config__column-row[data-v-7e08f9ff] {\n    grid-template-columns: 34px minmax(0, 1fr) auto;\n    padding: 7px;\n}\n}\n", "src/presentation-v2/surfaces/visualizer/VisualizerConfigPanels.vue#style-0-7e08f9ff");
+    var VisualizerConfigPanels_vue_vue_type_style_index_0_scoped_7e08f9ff_lang = null;
 
     const _hoisted_1$5 = {
     	class: "acu-viz-config",
@@ -97898,7 +97926,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					variant: "primary",
     					onClick: _cache[0] || (_cache[0] = ($event) => _ctx.$emit("request-add-column"))
     				}, {
-    					default: withCtx(() => [..._cache[25] || (_cache[25] = [createBaseVNode(
+    					default: withCtx(() => [..._cache[26] || (_cache[26] = [createBaseVNode(
     						"i",
     						{ class: "fa-solid fa-plus" },
     						null,
@@ -97979,7 +98007,20 @@ Expected function or array of functions, received type ${typeof value}.`
     					}, null, 8, ["model-value"])]),
     					_: 1
     				})
-    			])]),
+    			]), $setup.config.isSQLite.value ? (openBlock(), createBlock($setup["AcuFormRow"], {
+    				key: 0,
+    				label: "填表发送数据模板",
+    				hint: "高级功能：只替换发送给填表 AI 的“当前数据”部分。建议直接 SELECT row_id 和需要的字段；系统会把多列结果展开为“字段: 值”的记录行。留空则继续使用“发送最新行数”。"
+    			}, {
+    				default: withCtx(() => [createVNode($setup["AcuTextarea"], {
+    					"model-value": $setup.updateConfig.sendRowsSqlTemplate,
+    					rows: 6,
+    					"auto-resize": "",
+    					placeholder: $setup.sendRowsSqlTemplatePlaceholder,
+    					"onUpdate:modelValue": _cache[7] || (_cache[7] = (value) => $setup.config.updateUpdateConfig("sendRowsSqlTemplate", value))
+    				}, null, 8, ["model-value", "placeholder"])]),
+    				_: 1
+    			})) : createCommentVNode("v-if", true)]),
     			_: 1
     		}),
     		createVNode($setup["AcuPanel"], {
@@ -97992,7 +98033,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						"model-value": $setup.sourceData.note,
     						rows: 3,
     						"auto-resize": "",
-    						"onUpdate:modelValue": _cache[7] || (_cache[7] = (value) => $setup.config.updateSourceData("note", value))
+    						"onUpdate:modelValue": _cache[8] || (_cache[8] = (value) => $setup.config.updateSourceData("note", value))
     					}, null, 8, ["model-value"])]),
     					_: 1
     				}),
@@ -98001,7 +98042,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						"model-value": $setup.sourceData.initNode,
     						rows: 2,
     						"auto-resize": "",
-    						"onUpdate:modelValue": _cache[8] || (_cache[8] = (value) => $setup.config.updateSourceData("initNode", value))
+    						"onUpdate:modelValue": _cache[9] || (_cache[9] = (value) => $setup.config.updateSourceData("initNode", value))
     					}, null, 8, ["model-value"])]),
     					_: 1
     				}),
@@ -98010,7 +98051,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						"model-value": $setup.sourceData.insertNode,
     						rows: 2,
     						"auto-resize": "",
-    						"onUpdate:modelValue": _cache[9] || (_cache[9] = (value) => $setup.config.updateSourceData("insertNode", value))
+    						"onUpdate:modelValue": _cache[10] || (_cache[10] = (value) => $setup.config.updateSourceData("insertNode", value))
     					}, null, 8, ["model-value"])]),
     					_: 1
     				}),
@@ -98019,7 +98060,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						"model-value": $setup.sourceData.updateNode,
     						rows: 2,
     						"auto-resize": "",
-    						"onUpdate:modelValue": _cache[10] || (_cache[10] = (value) => $setup.config.updateSourceData("updateNode", value))
+    						"onUpdate:modelValue": _cache[11] || (_cache[11] = (value) => $setup.config.updateSourceData("updateNode", value))
     					}, null, 8, ["model-value"])]),
     					_: 1
     				}),
@@ -98028,7 +98069,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						"model-value": $setup.sourceData.deleteNode,
     						rows: 2,
     						"auto-resize": "",
-    						"onUpdate:modelValue": _cache[11] || (_cache[11] = (value) => $setup.config.updateSourceData("deleteNode", value))
+    						"onUpdate:modelValue": _cache[12] || (_cache[12] = (value) => $setup.config.updateSourceData("deleteNode", value))
     					}, null, 8, ["model-value"])]),
     					_: 1
     				})
@@ -98046,14 +98087,14 @@ Expected function or array of functions, received type ${typeof value}.`
     					"model-value": $setup.sourceData.ddl,
     					rows: 7,
     					"auto-resize": "",
-    					"onUpdate:modelValue": _cache[12] || (_cache[12] = (value) => $setup.config.updateSourceData("ddl", value))
+    					"onUpdate:modelValue": _cache[13] || (_cache[13] = (value) => $setup.config.updateSourceData("ddl", value))
     				}, null, 8, ["model-value"])]),
     				_: 1
     			}), createBaseVNode("div", _hoisted_9$2, [createVNode($setup["AcuButton"], {
     				size: "sm",
     				onClick: $setup.validateDDL
     			}, {
-    				default: withCtx(() => [..._cache[26] || (_cache[26] = [createBaseVNode(
+    				default: withCtx(() => [..._cache[27] || (_cache[27] = [createBaseVNode(
     					"i",
     					{ class: "fa-solid fa-check-circle" },
     					null,
@@ -98086,11 +98127,11 @@ Expected function or array of functions, received type ${typeof value}.`
     				createBaseVNode("div", _hoisted_10$2, [createVNode($setup["AcuCheckbox"], {
     					"model-value": $setup.exportConfig.injectIntoWorldbook !== false,
     					label: "注入到世界书条目",
-    					"onUpdate:modelValue": _cache[13] || (_cache[13] = (value) => $setup.config.updateExportConfig("injectIntoWorldbook", value))
+    					"onUpdate:modelValue": _cache[14] || (_cache[14] = (value) => $setup.config.updateExportConfig("injectIntoWorldbook", value))
     				}, null, 8, ["model-value"]), createVNode($setup["AcuCheckbox"], {
     					"model-value": $setup.exportConfig.enabled === true,
     					label: "启用独立导出",
-    					"onUpdate:modelValue": _cache[14] || (_cache[14] = (value) => $setup.config.updateExportConfig("enabled", value))
+    					"onUpdate:modelValue": _cache[15] || (_cache[15] = (value) => $setup.config.updateExportConfig("enabled", value))
     				}, null, 8, ["model-value"])]),
     				$setup.config.isSQLite.value ? (openBlock(), createBlock($setup["AcuFormRow"], {
     					key: 0,
@@ -98101,7 +98142,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						rows: 5,
     						"auto-resize": "",
     						placeholder: $setup.sqlInjectionTemplatePlaceholder,
-    						"onUpdate:modelValue": _cache[15] || (_cache[15] = (value) => $setup.config.updateExportConfig("sqlInjectionTemplate", value))
+    						"onUpdate:modelValue": _cache[16] || (_cache[16] = (value) => $setup.config.updateExportConfig("sqlInjectionTemplate", value))
     					}, null, 8, ["model-value"])]),
     					_: 1
     				})) : createCommentVNode("v-if", true),
@@ -98112,17 +98153,17 @@ Expected function or array of functions, received type ${typeof value}.`
     						createBaseVNode("div", _hoisted_11$2, [createVNode($setup["AcuCheckbox"], {
     							"model-value": $setup.exportConfig.splitByRow === true,
     							label: "按行拆分独立条目",
-    							"onUpdate:modelValue": _cache[16] || (_cache[16] = (value) => $setup.config.updateExportConfig("splitByRow", value))
+    							"onUpdate:modelValue": _cache[17] || (_cache[17] = (value) => $setup.config.updateExportConfig("splitByRow", value))
     						}, null, 8, ["model-value"]), createVNode($setup["AcuCheckbox"], {
     							"model-value": $setup.exportConfig.preventRecursion !== false,
     							label: "防止递归触发",
-    							"onUpdate:modelValue": _cache[17] || (_cache[17] = (value) => $setup.config.updateExportConfig("preventRecursion", value))
+    							"onUpdate:modelValue": _cache[18] || (_cache[18] = (value) => $setup.config.updateExportConfig("preventRecursion", value))
     						}, null, 8, ["model-value"])]),
     						createBaseVNode("div", _hoisted_12$2, [
     							createVNode($setup["AcuFormRow"], { label: "条目名称" }, {
     								default: withCtx(() => [createVNode($setup["AcuInput"], {
     									"model-value": $setup.exportConfig.entryName || "",
-    									"onUpdate:modelValue": _cache[18] || (_cache[18] = (value) => $setup.config.updateExportConfig("entryName", value))
+    									"onUpdate:modelValue": _cache[19] || (_cache[19] = (value) => $setup.config.updateExportConfig("entryName", value))
     								}, null, 8, ["model-value"])]),
     								_: 1
     							}),
@@ -98130,14 +98171,14 @@ Expected function or array of functions, received type ${typeof value}.`
     								default: withCtx(() => [createVNode($setup["AcuSelect"], {
     									"model-value": $setup.exportConfig.entryType || "constant",
     									options: $setup.config.entryTypeOptions,
-    									"onUpdate:modelValue": _cache[19] || (_cache[19] = (value) => $setup.config.updateExportConfig("entryType", value))
+    									"onUpdate:modelValue": _cache[20] || (_cache[20] = (value) => $setup.config.updateExportConfig("entryType", value))
     								}, null, 8, ["model-value", "options"])]),
     								_: 1
     							}),
     							createVNode($setup["AcuFormRow"], { label: "关键词" }, {
     								default: withCtx(() => [createVNode($setup["AcuInput"], {
     									"model-value": $setup.exportConfig.keywords || "",
-    									"onUpdate:modelValue": _cache[20] || (_cache[20] = (value) => $setup.config.updateExportConfig("keywords", value))
+    									"onUpdate:modelValue": _cache[21] || (_cache[21] = (value) => $setup.config.updateExportConfig("keywords", value))
     								}, null, 8, ["model-value"])]),
     								_: 1
     							})
@@ -98146,7 +98187,7 @@ Expected function or array of functions, received type ${typeof value}.`
     							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
     								"model-value": $setup.exportConfig.injectionTemplate || "",
     								rows: 3,
-    								"onUpdate:modelValue": _cache[21] || (_cache[21] = (value) => $setup.config.updateExportConfig("injectionTemplate", value))
+    								"onUpdate:modelValue": _cache[22] || (_cache[22] = (value) => $setup.config.updateExportConfig("injectionTemplate", value))
     							}, null, 8, ["model-value"])]),
     							_: 1
     						}),
@@ -98163,7 +98204,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						createBaseVNode("div", _hoisted_13$2, [createVNode($setup["AcuCheckbox"], {
     							"model-value": $setup.exportConfig.extraIndexEnabled === true,
     							label: "额外增加索引条目",
-    							"onUpdate:modelValue": _cache[22] || (_cache[22] = (value) => $setup.config.updateExportConfig("extraIndexEnabled", value))
+    							"onUpdate:modelValue": _cache[23] || (_cache[23] = (value) => $setup.config.updateExportConfig("extraIndexEnabled", value))
     						}, null, 8, ["model-value"]), $setup.exportConfig.extraIndexEnabled ? (openBlock(), createElementBlock(
     							Fragment,
     							{ key: 0 },
@@ -98171,7 +98212,7 @@ Expected function or array of functions, received type ${typeof value}.`
     								createBaseVNode("div", _hoisted_14$2, [createVNode($setup["AcuFormRow"], { label: "索引条目名称" }, {
     									default: withCtx(() => [createVNode($setup["AcuInput"], {
     										"model-value": $setup.exportConfig.extraIndexEntryName || "",
-    										"onUpdate:modelValue": _cache[23] || (_cache[23] = (value) => $setup.config.updateExportConfig("extraIndexEntryName", value))
+    										"onUpdate:modelValue": _cache[24] || (_cache[24] = (value) => $setup.config.updateExportConfig("extraIndexEntryName", value))
     									}, null, 8, ["model-value"])]),
     									_: 1
     								})]),
@@ -98179,7 +98220,7 @@ Expected function or array of functions, received type ${typeof value}.`
     									default: withCtx(() => [createVNode($setup["AcuTextarea"], {
     										"model-value": $setup.exportConfig.extraIndexInjectionTemplate || "",
     										rows: 3,
-    										"onUpdate:modelValue": _cache[24] || (_cache[24] = (value) => $setup.config.updateExportConfig("extraIndexInjectionTemplate", value))
+    										"onUpdate:modelValue": _cache[25] || (_cache[25] = (value) => $setup.config.updateExportConfig("extraIndexInjectionTemplate", value))
     									}, null, 8, ["model-value"])]),
     									_: 1
     								}),
@@ -98283,7 +98324,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		})) : createCommentVNode("v-if", true)
     	]);
     }
-    var VisualizerConfigPanels = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$5], ["__scopeId", "data-v-c458f9ad"]]);
+    var VisualizerConfigPanels = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$5], ["__scopeId", "data-v-7e08f9ff"]]);
 
     var _sfc_main$4 = /*@__PURE__*/ defineComponent({
         __name: 'VisualizerGlobalInjectionPanels',
