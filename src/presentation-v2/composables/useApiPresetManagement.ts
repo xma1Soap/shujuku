@@ -1,5 +1,8 @@
 import type { AcuV2ApiMode, AcuV2ApiPreset } from '../stores/api-preset-store';
 
+/** API 端点类型：completions = Chat Completions /v1/chat/completions，responses = Responses API /v1/responses */
+export type ApiEndpointType = 'completions' | 'responses';
+
 export interface ApiPresetDraft {
   name: string;
   apiMode: AcuV2ApiMode;
@@ -13,6 +16,8 @@ export interface ApiPresetDraft {
   bodyParams: string;
   excludeBodyParams: string;
   requestHeaders: string;
+  /** 自定义 API 端点类型，默认 responses */
+  apiEndpointType: ApiEndpointType;
 }
 
 /** Effective connection mode — flattens apiMode + useMainApi into 3 user-visible states. */
@@ -50,6 +55,7 @@ export function createEmptyApiPresetDraft(): ApiPresetDraft {
     bodyParams: '',
     excludeBodyParams: '',
     requestHeaders: '',
+    apiEndpointType: 'responses',
   };
 }
 
@@ -67,6 +73,7 @@ export function apiPresetDraftFromPreset(preset: AcuV2ApiPreset): ApiPresetDraft
     bodyParams: preset.apiConfig.bodyParams || '',
     excludeBodyParams: preset.apiConfig.excludeBodyParams || '',
     requestHeaders: preset.apiConfig.requestHeaders || '',
+    apiEndpointType: (preset.apiConfig.apiEndpointType === 'completions' ? 'completions' : 'responses') as ApiEndpointType,
   };
 }
 
@@ -85,6 +92,7 @@ export function apiPresetFromDraft(draft: ApiPresetDraft): AcuV2ApiPreset {
       bodyParams: draft.bodyParams || '',
       excludeBodyParams: draft.excludeBodyParams || '',
       requestHeaders: draft.requestHeaders || '',
+      apiEndpointType: draft.apiEndpointType === 'completions' ? 'completions' : 'responses',
     },
   };
 }

@@ -20,6 +20,8 @@ export interface AcuV2ApiConfig {
   bodyParams: string;
   excludeBodyParams: string;
   requestHeaders: string;
+  /** API 端点类型：'completions' = Chat Completions，'responses' = Responses API。默认 responses。 */
+  apiEndpointType?: 'completions' | 'responses';
 }
 
 export interface AcuV2ApiPreset {
@@ -70,6 +72,7 @@ function normalizeApiConfig(value: any): AcuV2ApiConfig {
     bodyParams: typeof source.bodyParams === 'string' ? source.bodyParams : '',
     excludeBodyParams: typeof source.excludeBodyParams === 'string' ? source.excludeBodyParams : '',
     requestHeaders: typeof source.requestHeaders === 'string' ? source.requestHeaders : '',
+    apiEndpointType: source.apiEndpointType === 'completions' ? 'completions' : 'responses',
   };
 }
 
@@ -148,7 +151,8 @@ function findPresetMatchingCurrentConfig(presets: AcuV2ApiPreset[]): AcuV2ApiPre
       preset.apiConfig.temperature === current.apiConfig.temperature &&
       preset.apiConfig.bodyParams === current.apiConfig.bodyParams &&
       preset.apiConfig.excludeBodyParams === current.apiConfig.excludeBodyParams &&
-      preset.apiConfig.requestHeaders === current.apiConfig.requestHeaders
+      preset.apiConfig.requestHeaders === current.apiConfig.requestHeaders &&
+      (preset.apiConfig.apiEndpointType || 'responses') === (current.apiConfig.apiEndpointType || 'responses')
     );
   }) ?? null;
 }

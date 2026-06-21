@@ -8,6 +8,7 @@ import { logDebug_ACU, logError_ACU } from '../../../shared/utils';
 import { sendConnectionManagerRequest_ACU, generateRaw_ACU, isGenerateRawAvailable_ACU, getHostRequestHeaders_ACU } from '../../../service/ai/ai-service';
 import { buildCustomApiRequestBody_ACU } from '../../../service/ai/api-call';
 import { callResponsesApiDirect_ACU } from '../../../service/ai/responses-api';
+import { callCompletionsApiDirect_ACU } from '../../../service/ai/completions-api';
 import { getChatArray_ACU } from '../../../service/chat/chat-service';
 import {
     settings_ACU,
@@ -175,10 +176,12 @@ export function createWorldbookAiApi(_ctx: ApiGroupContext): Record<string, Func
                         if (optionsMaxTokens !== undefined) customOverrides.maxTokens = optionsMaxTokens;
 
                         try {
-                            const content = await callResponsesApiDirect_ACU(messages, effectiveApiConfig, customOverrides);
+                            const content = effectiveApiConfig.apiEndpointType === 'completions'
+                                ? await callCompletionsApiDirect_ACU(messages, effectiveApiConfig, customOverrides)
+                                : await callResponsesApiDirect_ACU(messages, effectiveApiConfig, customOverrides);
                             return content;
                         } catch (e) {
-                            logError_ACU('[callAI] Responses API call failed:', e);
+                            logError_ACU('[callAI] API call failed:', e);
                             return null;
                         }
                     }

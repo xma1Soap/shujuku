@@ -53,6 +53,17 @@
         </AcuFormRow>
 
         <template v-if="activeConnectionMode === 'custom'">
+          <AcuFormRow
+            label="API 端点类型"
+            hint="Responses API (新格式，支持推理模型) 或 Chat Completions (经典格式，兼容性更广)。"
+          >
+            <AcuSegmentedControl
+              :options="endpointTypeOptions"
+              :model-value="activeDraft.apiEndpointType"
+              aria-label="API 端点类型"
+              @update:model-value="activeDraft.apiEndpointType = $event as 'completions' | 'responses'"
+            />
+          </AcuFormRow>
           <AcuFormRow label="端点(基础URL)">
             <AcuInput
               v-model="activeDraft.url"
@@ -240,6 +251,10 @@ const connectionModeOptions: AcuSegmentedOption[] = [
   { value: "custom", label: "自定义" },
   { value: "tavern", label: "酒馆预设" },
 ];
+const endpointTypeOptions: AcuSegmentedOption[] = [
+  { value: "responses", label: "Responses API" },
+  { value: "completions", label: "Chat Completions" },
+];
 const modelSelectOptions = computed<AcuSelectOption[]>(() =>
   store.modelOptions.map((m) => ({ value: m, label: m })),
 );
@@ -318,9 +333,9 @@ async function deletePreset(name: string): Promise<void> {
 
 function presetMeta(preset: AcuV2ApiPreset): string {
   if (preset.apiMode === "tavern") return "酒馆预设";
-  return preset.apiConfig.useMainApi
-    ? "酒馆主 API"
-    : preset.apiConfig.model || "自定义";
+  if (preset.apiConfig.useMainApi) return "酒馆主 API";
+  const endpoint = preset.apiConfig.apiEndpointType === "completions" ? "Completions" : "Responses";
+  return preset.apiConfig.model ? `${preset.apiConfig.model} · ${endpoint}` : `自定义 · ${endpoint}`;
 }
 
 function validateActiveDraft(): boolean {

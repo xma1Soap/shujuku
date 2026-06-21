@@ -16582,6 +16582,233 @@ $CONTENT
     }
 
     /**
+     * service/ai/completions-api.ts — OpenAI Chat Completions API 适配层
+     *
+     * 直接调用 /v1/chat/completions 端点，用于不支持 Responses API 的服务端。
+     * 与 responses-api.ts 对称，提供相同的调用签名，方便在 api-call.ts 中切换。
+     */
+    // ═══ 请求体构建 ═══
+    /**
+     * 构建 Chat Completions API 请求体
+     *
+     * @param messages 消息数组
+     * @param effectiveApiConfig API 配置
+     * @param overrides 可选的参数覆盖
+     * @returns Chat Completions API 请求体对象
+     */
+    function buildCompletionsApiRequestBody_ACU(messages, effectiveApiConfig, overrides) {
+        const opts = overrides || {};
+        const model = opts.stripModelPrefix !== false
+            ? (effectiveApiConfig.model || '').replace(/^models\//, '')
+            : (effectiveApiConfig.model || '');
+        const maxTokens = opts.maxTokens ?? effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 20000;
+        const temperature = opts.temperature ?? effectiveApiConfig.temperature ?? 1.0;
+        const topP = opts.topP ?? effectiveApiConfig.top_p ?? effectiveApiConfig.topP ?? 0.95;
+        const body = {
+            model,
+            messages,
+            max_tokens: maxTokens,
+            temperature,
+            top_p: topP,
+            stream: settings_ACU.streamingEnabled || false,
+        };
+        // 用户自定义 body 参数透传（bodyParams）
+        if (effectiveApiConfig.bodyParams) {
+            try {
+                const extra = typeof effectiveApiConfig.bodyParams === 'string'
+                    ? JSON.parse(effectiveApiConfig.bodyParams)
+                    : effectiveApiConfig.bodyParams;
+                if (extra && typeof extra === 'object' && !Array.isArray(extra)) {
+                    Object.assign(body, extra);
+                }
+            }
+            catch (e) {
+                logDebug_ACU('[Completions API] bodyParams 解析失败，忽略:', e);
+            }
+        }
+        // 排除指定字段（excludeBodyParams）
+        if (effectiveApiConfig.excludeBodyParams) {
+            const excludeRaw = typeof effectiveApiConfig.excludeBodyParams === 'string'
+                ? effectiveApiConfig.excludeBodyParams
+                : '';
+            if (excludeRaw) {
+                const keys = excludeRaw.split(/[,\n]/).map((s) => s.trim().replace(/^-\s*/, '')).filter(Boolean);
+                for (const key of keys) {
+                    delete body[key];
+                }
+            }
+        }
+        return body;
+    }
+    // ═══ 请求头构建 ═══
+    /**
+     * 构建 Chat Completions API 请求头
+     */
+    function buildCompletionsApiHeaders_ACU(effectiveApiConfig) {
+        const headers = {
+            'Content-Type': 'application/json',
+        };
+        if (effectiveApiConfig.apiKey) {
+            headers['Authorization'] = `Bearer ${effectiveApiConfig.apiKey}`;
+        }
+        if (effectiveApiConfig.requestHeaders) {
+            const extra = effectiveApiConfig.requestHeaders.trim();
+            if (extra) {
+                for (const line of extra.split('\n')) {
+                    const trimmed = line.trim();
+                    if (!trimmed)
+                        continue;
+                    const colonIdx = trimmed.indexOf(':');
+                    if (colonIdx > 0) {
+                        const key = trimmed.slice(0, colonIdx).trim();
+                        const value = trimmed.slice(colonIdx + 1).trim();
+                        headers[key] = value;
+                    }
+                }
+            }
+        }
+        return headers;
+    }
+    // ═══ 端点 URL 构建 ═══
+    /**
+     * 根据用户配置的 API URL 构建 Chat Completions 端点
+     */
+    function buildCompletionsApiUrl_ACU(apiUrl) {
+        let base = (apiUrl || '').trim().replace(/\/+$/, '');
+        if (!base)
+            return '';
+        // 已经指向 chat/completions
+        if (base.endsWith('/chat/completions'))
+            return base;
+        // 如果 URL 以 /responses 结尾，替换为 /chat/completions
+        if (base.endsWith('/responses')) {
+            return base.replace(/\/responses$/, '/chat/completions');
+        }
+        // 如果 URL 以 /v1 结尾，追加 /chat/completions
+        if (base.endsWith('/v1')) {
+            return base + '/chat/completions';
+        }
+        // 如果 URL 不含 /v1，自动追加
+        if (!base.includes('/v1')) {
+            return base + '/v1/chat/completions';
+        }
+        return base + '/chat/completions';
+    }
+    // ═══ 响应解析 ═══
+    /**
+     * 从 Chat Completions 非流式响应中提取文本
+     */
+    function parseCompletionsApiOutput_ACU(data) {
+        try {
+            if (data?.choices?.[0]?.message?.content) {
+                return data.choices[0].message.content;
+            }
+            if (data?.choices?.[0]?.text) {
+                return data.choices[0].text;
+            }
+            if (typeof data?.content === 'string') {
+                return data.content;
+            }
+            logError_ACU('[Completions API] 未能从响应中提取文本:', data);
+            return null;
+        }
+        catch (e) {
+            logError_ACU('[Completions API] 解析响应失败:', e);
+            return null;
+        }
+    }
+    /**
+     * 解析 Chat Completions 流式 SSE 响应
+     */
+    async function streamCompletionsApiToText_ACU(response, signal = null) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullContent = '';
+        let buffer = '';
+        try {
+            while (true) {
+                if (signal?.aborted) {
+                    throw new Error('Request aborted');
+                }
+                const { done, value } = await reader.read();
+                if (done)
+                    break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed.startsWith('data: '))
+                        continue;
+                    const data = trimmed.slice(6);
+                    if (data === '[DONE]')
+                        continue;
+                    try {
+                        const json = JSON.parse(data);
+                        const delta = json?.choices?.[0]?.delta?.content;
+                        if (delta)
+                            fullContent += delta;
+                        // 兼容非标准字段
+                        if (json?.choices?.[0]?.text) {
+                            fullContent += json.choices[0].text;
+                        }
+                    }
+                    catch {
+                        // 忽略 JSON 解析错误
+                    }
+                }
+            }
+        }
+        finally {
+            reader.releaseLock();
+        }
+        return fullContent;
+    }
+    /**
+     * 统一处理 Chat Completions API 响应
+     */
+    async function handleCompletionsApiResponse_ACU(response, signal = null) {
+        if (settings_ACU.streamingEnabled) {
+            return await streamCompletionsApiToText_ACU(response, signal);
+        }
+        else {
+            const data = await response.json();
+            return parseCompletionsApiOutput_ACU(data);
+        }
+    }
+    // ═══ 完整调用函数 ═══
+    /**
+     * 直接调用 OpenAI Chat Completions API
+     *
+     * 完整封装：构建请求 → 发送 → 解析响应，返回文本。
+     * 与 callResponsesApiDirect_ACU 签名完全一致，可在 api-call.ts 中互换。
+     */
+    async function callCompletionsApiDirect_ACU(messages, effectiveApiConfig, overrides, signal = null) {
+        if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
+            throw new Error('自定义API的URL或模型未配置。');
+        }
+        const url = buildCompletionsApiUrl_ACU(effectiveApiConfig.url);
+        const headers = buildCompletionsApiHeaders_ACU(effectiveApiConfig);
+        const body = JSON.stringify(buildCompletionsApiRequestBody_ACU(messages, effectiveApiConfig, overrides));
+        logDebug_ACU('[Completions API] 直接调用:', url, 'Model:', effectiveApiConfig.model);
+        const response = await fetch(url, {
+            method: 'POST',
+            headers,
+            body,
+            signal,
+        });
+        if (!response.ok) {
+            const errTxt = await response.text();
+            throw new Error(`API请求失败: ${response.status} ${errTxt}`);
+        }
+        const content = await handleCompletionsApiResponse_ACU(response, signal);
+        if (content) {
+            return content.trim();
+        }
+        throw new Error('API响应格式不正确或内容为空。');
+    }
+
+    /**
      * data/gateways/ai-gateway.ts — AI 调用网关
      *
      * 封装 TavernHelper_API_ACU.generateRaw、triggerSlash
@@ -16692,6 +16919,18 @@ $CONTENT
 
     // service/ai/api-call.ts — AI 调用编排（剧情推进用）
     // 从 04_shared_helpers.js 迁入
+    /**
+     * 根据预设配置选择直接调用 Completions 还是 Responses API。
+     * apiEndpointType === 'completions' 走 /v1/chat/completions；否则走 /v1/responses。
+     */
+    function callDirectApiByEndpointType_ACU(messages, effectiveApiConfig, overrides, abortSignal = null) {
+        if (effectiveApiConfig.apiEndpointType === 'completions') {
+            logDebug_ACU('[API] 使用 Chat Completions 端点');
+            return callCompletionsApiDirect_ACU(messages, effectiveApiConfig, overrides, abortSignal);
+        }
+        logDebug_ACU('[API] 使用 Responses API 端点');
+        return callResponsesApiDirect_ACU(messages, effectiveApiConfig, overrides, abortSignal);
+    }
     function normalizeExcludeBodyParamsForSillyTavern_ACU(raw) {
         if (typeof raw !== 'string')
             return '';
@@ -16774,7 +17013,7 @@ $CONTENT
             if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
                 throw new Error('自定义API的URL或模型未配置。');
             }
-            return await callResponsesApiDirect_ACU(messages, effectiveApiConfig, {}, abortSignal);
+            return await callDirectApiByEndpointType_ACU(messages, effectiveApiConfig, {}, abortSignal);
         }
     }
     async function callApi_ACU(messages, apiSettings, abortSignal = null) {
@@ -16803,7 +17042,7 @@ $CONTENT
             if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
                 throw new Error('自定义API的URL或模型未配置。');
             }
-            return await callResponsesApiDirect_ACU(messages, effectiveApiConfig, {}, abortSignal);
+            return await callDirectApiByEndpointType_ACU(messages, effectiveApiConfig, {}, abortSignal);
         }
     }
     function getApiConfigByPreset_ACU(presetName) {
@@ -16847,7 +17086,7 @@ $CONTENT
                 return await generateRaw_ACU({ ordered_prompts: messages, should_stream: settings_ACU.streamingEnabled || false });
             }
             else {
-                return await callResponsesApiDirect_ACU(messages, settings_ACU.apiConfig, { stripModelPrefix: false });
+                return await callDirectApiByEndpointType_ACU(messages, settings_ACU.apiConfig, { stripModelPrefix: false });
             }
         }
     }
@@ -16894,7 +17133,7 @@ $CONTENT
         if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
             throw new Error('自定义API的URL或模型未配置。');
         }
-        return await callResponsesApiDirect_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false });
+        return await callDirectApiByEndpointType_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false });
     }
 
     /**
@@ -29422,8 +29661,10 @@ $CONTENT
                     if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
                         throw new Error('自定义API的URL或模型未配置。');
                     }
-                    logDebug_ACU('ACU: 直接调用 OpenAI Responses API, Model:', effectiveApiConfig.model);
-                    const content = await callResponsesApiDirect_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }, abortSignal);
+                    logDebug_ACU('ACU: 直接调用 API, Model:', effectiveApiConfig.model, '端点:', effectiveApiConfig.apiEndpointType === 'completions' ? 'Chat Completions' : 'Responses');
+                    const content = effectiveApiConfig.apiEndpointType === 'completions'
+                        ? await callCompletionsApiDirect_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }, abortSignal)
+                        : await callResponsesApiDirect_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }, abortSignal);
                     return content;
                 }
             }
@@ -29680,7 +29921,9 @@ $CONTENT
                             : '';
                     }
                     else {
-                        aiResponseText = await callResponsesApiDirect_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false });
+                        aiResponseText = (settings_ACU.apiConfig.apiEndpointType === 'completions'
+                            ? await callCompletionsApiDirect_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false })
+                            : await callResponsesApiDirect_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false }));
                         if (!aiResponseText)
                             throw new Error('API返回的数据格式不正确');
                     }
@@ -57849,11 +58092,13 @@ $CONTENT
                             if (optionsMaxTokens !== undefined)
                                 customOverrides.maxTokens = optionsMaxTokens;
                             try {
-                                const content = await callResponsesApiDirect_ACU(messages, effectiveApiConfig, customOverrides);
+                                const content = effectiveApiConfig.apiEndpointType === 'completions'
+                                    ? await callCompletionsApiDirect_ACU(messages, effectiveApiConfig, customOverrides)
+                                    : await callResponsesApiDirect_ACU(messages, effectiveApiConfig, customOverrides);
                                 return content;
                             }
                             catch (e) {
-                                logError_ACU('[callAI] Responses API call failed:', e);
+                                logError_ACU('[callAI] API call failed:', e);
                                 return null;
                             }
                         }
@@ -78017,6 +78262,7 @@ Expected function or array of functions, received type ${typeof value}.`
             bodyParams: '',
             excludeBodyParams: '',
             requestHeaders: '',
+            apiEndpointType: 'responses',
         };
     }
     function apiPresetDraftFromPreset(preset) {
@@ -78033,6 +78279,7 @@ Expected function or array of functions, received type ${typeof value}.`
             bodyParams: preset.apiConfig.bodyParams || '',
             excludeBodyParams: preset.apiConfig.excludeBodyParams || '',
             requestHeaders: preset.apiConfig.requestHeaders || '',
+            apiEndpointType: (preset.apiConfig.apiEndpointType === 'completions' ? 'completions' : 'responses'),
         };
     }
     function apiPresetFromDraft(draft) {
@@ -78050,6 +78297,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 bodyParams: draft.bodyParams || '',
                 excludeBodyParams: draft.excludeBodyParams || '',
                 requestHeaders: draft.requestHeaders || '',
+                apiEndpointType: draft.apiEndpointType === 'completions' ? 'completions' : 'responses',
             },
         };
     }
@@ -78082,7 +78330,7 @@ Expected function or array of functions, received type ${typeof value}.`
         panels: {
             preset: {
                 title: "API 预设",
-                description: "编辑当前聊天使用的 API。被数据库各功能等调用。保存失败请检查连接方式、URL、API Key 及模型名。下拉框切换当前通用API，星标设为全局默认。点击按钮，可新增或删除API预设。",
+                description: "编辑当前聊天使用的 API。被数据库各功能等调用。保存失败请检查连接方式、URL、API Key 及模型名。下拉框切换当前通用API，星标设为全局默认。点击按钮，可新增或删除API预设。自定义模式下可选择 Responses API 或 Chat Completions 端点类型。",
             },
         },
     };
@@ -78112,6 +78360,7 @@ Expected function or array of functions, received type ${typeof value}.`
             bodyParams: typeof source.bodyParams === 'string' ? source.bodyParams : '',
             excludeBodyParams: typeof source.excludeBodyParams === 'string' ? source.excludeBodyParams : '',
             requestHeaders: typeof source.requestHeaders === 'string' ? source.requestHeaders : '',
+            apiEndpointType: source.apiEndpointType === 'completions' ? 'completions' : 'responses',
         };
     }
     function normalizePreset(value) {
@@ -78189,7 +78438,8 @@ Expected function or array of functions, received type ${typeof value}.`
                 preset.apiConfig.temperature === current.apiConfig.temperature &&
                 preset.apiConfig.bodyParams === current.apiConfig.bodyParams &&
                 preset.apiConfig.excludeBodyParams === current.apiConfig.excludeBodyParams &&
-                preset.apiConfig.requestHeaders === current.apiConfig.requestHeaders);
+                preset.apiConfig.requestHeaders === current.apiConfig.requestHeaders &&
+                (preset.apiConfig.apiEndpointType || 'responses') === (current.apiConfig.apiEndpointType || 'responses'));
         }) ?? null;
     }
     function resolveCurrentConfigStatus() {
@@ -79359,6 +79609,10 @@ Expected function or array of functions, received type ${typeof value}.`
                 { value: "custom", label: "自定义" },
                 { value: "tavern", label: "酒馆预设" },
             ];
+            const endpointTypeOptions = [
+                { value: "responses", label: "Responses API" },
+                { value: "completions", label: "Chat Completions" },
+            ];
             const modelSelectOptions = computed(() => store.modelOptions.map((m) => ({ value: m, label: m })));
             const tavernProfileOptions = computed(() => store.tavernProfiles.map((p) => ({ value: p.id, label: p.name })));
             const presetDropdownItems = computed(() => store.presets.map((p) => ({
@@ -79424,9 +79678,10 @@ Expected function or array of functions, received type ${typeof value}.`
             function presetMeta(preset) {
                 if (preset.apiMode === "tavern")
                     return "酒馆预设";
-                return preset.apiConfig.useMainApi
-                    ? "酒馆主 API"
-                    : preset.apiConfig.model || "自定义";
+                if (preset.apiConfig.useMainApi)
+                    return "酒馆主 API";
+                const endpoint = preset.apiConfig.apiEndpointType === "completions" ? "Completions" : "Responses";
+                return preset.apiConfig.model ? `${preset.apiConfig.model} · ${endpoint}` : `自定义 · ${endpoint}`;
             }
             function validateActiveDraft() {
                 if (!activeDraft.name.trim()) {
@@ -79478,14 +79733,14 @@ Expected function or array of functions, received type ${typeof value}.`
                 });
             }
             watch(() => store.activePresetName, () => syncActiveDraft(), { flush: "sync" });
-            const __returned__ = { store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeConnectionMode, activeDraftDirty, connectionModeOptions, modelSelectOptions, tavernProfileOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, setActiveConnectionMode, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSegmentedControl, AcuSelect };
+            const __returned__ = { store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeConnectionMode, activeDraftDirty, connectionModeOptions, endpointTypeOptions, modelSelectOptions, tavernProfileOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, setActiveConnectionMode, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSegmentedControl, AcuSelect };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-49910465] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__editor[data-v-49910465] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-49910465] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-49910465] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-49910465] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-49910465] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-49910465] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-49910465] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-49910465");
-    var ApiConfigPanel_vue_vue_type_style_index_0_scoped_49910465_lang = null;
+    injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-53ab3f3b] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__editor[data-v-53ab3f3b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-53ab3f3b] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-53ab3f3b] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-53ab3f3b] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-53ab3f3b] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-53ab3f3b] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-53ab3f3b] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-53ab3f3b");
+    var ApiConfigPanel_vue_vue_type_style_index_0_scoped_53ab3f3b_lang = null;
 
     const _hoisted_1$O = { class: "acu-api-config-panel__select-row" };
     const _hoisted_2$H = { class: "acu-api-config-panel__editor-section" };
@@ -79518,7 +79773,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				key: 0,
     				kind: "warning"
     			}, {
-    				default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
+    				default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
     					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
     					-1
     					/* CACHED */
@@ -79590,10 +79845,22 @@ Expected function or array of functions, received type ${typeof value}.`
     							Fragment,
     							{ key: 0 },
     							[
+    								createVNode($setup["AcuFormRow"], {
+    									label: "API 端点类型",
+    									hint: "Responses API (新格式，支持推理模型) 或 Chat Completions (经典格式，兼容性更广)。"
+    								}, {
+    									default: withCtx(() => [createVNode($setup["AcuSegmentedControl"], {
+    										options: $setup.endpointTypeOptions,
+    										"model-value": $setup.activeDraft.apiEndpointType,
+    										"aria-label": "API 端点类型",
+    										"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.activeDraft.apiEndpointType = $event)
+    									}, null, 8, ["model-value"])]),
+    									_: 1
+    								}),
     								createVNode($setup["AcuFormRow"], { label: "端点(基础URL)" }, {
     									default: withCtx(() => [createVNode($setup["AcuInput"], {
     										modelValue: $setup.activeDraft.url,
-    										"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.activeDraft.url = $event),
+    										"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.activeDraft.url = $event),
     										type: "text",
     										placeholder: "https://example.com/v1"
     									}, null, 8, ["modelValue"])]),
@@ -79602,7 +79869,7 @@ Expected function or array of functions, received type ${typeof value}.`
     								createVNode($setup["AcuFormRow"], { label: "API 密钥" }, {
     									default: withCtx(() => [createVNode($setup["AcuInput"], {
     										modelValue: $setup.activeDraft.apiKey,
-    										"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.activeDraft.apiKey = $event),
+    										"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.activeDraft.apiKey = $event),
     										type: "password",
     										autocomplete: "off"
     									}, null, 8, ["modelValue"])]),
@@ -79611,13 +79878,13 @@ Expected function or array of functions, received type ${typeof value}.`
     								createVNode($setup["AcuFormRow"], { label: "模型名" }, {
     									default: withCtx(() => [createVNode($setup["AcuInput"], {
     										modelValue: $setup.activeDraft.model,
-    										"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.activeDraft.model = $event),
+    										"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.activeDraft.model = $event),
     										type: "text"
     									}, null, 8, ["modelValue"])]),
     									_: 1
     								}),
     								createBaseVNode("div", _hoisted_3$y, [createVNode($setup["AcuButton"], { onClick: $setup.loadModelsForActive }, {
-    									default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
+    									default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
     										"加载模型",
     										-1
     										/* CACHED */
@@ -79638,7 +79905,7 @@ Expected function or array of functions, received type ${typeof value}.`
     										options: $setup.modelSelectOptions,
     										"model-value": $setup.activeDraft.model,
     										placeholder: "请选择",
-    										"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.activeDraft.model = $event)
+    										"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.activeDraft.model = $event)
     									}, null, 8, ["options", "model-value"])]),
     									_: 1
     								})) : createCommentVNode("v-if", true)
@@ -79654,11 +79921,11 @@ Expected function or array of functions, received type ${typeof value}.`
     									options: $setup.tavernProfileOptions,
     									"model-value": $setup.activeDraft.tavernProfile,
     									placeholder: "请选择",
-    									"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.activeDraft.tavernProfile = $event)
+    									"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.activeDraft.tavernProfile = $event)
     								}, null, 8, ["options", "model-value"])]),
     								_: 1
     							}), createBaseVNode("div", _hoisted_6$k, [createVNode($setup["AcuButton"], { onClick: $setup.store.refreshTavernProfiles }, {
-    								default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+    								default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
     									"刷新列表",
     									-1
     									/* CACHED */
@@ -79672,7 +79939,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					$setup.activeConnectionMode === "custom" ? (openBlock(), createElementBlock("div", _hoisted_7$i, [createVNode($setup["AcuFormRow"], { label: "最大回复长度" }, {
     						default: withCtx(() => [createVNode($setup["AcuInput"], {
     							modelValue: $setup.activeDraft.max_tokens,
-    							"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.activeDraft.max_tokens = $event),
+    							"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.activeDraft.max_tokens = $event),
     							type: "number",
     							min: 1,
     							step: 1
@@ -79681,7 +79948,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					}), createVNode($setup["AcuFormRow"], { label: "温度" }, {
     						default: withCtx(() => [createVNode($setup["AcuInput"], {
     							modelValue: $setup.activeDraft.temperature,
-    							"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.activeDraft.temperature = $event),
+    							"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.temperature = $event),
     							type: "number",
     							min: 0,
     							max: 2,
@@ -79696,7 +79963,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						}, {
     							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
     								modelValue: $setup.activeDraft.bodyParams,
-    								"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.bodyParams = $event),
+    								"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.bodyParams = $event),
     								rows: 3,
     								placeholder: "response_format:\n  type: json_object\ntop_k: 50"
     							}, null, 8, ["modelValue"])]),
@@ -79708,7 +79975,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						}, {
     							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
     								modelValue: $setup.activeDraft.excludeBodyParams,
-    								"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
+    								"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
     								rows: 2,
     								placeholder: "top_p, reasoning_effort"
     							}, null, 8, ["modelValue"])]),
@@ -79720,7 +79987,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						}, {
     							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
     								modelValue: $setup.activeDraft.requestHeaders,
-    								"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.activeDraft.requestHeaders = $event),
+    								"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.activeDraft.requestHeaders = $event),
     								rows: 2,
     								placeholder: "X-Custom-Header: value"
     							}, null, 8, ["modelValue"])]),
@@ -79742,7 +80009,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						disabled: !$setup.activeDraftDirty,
     						onClick: $setup.syncActiveDraft
     					}, {
-    						default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
+    						default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
     							"放弃修改",
     							-1
     							/* CACHED */
@@ -79767,7 +80034,7 @@ Expected function or array of functions, received type ${typeof value}.`
     				key: 2,
     				kind: "warning"
     			}, {
-    				default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
+    				default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
     					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
     					-1
     					/* CACHED */
@@ -79778,7 +80045,7 @@ Expected function or array of functions, received type ${typeof value}.`
     		_: 1
     	}, 8, ["title", "description"]);
     }
-    var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-49910465"]]);
+    var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-53ab3f3b"]]);
 
     /**
      * plot-preset-store — 剧情推进页状态边界（D23）

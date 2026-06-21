@@ -6,6 +6,7 @@
 import { currentAbortController_ACU, trackAbortController_ACU, untrackAbortController_ACU, _set_currentAbortController_ACU } from '../../runtime/state-manager';
 import { getApiConfigByPreset_ACU, buildCustomApiRequestBody_ACU } from '../api-call';
 import { callResponsesApiDirect_ACU, handleResponsesApiResponse_ACU, streamResponsesApiToText_ACU, parseResponsesApiOutput_ACU } from '../responses-api';
+import { callCompletionsApiDirect_ACU } from '../completions-api';
 import { currentJsonTableData_ACU, settings_ACU } from '../../runtime/state-manager';
 import { getPersonaDescription_ACU, getCharDescription_ACU } from '../../../data/gateways/host-state-gateway';
 import { isGenerateRawAvailable_ACU, generateRaw_ACU, sendConnectionManagerRequest_ACU, triggerSlash_ACU, getConnectionManagerProfiles_ACU, getHostRequestHeaders_ACU } from '../../../data/gateways/ai-gateway';
@@ -279,8 +280,10 @@ import { cloneStrictPromptSegments_ACU } from './strict-json-table-fill';
             if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
                 throw new Error('自定义API的URL或模型未配置。');
             }
-            logDebug_ACU('ACU: 直接调用 OpenAI Responses API, Model:', effectiveApiConfig.model);
-            const content = await callResponsesApiDirect_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }, abortSignal);
+            logDebug_ACU('ACU: 直接调用 API, Model:', effectiveApiConfig.model, '端点:', effectiveApiConfig.apiEndpointType === 'completions' ? 'Chat Completions' : 'Responses');
+            const content = effectiveApiConfig.apiEndpointType === 'completions'
+                ? await callCompletionsApiDirect_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }, abortSignal)
+                : await callResponsesApiDirect_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }, abortSignal);
             return content;
         }
         }

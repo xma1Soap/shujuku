@@ -3,9 +3,28 @@
 
 import { handleApiResponse_ACU } from './prompt-builder';
 import { callResponsesApiDirect_ACU, buildResponsesApiRequestBody_ACU, buildResponsesApiUrl_ACU, buildResponsesApiHeaders_ACU, handleResponsesApiResponse_ACU, parseResponsesApiOutput_ACU } from './responses-api';
+import { callCompletionsApiDirect_ACU } from './completions-api';
 import { settings_ACU } from '../runtime/state-manager';
 import { isGenerateRawAvailable_ACU, generateRaw_ACU, sendConnectionManagerRequest_ACU, getHostRequestHeaders_ACU } from '../../data/gateways/ai-gateway';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+
+/**
+ * 根据预设配置选择直接调用 Completions 还是 Responses API。
+ * apiEndpointType === 'completions' 走 /v1/chat/completions；否则走 /v1/responses。
+ */
+function callDirectApiByEndpointType_ACU(
+  messages: Array<{ role: string; content: string }>,
+  effectiveApiConfig: any,
+  overrides?: { maxTokens?: number; temperature?: number; topP?: number; stripModelPrefix?: boolean },
+  abortSignal: AbortSignal | null = null,
+): Promise<string> {
+  if (effectiveApiConfig.apiEndpointType === 'completions') {
+    logDebug_ACU('[API] 使用 Chat Completions 端点');
+    return callCompletionsApiDirect_ACU(messages, effectiveApiConfig, overrides, abortSignal);
+  }
+  logDebug_ACU('[API] 使用 Responses API 端点');
+  return callResponsesApiDirect_ACU(messages, effectiveApiConfig, overrides, abortSignal);
+}
 
 function normalizeExcludeBodyParamsForSillyTavern_ACU(raw: any): string {
   if (typeof raw !== 'string') return '';
@@ -99,7 +118,7 @@ export async function callApiWithPlotPreset_ACU(messages: any[], presetName: str
         throw new Error('自定义API的URL或模型未配置。');
       }
 
-      return await callResponsesApiDirect_ACU(messages, effectiveApiConfig, {}, abortSignal);
+      return await callDirectApiByEndpointType_ACU(messages, effectiveApiConfig, {}, abortSignal);
     }
 }
 
@@ -132,7 +151,7 @@ export async function callApi_ACU(messages: any[], apiSettings: any, abortSignal
         throw new Error('自定义API的URL或模型未配置。');
       }
 
-      return await callResponsesApiDirect_ACU(messages, effectiveApiConfig, {}, abortSignal);
+      return await callDirectApiByEndpointType_ACU(messages, effectiveApiConfig, {}, abortSignal);
     }
 }
 
@@ -183,7 +202,7 @@ export async function callCustomOpenAI_ACU_Direct(messages: any[]) {
           if (settings_ACU.apiConfig.useMainApi) {
              return await generateRaw_ACU({ ordered_prompts: messages, should_stream: settings_ACU.streamingEnabled || false });
           } else {
-             return await callResponsesApiDirect_ACU(messages, settings_ACU.apiConfig, { stripModelPrefix: false });
+             return await callDirectApiByEndpointType_ACU(messages, settings_ACU.apiConfig, { stripModelPrefix: false });
           }
       }
   }
@@ -239,5 +258,5 @@ export async function callAIWithPreset_ACU(messages: any[], presetName: string =
         throw new Error('自定义API的URL或模型未配置。');
     }
 
-    return await callResponsesApiDirect_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false });
+    return await callDirectApiByEndpointType_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false });
 }

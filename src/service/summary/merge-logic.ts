@@ -5,6 +5,7 @@ import { isSqliteMode } from '../table/storage-mode';
 import { handleApiResponse_ACU } from '../ai/prompt-builder';
 import { buildCustomApiRequestBody_ACU } from '../ai/api-call';
 import { callResponsesApiDirect_ACU } from '../ai/responses-api';
+import { callCompletionsApiDirect_ACU } from '../ai/completions-api';
 import { currentJsonTableData_ACU, settings_ACU } from '../runtime/state-manager';
 import { sendConnectionManagerRequest_ACU, isGenerateRawAvailable_ACU, generateRaw_ACU } from '../../data/gateways/ai-gateway';
 import { getLastMessageIndex_ACU } from '../../data/gateways/chat-gateway';
@@ -205,7 +206,9 @@ export async function executeAutoMergeBatch_ACU(
                         ? await generateRaw_ACU({ ordered_prompts: finalMessages, should_stream: settings_ACU.streamingEnabled || false })
                         : '';
                 } else {
-                    aiResponseText = await callResponsesApiDirect_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false });
+                    aiResponseText = (settings_ACU.apiConfig.apiEndpointType === 'completions'
+                        ? await callCompletionsApiDirect_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false })
+                        : await callResponsesApiDirect_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false }));
                     if (!aiResponseText) throw new Error('API返回的数据格式不正确');
                 }
             }

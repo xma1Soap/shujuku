@@ -11,6 +11,7 @@ import { sendConnectionManagerRequest_ACU, generateRaw_ACU, getHostRequestHeader
 import { extractTableEditInner_ACU, handleApiResponse_ACU } from '../ai/prompt-builder';
 import { buildCustomApiRequestBody_ACU } from '../ai/api-call';
 import { callResponsesApiDirect_ACU } from '../ai/responses-api';
+import { callCompletionsApiDirect_ACU } from '../ai/completions-api';
 import { currentJsonTableData_ACU, settings_ACU, isAutoUpdatingCard_ACU, _set_isAutoUpdatingCard_ACU, _set_wasStoppedByUser_ACU } from '../runtime/state-manager';
 import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
 import { loadAllChatMessages_ACU, updateReadableLorebookEntry_ACU } from '../worldbook/pipeline';
@@ -135,7 +136,9 @@ export async function executeMergeBatches_ACU(
                     if (settings_ACU.apiConfig.useMainApi) {
                         aiResponseText = await generateRaw_ACU({ ordered_prompts: finalMessages, should_stream: settings_ACU.streamingEnabled || false });
                     } else {
-                        aiResponseText = await callResponsesApiDirect_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false });
+                        aiResponseText = (settings_ACU.apiConfig.apiEndpointType === 'completions'
+                            ? await callCompletionsApiDirect_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false })
+                            : await callResponsesApiDirect_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false }));
                         if (!aiResponseText) throw new Error('API返回的数据格式不正确');
                     }
                 }
