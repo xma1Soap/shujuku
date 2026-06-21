@@ -8223,7 +8223,7 @@ $CONTENT
      * null/undefined → NULL, 数字字符串 → 数字, 其他 → 带引号的字符串
      */
     function escapeValue(val) {
-        if (val === null || val === undefined || val === '')
+        if (val === null || val === undefined)
             return 'NULL';
         // 纯数字（整数或浮点数）直接输出
         if (/^-?\d+(\.\d+)?$/.test(val))
