@@ -150,6 +150,7 @@ import { $popupInstance_ACU, $statusMessageSpan_ACU, $manualUpdateCardButton_ACU
       const find = (id: string) => $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-${id}`);
       const setVal = (id: string, v: any) => { const $el = find(id); if ($el.length) $el.val(v); };
       const setChecked = (id: string, v: any) => { const $el = find(id); if ($el.length) $el.prop('checked', !!v); };
+      setVal('api-request-endpoint', String(s.apiConfig?.requestEndpoint || '') === 'responses' ? 'responses' : 'chat_completions');
       setVal('import-split-size', s.importSplitSize);
       setChecked('import-prompt-exclude-imported-worldbook-entries', s.importPromptExcludeImportedWorldbookEntries !== false);
       if ($autoUpdateEnabledCheckbox_ACU) $autoUpdateEnabledCheckbox_ACU.prop('checked', s.autoUpdateEnabled);

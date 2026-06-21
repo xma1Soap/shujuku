@@ -86,6 +86,7 @@ describe('api preset draft helpers', () => {
         useMainApi: false,
         max_tokens: 1000,
         temperature: 1,
+        requestEndpoint: 'responses',
         bodyParams: 'top_k: 50',
         excludeBodyParams: 'top_p',
         requestHeaders: 'X-Custom: val',
@@ -96,8 +97,10 @@ describe('api preset draft helpers', () => {
     expect(draft.bodyParams).toBe('top_k: 50');
     expect(draft.excludeBodyParams).toBe('top_p');
     expect(draft.requestHeaders).toBe('X-Custom: val');
+    expect(draft.requestEndpoint).toBe('responses');
 
     const preset = apiPresetFromDraft(draft);
+    expect(preset.apiConfig.requestEndpoint).toBe('responses');
     expect(preset.apiConfig.bodyParams).toBe('top_k: 50');
     expect(preset.apiConfig.excludeBodyParams).toBe('top_p');
     expect(preset.apiConfig.requestHeaders).toBe('X-Custom: val');

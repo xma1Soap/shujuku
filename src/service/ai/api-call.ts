@@ -6,6 +6,8 @@ import { settings_ACU } from '../runtime/state-manager';
 import { isGenerateRawAvailable_ACU, generateRaw_ACU, sendConnectionManagerRequest_ACU, getHostRequestHeaders_ACU } from '../../data/gateways/ai-gateway';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 
+export type CustomApiEndpoint_ACU = 'chat_completions' | 'responses';
+
 function normalizeExcludeBodyParamsForSillyTavern_ACU(raw: any): string {
   if (typeof raw !== 'string') return '';
   const trimmed = raw.trim();
@@ -13,6 +15,14 @@ function normalizeExcludeBodyParamsForSillyTavern_ACU(raw: any): string {
   if (trimmed.startsWith('- ') || trimmed.startsWith('[') || trimmed.startsWith('{')) return trimmed;
   const keys = trimmed.split(/[,\n]/).map((s: string) => s.trim()).filter(Boolean);
   return keys.map((key: string) => `- ${key}`).join('\n');
+}
+
+export function normalizeCustomApiEndpoint_ACU(value: any): CustomApiEndpoint_ACU {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'responses' || normalized === 'openai_responses') {
+    return 'responses';
+  }
+  return 'chat_completions';
 }
 
 /**
@@ -24,6 +34,7 @@ export function buildCustomApiRequestBody_ACU(
   overrides?: { maxTokens?: number; temperature?: number; topP?: number; stripModelPrefix?: boolean }
 ): Record<string, any> {
   const opts = overrides || {};
+  const endpoint = normalizeCustomApiEndpoint_ACU(effectiveApiConfig.requestEndpoint || effectiveApiConfig.customApiEndpoint || effectiveApiConfig.custom_api_format);
   const model = opts.stripModelPrefix !== false
     ? (effectiveApiConfig.model || '').replace(/^models\//, '')
     : (effectiveApiConfig.model || '');
@@ -49,6 +60,7 @@ export function buildCustomApiRequestBody_ACU(
     top_p: topP,
     stream: settings_ACU.streamingEnabled || false,
     chat_completion_source: 'custom',
+    custom_api_format: endpoint === 'responses' ? 'openai_responses' : 'openai_compat',
     group_names: [],
     include_reasoning: false,
     reasoning_effort: 'medium',

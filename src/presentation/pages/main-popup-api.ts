@@ -66,6 +66,14 @@ export function generateApiTabHTML(): string {
                                     <option value="">-- 请先加载模型列表 --</option>
                                 </select>
                                 <div style="margin-top: 12px;">
+                                    <label for="${SCRIPT_ID_PREFIX_ACU}-api-request-endpoint">调用接口:</label>
+                                    <select id="${SCRIPT_ID_PREFIX_ACU}-api-request-endpoint" class="text_pole">
+                                        <option value="chat_completions">OpenAI Chat Completions (/chat/completions)</option>
+                                        <option value="responses">OpenAI Responses (/responses)</option>
+                                    </select>
+                                    <small class="notes">选择 Responses 时会通过 TauriTavern/SillyTavern 的 custom_api_format=openai_responses 调用 /responses。</small>
+                                </div>
+                                <div style="margin-top: 12px;">
                                     <label for="${SCRIPT_ID_PREFIX_ACU}-api-body-params">附加 Body 参数 (JSON):</label>
                                     <textarea id="${SCRIPT_ID_PREFIX_ACU}-api-body-params" rows="3" placeholder='{"top_p": 0.9, "frequency_penalty": 0.5}' style="width: 100%; resize: vertical; font-family: monospace;"></textarea>
                                     <small class="notes">JSON 格式，会合并到请求 body 中（覆盖同名字段）。留空不附加。</small>

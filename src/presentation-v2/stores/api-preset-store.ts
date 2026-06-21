@@ -17,6 +17,7 @@ export interface AcuV2ApiConfig {
   useMainApi: boolean;
   max_tokens: number;
   temperature: number;
+  requestEndpoint?: 'chat_completions' | 'responses';
   bodyParams: string;
   excludeBodyParams: string;
   requestHeaders: string;
@@ -56,6 +57,11 @@ function normalizeApiMode(value: unknown): AcuV2ApiMode {
   return value === 'tavern' ? 'tavern' : 'custom';
 }
 
+function normalizeRequestEndpoint(value: unknown): 'chat_completions' | 'responses' {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'responses' || normalized === 'openai_responses' ? 'responses' : 'chat_completions';
+}
+
 function normalizeApiConfig(value: any): AcuV2ApiConfig {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const maxTokens = Number(source.max_tokens ?? source.maxTokens ?? 60000);
@@ -67,6 +73,7 @@ function normalizeApiConfig(value: any): AcuV2ApiConfig {
     useMainApi: source.useMainApi !== false,
     max_tokens: Number.isFinite(maxTokens) && maxTokens > 0 ? Math.floor(maxTokens) : 60000,
     temperature: Number.isFinite(temperature) ? temperature : 1,
+    requestEndpoint: normalizeRequestEndpoint(source.requestEndpoint ?? source.customApiEndpoint ?? source.custom_api_format),
     bodyParams: typeof source.bodyParams === 'string' ? source.bodyParams : '',
     excludeBodyParams: typeof source.excludeBodyParams === 'string' ? source.excludeBodyParams : '',
     requestHeaders: typeof source.requestHeaders === 'string' ? source.requestHeaders : '',
@@ -146,6 +153,7 @@ function findPresetMatchingCurrentConfig(presets: AcuV2ApiPreset[]): AcuV2ApiPre
       preset.apiConfig.model === current.apiConfig.model &&
       preset.apiConfig.max_tokens === current.apiConfig.max_tokens &&
       preset.apiConfig.temperature === current.apiConfig.temperature &&
+      preset.apiConfig.requestEndpoint === current.apiConfig.requestEndpoint &&
       preset.apiConfig.bodyParams === current.apiConfig.bodyParams &&
       preset.apiConfig.excludeBodyParams === current.apiConfig.excludeBodyParams &&
       preset.apiConfig.requestHeaders === current.apiConfig.requestHeaders

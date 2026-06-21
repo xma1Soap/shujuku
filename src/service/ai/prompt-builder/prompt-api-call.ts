@@ -335,7 +335,10 @@ import { cloneStrictPromptSegments_ACU } from './strict-json-table-fill';
                     
                     try {
                         const json = JSON.parse(data);
-                        const content = json?.choices?.[0]?.delta?.content;
+                        const content = json?.choices?.[0]?.delta?.content
+                            || json?.delta?.content
+                            || json?.delta?.text
+                            || json?.response?.output_text?.delta;
                         if (content) {
                             fullContent += content;
                         }
@@ -357,6 +360,17 @@ import { cloneStrictPromptSegments_ACU } from './strict-json-table-fill';
         const data = await response.json();
         if (data?.choices?.[0]?.message?.content) {
             return data.choices[0].message.content;
+        }
+        if (typeof data?.output_text === 'string') {
+            return data.output_text;
+        }
+        if (Array.isArray(data?.output)) {
+            const text = data.output
+                .flatMap((item: any) => Array.isArray(item?.content) ? item.content : [])
+                .filter((part: any) => part?.type === 'output_text' && typeof part?.text === 'string')
+                .map((part: any) => part.text)
+                .join('');
+            if (text) return text;
         }
         if (data?.content) {
             return data.content;

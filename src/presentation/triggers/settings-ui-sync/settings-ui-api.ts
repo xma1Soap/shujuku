@@ -27,6 +27,7 @@ import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } 
 import { executeContentOptimization_ACU } from '../../components/optimization-ui';
 import { maybeLiftWorldbookSuppression_ACU } from '../../../service/runtime/helpers-remaining';
 import { getCurrentVectorMemoryConfig_ACU } from '../../../service/vector/vector-memory-config';
+import { normalizeCustomApiEndpoint_ACU } from '../../../service/ai/api-call';
 /**
  * presentation/triggers/settings-ui-sync.ts — UI读写/保存/刷新函数
  * 从 service/runtime/helpers-remaining.ts 提取的纯 UI 函数
@@ -162,6 +163,7 @@ import { getCurrentVectorMemoryConfig_ACU } from '../../../service/vector/vector
         model,
         max_tokens: isNaN(max_tokens) ? 120000 : max_tokens,
         temperature: isNaN(temperature) ? 0.9 : temperature,
+        requestEndpoint: normalizeCustomApiEndpoint_ACU($popupInstance_ACU!.find(`#${SCRIPT_ID_PREFIX_ACU}-api-request-endpoint`).val()),
         bodyParams: String($popupInstance_ACU!.find(`#${SCRIPT_ID_PREFIX_ACU}-api-body-params`).val() ?? ''),
         excludeBodyParams: String($popupInstance_ACU!.find(`#${SCRIPT_ID_PREFIX_ACU}-api-exclude-body-params`).val() ?? ''),
         requestHeaders: String($popupInstance_ACU!.find(`#${SCRIPT_ID_PREFIX_ACU}-api-request-headers`).val() ?? ''),
@@ -176,7 +178,7 @@ import { getCurrentVectorMemoryConfig_ACU } from '../../../service/vector/vector
   }
 
   export function clearApiConfig_ACU() {
-    Object.assign(settings_ACU.apiConfig, { url: '', apiKey: '', model: '', max_tokens: 120000, temperature: 0.9, bodyParams: '', excludeBodyParams: '', requestHeaders: '' });
+    Object.assign(settings_ACU.apiConfig, { url: '', apiKey: '', model: '', max_tokens: 120000, temperature: 0.9, requestEndpoint: 'chat_completions', bodyParams: '', excludeBodyParams: '', requestHeaders: '' });
     saveSettingsAndNotify_ACU();
     showToastr_ACU('info', 'API配置已清除！');
     loadSettingsAndRefreshUI_ACU();

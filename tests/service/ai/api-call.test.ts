@@ -333,6 +333,24 @@ describe('buildCustomApiRequestBody_ACU', () => {
     expect(body.custom_exclude_body).toBe('- temperature');
   });
 
+  it('默认使用 OpenAI Chat Completions custom_api_format', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4' },
+    );
+    expect(body.chat_completion_source).toBe('custom');
+    expect(body.custom_api_format).toBe('openai_compat');
+  });
+
+  it('requestEndpoint=responses 时使用 TauriTavern OpenAI Responses 接口', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-5', requestEndpoint: 'responses' },
+    );
+    expect(body.chat_completion_source).toBe('custom');
+    expect(body.custom_api_format).toBe('openai_responses');
+  });
+
 
 
   it('overrides.maxTokens 优先于 effectiveApiConfig', () => {

@@ -9,6 +9,7 @@ export interface ApiPresetDraft {
   model: string;
   max_tokens: number;
   temperature: number;
+  requestEndpoint: 'chat_completions' | 'responses';
   tavernProfile: string;
   bodyParams: string;
   excludeBodyParams: string;
@@ -17,6 +18,11 @@ export interface ApiPresetDraft {
 
 /** Effective connection mode — flattens apiMode + useMainApi into 3 user-visible states. */
 export type ConnectionMode = 'main' | 'custom' | 'tavern';
+
+function normalizeRequestEndpoint(value: unknown): 'chat_completions' | 'responses' {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'responses' || normalized === 'openai_responses' ? 'responses' : 'chat_completions';
+}
 
 export function connectionModeFromDraft(draft: ApiPresetDraft): ConnectionMode {
   if (draft.apiMode === 'tavern') return 'tavern';
@@ -46,6 +52,7 @@ export function createEmptyApiPresetDraft(): ApiPresetDraft {
     model: '',
     max_tokens: 60000,
     temperature: 1,
+    requestEndpoint: 'chat_completions',
     tavernProfile: '',
     bodyParams: '',
     excludeBodyParams: '',
@@ -63,6 +70,7 @@ export function apiPresetDraftFromPreset(preset: AcuV2ApiPreset): ApiPresetDraft
     model: preset.apiConfig.model || '',
     max_tokens: Number(preset.apiConfig.max_tokens || 60000),
     temperature: Number(preset.apiConfig.temperature ?? 1),
+    requestEndpoint: normalizeRequestEndpoint((preset.apiConfig as any).requestEndpoint ?? (preset.apiConfig as any).customApiEndpoint ?? (preset.apiConfig as any).custom_api_format),
     tavernProfile: preset.tavernProfile || '',
     bodyParams: preset.apiConfig.bodyParams || '',
     excludeBodyParams: preset.apiConfig.excludeBodyParams || '',
@@ -82,6 +90,7 @@ export function apiPresetFromDraft(draft: ApiPresetDraft): AcuV2ApiPreset {
       useMainApi: draft.useMainApi,
       max_tokens: Math.max(1, Math.floor(Number(draft.max_tokens) || 60000)),
       temperature: Number.isFinite(Number(draft.temperature)) ? Number(draft.temperature) : 1,
+      requestEndpoint: normalizeRequestEndpoint(draft.requestEndpoint),
       bodyParams: draft.bodyParams || '',
       excludeBodyParams: draft.excludeBodyParams || '',
       requestHeaders: draft.requestHeaders || '',

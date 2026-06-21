@@ -238,6 +238,7 @@ function normalizeDashboardApiConfig(value: any): {
   useMainApi: boolean;
   max_tokens: number;
   temperature: number;
+  requestEndpoint: string;
 } {
   const source =
     value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -253,6 +254,15 @@ function normalizeDashboardApiConfig(value: any): {
         ? Math.floor(maxTokens)
         : 60000,
     temperature: Number.isFinite(temperature) ? temperature : 1,
+    requestEndpoint:
+      String(source.requestEndpoint || source.customApiEndpoint || source.custom_api_format || "")
+        .trim()
+        .toLowerCase() === "responses" ||
+      String(source.requestEndpoint || source.customApiEndpoint || source.custom_api_format || "")
+        .trim()
+        .toLowerCase() === "openai_responses"
+        ? "responses"
+        : "chat_completions",
   };
 }
 
@@ -307,7 +317,8 @@ function apiPresetMatchesCurrentConfig(preset: any): boolean {
     presetConfig.apiKey === currentConfig.apiKey &&
     presetConfig.model === currentConfig.model &&
     presetConfig.max_tokens === currentConfig.max_tokens &&
-    presetConfig.temperature === currentConfig.temperature
+    presetConfig.temperature === currentConfig.temperature &&
+    presetConfig.requestEndpoint === currentConfig.requestEndpoint
   );
 }
 

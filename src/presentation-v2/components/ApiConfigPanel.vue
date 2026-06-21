@@ -91,6 +91,13 @@
               @update:model-value="activeDraft.model = $event"
             />
           </AcuFormRow>
+          <AcuFormRow label="调用接口">
+            <AcuSelect
+              :options="requestEndpointOptions"
+              :model-value="activeDraft.requestEndpoint"
+              @update:model-value="activeDraft.requestEndpoint = normalizeRequestEndpointValue($event)"
+            />
+          </AcuFormRow>
         </template>
 
         <template v-if="activeConnectionMode === 'tavern'">
@@ -246,12 +253,28 @@ const modelSelectOptions = computed<AcuSelectOption[]>(() =>
 const tavernProfileOptions = computed<AcuSelectOption[]>(() =>
   store.tavernProfiles.map((p) => ({ value: p.id, label: p.name })),
 );
+const requestEndpointOptions: AcuSelectOption[] = [
+  {
+    value: "chat_completions",
+    label: "OpenAI Chat Completions",
+  },
+  {
+    value: "responses",
+    label: "OpenAI Responses",
+  },
+];
 const presetDropdownItems = computed<PresetDropdownItem[]>(() =>
   store.presets.map((p) => ({
     name: p.name,
     meta: presetMeta(p),
   })),
 );
+
+function normalizeRequestEndpointValue(
+  value: string,
+): "chat_completions" | "responses" {
+  return value === "responses" ? "responses" : "chat_completions";
+}
 
 function refreshAll(): void {
   store.refreshFromSettings();
@@ -318,9 +341,10 @@ async function deletePreset(name: string): Promise<void> {
 
 function presetMeta(preset: AcuV2ApiPreset): string {
   if (preset.apiMode === "tavern") return "酒馆预设";
-  return preset.apiConfig.useMainApi
-    ? "酒馆主 API"
-    : preset.apiConfig.model || "自定义";
+  if (preset.apiConfig.useMainApi) return "酒馆主 API";
+  const endpoint =
+    preset.apiConfig.requestEndpoint === "responses" ? "Responses" : "Chat Completions";
+  return `${preset.apiConfig.model || "自定义"} · ${endpoint}`;
 }
 
 function validateActiveDraft(): boolean {
