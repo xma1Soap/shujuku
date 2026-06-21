@@ -7,6 +7,7 @@
 
 import { settings_ACU } from '../runtime/state-manager';
 import { logDebug_ACU, logError_ACU } from '../../shared/utils';
+import { getHostRequestHeaders_ACU } from '../../data/gateways/ai-gateway';
 
 // ═══ 请求体构建 ═══
 
@@ -225,8 +226,8 @@ export async function handleCompletionsApiResponse_ACU(response: any, signal: Ab
 /**
  * 直接调用 OpenAI Chat Completions API
  *
- * 完整封装：构建请求 → 发送 → 解析响应，返回文本。
- * 与 callResponsesApiDirect_ACU 签名完全一致，可在 api-call.ts 中互换。
+ * 通过 SillyTavern 后端代理 /api/backends/chat-completions/generate 发送请求，
+ * 避免浏览器 CORS 限制。与 callResponsesApiDirect_ACU 签名完全一致。
  */
 export async function callCompletionsApiDirect_ACU(
   messages: Array<{ role: string; content: string }>,
@@ -238,16 +239,70 @@ export async function callCompletionsApiDirect_ACU(
     throw new Error('自定义API的URL或模型未配置。');
   }
 
-  const url = buildCompletionsApiUrl_ACU(effectiveApiConfig.url);
-  const headers = buildCompletionsApiHeaders_ACU(effectiveApiConfig);
-  const body = JSON.stringify(buildCompletionsApiRequestBody_ACU(messages, effectiveApiConfig, overrides));
+  const opts = overrides || {};
+  const model = opts.stripModelPrefix !== false
+    ? (effectiveApiConfig.model || '').replace(/^models\//, '')
+    : (effectiveApiConfig.model || '');
+  const maxTokens = opts.maxTokens ?? effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 20000;
+  const temperature = opts.temperature ?? effectiveApiConfig.temperature ?? 1.0;
+  const topP = opts.topP ?? effectiveApiConfig.top_p ?? effectiveApiConfig.topP ?? 0.95;
 
-  logDebug_ACU('[Completions API] 直接调用:', url, 'Model:', effectiveApiConfig.model);
+  // 构建发往后端代理的请求体
+  const generateBody: Record<string, any> = {
+    messages,
+    model,
+    max_tokens: maxTokens,
+    temperature,
+    top_p: topP,
+    stream: settings_ACU.streamingEnabled || false,
+    chat_completion_source: 'custom',
+    custom_url: effectiveApiConfig.url,
+    custom_api_format: 'openai_compat',
+    include_reasoning: false,
+    reasoning_effort: 'medium',
+    enable_web_search: false,
+    request_images: false,
+    custom_prompt_post_processing: 'strict',
+    reverse_proxy: '',
+    proxy_password: '',
+    group_names: [],
+  };
 
-  const response = await fetch(url, {
+  // API key 通过 custom_include_headers 传给后端
+  let includeHeaders = '';
+  if (effectiveApiConfig.apiKey) {
+    includeHeaders = `Authorization: Bearer ${effectiveApiConfig.apiKey}`;
+  }
+  // 追加用户自定义请求头
+  if (effectiveApiConfig.requestHeaders) {
+    const extra = effectiveApiConfig.requestHeaders.trim();
+    if (extra) {
+      includeHeaders = includeHeaders ? `${includeHeaders}\n${extra}` : extra;
+    }
+  }
+  if (includeHeaders) {
+    generateBody.custom_include_headers = includeHeaders;
+  }
+
+  // 附加 body 参数
+  if (effectiveApiConfig.bodyParams) {
+    generateBody.custom_include_body = effectiveApiConfig.bodyParams;
+  }
+  if (effectiveApiConfig.excludeBodyParams) {
+    generateBody.custom_exclude_body = effectiveApiConfig.excludeBodyParams;
+  }
+
+  const headers = getHostRequestHeaders_ACU();
+  if (!headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  logDebug_ACU('[Completions API] 通过后端代理调用, Model:', effectiveApiConfig.model);
+
+  const response = await fetch('/api/backends/chat-completions/generate', {
     method: 'POST',
     headers,
-    body,
+    body: JSON.stringify(generateBody),
     signal,
   });
 

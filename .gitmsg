@@ -1,0 +1,11 @@
+fix: AI生成请求改走SillyTavern后端代理避免CORS
+
+callResponsesApiDirect_ACU和callCompletionsApiDirect_ACU原先直接
+fetch外部API被CORS阻止,导致发送消息失败
+
+改为走/api/backends/chat-completions/generate后端代理:
+- chat_completion_source='custom'
+- custom_url传用户URL
+- custom_include_headers传Authorization
+- custom_api_format根据端点类型设openai_compat或openai_responses
+- custom_include_body/custom_exclude_body透传附加参数
