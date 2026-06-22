@@ -141,6 +141,7 @@ export function buildCompletionsApiUrl_ACU(apiUrl: string): string {
  */
 export function parseCompletionsApiOutput_ACU(data: any): string | null {
   try {
+    // Chat Completions 格式
     if (data?.choices?.[0]?.message?.content) {
       return data.choices[0].message.content;
     }
@@ -150,7 +151,28 @@ export function parseCompletionsApiOutput_ACU(data: any): string | null {
     if (typeof data?.content === 'string') {
       return data.content;
     }
-    logError_ACU('[Completions API] 未能从响应中提取文本:', data);
+    // 嵌套 data 字段
+    if (data?.data?.choices?.[0]?.message?.content) {
+      return data.data.choices[0].message.content;
+    }
+    // Responses API 格式兼容
+    if (data && Array.isArray(data.output)) {
+      const texts: string[] = [];
+      for (const item of data.output) {
+        if (item.type === 'message' && Array.isArray(item.content)) {
+          for (const part of item.content) {
+            if (part.type === 'output_text' && typeof part.text === 'string') {
+              texts.push(part.text);
+            }
+          }
+        }
+      }
+      if (texts.length > 0) return texts.join('');
+    }
+    if (typeof data?.output_text === 'string' && data.output_text) {
+      return data.output_text;
+    }
+    logError_ACU('[Completions API] 未能从响应中提取文本:', JSON.stringify(data)?.slice(0, 1000));
     return null;
   } catch (e) {
     logError_ACU('[Completions API] 解析响应失败:', e);
@@ -217,6 +239,7 @@ export async function handleCompletionsApiResponse_ACU(response: any, signal: Ab
     return await streamCompletionsApiToText_ACU(response, signal);
   } else {
     const data = await response.json();
+    logDebug_ACU('[Completions API] 后端代理非流式响应:', JSON.stringify(data)?.slice(0, 500));
     return parseCompletionsApiOutput_ACU(data);
   }
 }

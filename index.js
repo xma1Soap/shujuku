@@ -16598,13 +16598,25 @@ $CONTENT
                         }
                         try {
                             const json = JSON.parse(data);
-                            // 文本增量
+                            // Chat Completions 流式格式（后端代理返回的标准格式）
+                            if (json?.choices?.[0]?.delta?.content) {
+                                fullContent += json.choices[0].delta.content;
+                                continue;
+                            }
+                            // Chat Completions 非 delta 的 text
+                            if (json?.choices?.[0]?.text) {
+                                fullContent += json.choices[0].text;
+                                continue;
+                            }
+                            // Responses API 流式格式（直接调用时的原始格式）
                             if (json.type === 'response.output_text.delta' && typeof json.delta === 'string') {
                                 fullContent += json.delta;
+                                continue;
                             }
-                            // 拒绝增量
+                            // Responses API 拒绝增量
                             if (json.type === 'response.refusal.delta' && typeof json.delta === 'string') {
                                 fullContent += json.delta;
+                                continue;
                             }
                             // 错误事件
                             if (json.type === 'error' || json.type === 'response.failed') {
@@ -16638,9 +16650,9 @@ $CONTENT
     /**
      * 统一处理 Responses API 响应（流式 / 非流式）
      *
-     * @param response fetch Response 对象
-     * @param signal AbortSignal
-     * @returns 提取的文本内容
+     * 注意：走后端代理后，后端返回的始终是 Chat Completions 格式（即使 custom_api_format='openai_responses'），
+     * 因为后端会把 Responses 格式转换为 Chat Completions 格式再返回。
+     * 所以这里必须用兼容解析器，先尝试 Chat Completions 格式，再尝试 Responses 格式。
      */
     async function handleResponsesApiResponse_ACU(response, signal = null) {
         if (settings_ACU.streamingEnabled) {
@@ -16648,7 +16660,31 @@ $CONTENT
         }
         else {
             const data = await response.json();
-            return parseResponsesApiOutput_ACU(data);
+            logDebug_ACU('[Responses API] 后端代理非流式响应:', JSON.stringify(data)?.slice(0, 500));
+            // Chat Completions 格式（后端代理返回的标准格式）
+            if (data?.choices?.[0]?.message?.content) {
+                return data.choices[0].message.content;
+            }
+            if (data?.choices?.[0]?.text) {
+                return data.choices[0].text;
+            }
+            if (typeof data?.content === 'string') {
+                return data.content;
+            }
+            // Responses API 格式（output 数组）
+            if (data && Array.isArray(data.output)) {
+                return parseResponsesApiOutput_ACU(data);
+            }
+            // output_text 便捷字段
+            if (typeof data?.output_text === 'string' && data.output_text) {
+                return data.output_text;
+            }
+            // 兜底：尝试提取常见字段
+            if (data?.data?.choices?.[0]?.message?.content) {
+                return data.data.choices[0].message.content;
+            }
+            logError_ACU('[Responses API] 无法从响应中提取文本，原始数据:', JSON.stringify(data)?.slice(0, 1000));
+            return null;
         }
     }
     // ═══ 完整调用函数 ═══
@@ -16860,6 +16896,7 @@ $CONTENT
      */
     function parseCompletionsApiOutput_ACU(data) {
         try {
+            // Chat Completions 格式
             if (data?.choices?.[0]?.message?.content) {
                 return data.choices[0].message.content;
             }
@@ -16869,7 +16906,29 @@ $CONTENT
             if (typeof data?.content === 'string') {
                 return data.content;
             }
-            logError_ACU('[Completions API] 未能从响应中提取文本:', data);
+            // 嵌套 data 字段
+            if (data?.data?.choices?.[0]?.message?.content) {
+                return data.data.choices[0].message.content;
+            }
+            // Responses API 格式兼容
+            if (data && Array.isArray(data.output)) {
+                const texts = [];
+                for (const item of data.output) {
+                    if (item.type === 'message' && Array.isArray(item.content)) {
+                        for (const part of item.content) {
+                            if (part.type === 'output_text' && typeof part.text === 'string') {
+                                texts.push(part.text);
+                            }
+                        }
+                    }
+                }
+                if (texts.length > 0)
+                    return texts.join('');
+            }
+            if (typeof data?.output_text === 'string' && data.output_text) {
+                return data.output_text;
+            }
+            logError_ACU('[Completions API] 未能从响应中提取文本:', JSON.stringify(data)?.slice(0, 1000));
             return null;
         }
         catch (e) {
@@ -16933,6 +16992,7 @@ $CONTENT
         }
         else {
             const data = await response.json();
+            logDebug_ACU('[Completions API] 后端代理非流式响应:', JSON.stringify(data)?.slice(0, 500));
             return parseCompletionsApiOutput_ACU(data);
         }
     }

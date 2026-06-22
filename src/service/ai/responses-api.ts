@@ -293,14 +293,27 @@ export async function streamResponsesApiToText_ACU(response: any, signal: AbortS
           try {
             const json = JSON.parse(data);
 
-            // 文本增量
-            if (json.type === 'response.output_text.delta' && typeof json.delta === 'string') {
-              fullContent += json.delta;
+            // Chat Completions 流式格式（后端代理返回的标准格式）
+            if (json?.choices?.[0]?.delta?.content) {
+              fullContent += json.choices[0].delta.content;
+              continue;
+            }
+            // Chat Completions 非 delta 的 text
+            if (json?.choices?.[0]?.text) {
+              fullContent += json.choices[0].text;
+              continue;
             }
 
-            // 拒绝增量
+            // Responses API 流式格式（直接调用时的原始格式）
+            if (json.type === 'response.output_text.delta' && typeof json.delta === 'string') {
+              fullContent += json.delta;
+              continue;
+            }
+
+            // Responses API 拒绝增量
             if (json.type === 'response.refusal.delta' && typeof json.delta === 'string') {
               fullContent += json.delta;
+              continue;
             }
 
             // 错误事件
@@ -336,16 +349,40 @@ export async function streamResponsesApiToText_ACU(response: any, signal: AbortS
 /**
  * 统一处理 Responses API 响应（流式 / 非流式）
  *
- * @param response fetch Response 对象
- * @param signal AbortSignal
- * @returns 提取的文本内容
+ * 注意：走后端代理后，后端返回的始终是 Chat Completions 格式（即使 custom_api_format='openai_responses'），
+ * 因为后端会把 Responses 格式转换为 Chat Completions 格式再返回。
+ * 所以这里必须用兼容解析器，先尝试 Chat Completions 格式，再尝试 Responses 格式。
  */
 export async function handleResponsesApiResponse_ACU(response: any, signal: AbortSignal | null = null): Promise<string | null> {
   if (settings_ACU.streamingEnabled) {
     return await streamResponsesApiToText_ACU(response, signal);
   } else {
     const data = await response.json();
-    return parseResponsesApiOutput_ACU(data);
+    logDebug_ACU('[Responses API] 后端代理非流式响应:', JSON.stringify(data)?.slice(0, 500));
+    // Chat Completions 格式（后端代理返回的标准格式）
+    if (data?.choices?.[0]?.message?.content) {
+      return data.choices[0].message.content;
+    }
+    if (data?.choices?.[0]?.text) {
+      return data.choices[0].text;
+    }
+    if (typeof data?.content === 'string') {
+      return data.content;
+    }
+    // Responses API 格式（output 数组）
+    if (data && Array.isArray(data.output)) {
+      return parseResponsesApiOutput_ACU(data);
+    }
+    // output_text 便捷字段
+    if (typeof data?.output_text === 'string' && data.output_text) {
+      return data.output_text;
+    }
+    // 兜底：尝试提取常见字段
+    if (data?.data?.choices?.[0]?.message?.content) {
+      return data.data.choices[0].message.content;
+    }
+    logError_ACU('[Responses API] 无法从响应中提取文本，原始数据:', JSON.stringify(data)?.slice(0, 1000));
+    return null;
   }
 }
 
